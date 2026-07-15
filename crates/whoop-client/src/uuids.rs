@@ -10,12 +10,8 @@ use whoop_protocol::{Channel, Family};
 pub const HEART_RATE_MEASUREMENT: Uuid = Uuid::from_u128(0x00002a37_0000_1000_8000_00805f9b34fb);
 pub const BATTERY_LEVEL: Uuid = Uuid::from_u128(0x00002a19_0000_1000_8000_00805f9b34fb);
 
-/// Identity chars (GAP + Device Information), readable without a bond.
-pub const DEVICE_NAME: Uuid = Uuid::from_u128(0x00002a00_0000_1000_8000_00805f9b34fb);
-pub const MODEL_NUMBER: Uuid = Uuid::from_u128(0x00002a24_0000_1000_8000_00805f9b34fb);
-pub const SERIAL_NUMBER: Uuid = Uuid::from_u128(0x00002a25_0000_1000_8000_00805f9b34fb);
-pub const FIRMWARE_REVISION: Uuid = Uuid::from_u128(0x00002a26_0000_1000_8000_00805f9b34fb);
-pub const HARDWARE_REVISION: Uuid = Uuid::from_u128(0x00002a27_0000_1000_8000_00805f9b34fb);
+/// Identity chars (GAP + Device Information), readable without a bond — the generic SIG set from ble-core.
+pub use ble_core::{DEVICE_NAME, FIRMWARE_REVISION, HARDWARE_REVISION, MODEL_NUMBER, SERIAL_NUMBER};
 
 const GEN5_SERVICE: Uuid = Uuid::from_u128(0xfd4b0001_cce1_4033_93ce_002d5875f58a);
 const GEN5_CMD_WRITE: Uuid = Uuid::from_u128(0xfd4b0002_cce1_4033_93ce_002d5875f58a);

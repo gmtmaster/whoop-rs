@@ -7,23 +7,21 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use uuid::Uuid;
 
-use ble_core::{BleError, BleTransport, Notification};
+use ble_core::{
+    BleError, BleTransport, Notification, DEVICE_NAME, FIRMWARE_REVISION, HARDWARE_REVISION, MODEL_NUMBER,
+    SERIAL_NUMBER,
+};
 
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(12);
 const POLL: Duration = Duration::from_millis(400);
+/// Cap a single peripheral connect — a co-resident/held/out-of-range band can otherwise stall forever.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to let the scan populate before reading serials (identity needs a connect, which WinRT
 /// dislikes mid-scan — so we gather candidates first, then stop scanning and read them).
 const SERIAL_SCAN_WINDOW: Duration = Duration::from_secs(8);
 
 /// A btleplug-backed connection to a device advertising `service`. `target_name` optionally pins which
 /// band to attach to (its advertised local name) when several are in range.
-/// Standard SIG chars carrying the band's identity, readable without a bond.
-const GATT_DEVICE_NAME: Uuid = Uuid::from_u128(0x00002a00_0000_1000_8000_00805f9b34fb);
-const GATT_MODEL_NUMBER: Uuid = Uuid::from_u128(0x00002a24_0000_1000_8000_00805f9b34fb);
-const GATT_SERIAL_NUMBER: Uuid = Uuid::from_u128(0x00002a25_0000_1000_8000_00805f9b34fb);
-const GATT_FIRMWARE_REV: Uuid = Uuid::from_u128(0x00002a26_0000_1000_8000_00805f9b34fb);
-const GATT_HARDWARE_REV: Uuid = Uuid::from_u128(0x00002a27_0000_1000_8000_00805f9b34fb);
-
 pub struct BtleplugTransport {
     service: Uuid,
     target_name: Option<String>,
@@ -85,7 +83,6 @@ fn backend<E: std::fmt::Display>(e: E) -> BleError {
 /// Connect, then discover services — retrying discovery, since a co-resident (multi-central) connection
 /// can race and hand back an empty characteristic set on the first pass.
 async fn connect_and_discover(p: &Peripheral) -> Result<(), BleError> {
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
     match tokio::time::timeout(CONNECT_TIMEOUT, p.connect()).await {
         Ok(r) => r.map_err(backend)?,
         Err(_) => return Err(BleError::Backend("connect timed out".into())),
@@ -155,14 +152,14 @@ pub async fn scan_whoops(service: Uuid, secs: u64) -> Result<Vec<Scanned>, BleEr
             hardware: String::new(),
         };
         if p.connect().await.is_ok() && p.discover_services().await.is_ok() {
-            let name = read_char(&p, GATT_DEVICE_NAME).await;
+            let name = read_char(&p, DEVICE_NAME).await;
             if !name.is_empty() {
                 band.name = name;
             }
-            band.serial = read_char(&p, GATT_SERIAL_NUMBER).await;
-            band.model = read_char(&p, GATT_MODEL_NUMBER).await;
-            band.firmware = read_char(&p, GATT_FIRMWARE_REV).await;
-            band.hardware = read_char(&p, GATT_HARDWARE_REV).await;
+            band.serial = read_char(&p, SERIAL_NUMBER).await;
+            band.model = read_char(&p, MODEL_NUMBER).await;
+            band.firmware = read_char(&p, FIRMWARE_REVISION).await;
+            band.hardware = read_char(&p, HARDWARE_REVISION).await;
             let _ = p.disconnect().await;
         }
         out.push(band);
@@ -212,8 +209,8 @@ async fn discover_by_serial(adapter: &Adapter, service: Uuid, serial: &str) -> R
         if !matches_whoop(&props, service) {
             continue;
         }
-        if p.connect().await.is_err() {
-            continue; // held by another central / out of range — skip
+        if tokio::time::timeout(CONNECT_TIMEOUT, p.connect()).await.map_or(true, |r| r.is_err()) {
+            continue; // held by another central / out of range / stalled — skip
         }
         if p.discover_services().await.is_err() {
             let _ = p.disconnect().await;
@@ -231,7 +228,7 @@ async fn discover_by_serial(adapter: &Adapter, service: Uuid, serial: &str) -> R
 
 /// Read the band's serial (or, failing that, its name) from the standard chars — no bond required.
 async fn read_serial(p: &Peripheral) -> Option<String> {
-    for uuid in [GATT_SERIAL_NUMBER, GATT_DEVICE_NAME] {
+    for uuid in [SERIAL_NUMBER, DEVICE_NAME] {
         let s = read_char(p, uuid).await;
         if !s.is_empty() {
             return Some(s);
@@ -366,6 +363,9 @@ mod win_pair {
     };
     use windows::Foundation::TypedEventHandler;
 
+    /// Cap the WinRT pairing ceremony so a stalled prompt/peripheral can't hang the CLI forever.
+    const PAIR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
     fn err<E: std::fmt::Display>(e: E) -> BleError {
         BleError::Pairing(e.to_string())
     }
@@ -391,10 +391,17 @@ mod win_pair {
             },
         );
         let token = custom.PairingRequested(&handler).map_err(err)?;
-        let result = custom.PairAsync(DevicePairingKinds::ConfirmOnly).map_err(err)?.await.map_err(err)?;
+        let result = match tokio::time::timeout(PAIR_TIMEOUT, async {
+            custom.PairAsync(DevicePairingKinds::ConfirmOnly).map_err(err)?.await.map_err(err)
+        })
+        .await
+        {
+            Ok(r) => r?,
+            Err(_) => return Err(BleError::Pairing("pairing timed out".into())),
+        };
         let _ = custom.RemovePairingRequested(token);
         let status = result.Status().map_err(err)?;
-        eprintln!("[pair] {mac} status={status:?}");
+        tracing::debug!(mac, ?status, "pairing result");
         match status {
             DevicePairingResultStatus::Paired | DevicePairingResultStatus::AlreadyPaired => Ok(()),
             other => Err(BleError::Pairing(format!("pairing failed: {other:?}"))),

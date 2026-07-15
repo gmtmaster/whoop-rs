@@ -1,5 +1,12 @@
 use uuid::Uuid;
 
+/// Standard SIG identity characteristics (GAP device name + Device Information), readable without a bond.
+pub const DEVICE_NAME: Uuid = Uuid::from_u128(0x00002a00_0000_1000_8000_00805f9b34fb);
+pub const MODEL_NUMBER: Uuid = Uuid::from_u128(0x00002a24_0000_1000_8000_00805f9b34fb);
+pub const SERIAL_NUMBER: Uuid = Uuid::from_u128(0x00002a25_0000_1000_8000_00805f9b34fb);
+pub const FIRMWARE_REVISION: Uuid = Uuid::from_u128(0x00002a26_0000_1000_8000_00805f9b34fb);
+pub const HARDWARE_REVISION: Uuid = Uuid::from_u128(0x00002a27_0000_1000_8000_00805f9b34fb);
+
 /// A value notification from a subscribed characteristic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notification {
