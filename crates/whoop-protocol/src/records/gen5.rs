@@ -1,7 +1,7 @@
 //! WHOOP 5.0/MG historical records, decoded inner-relative (frame-absolute − 8). v18 carries no SpO2.
 
 use super::{gravity3, HistoryRecord, ImuRecord, PpgRecord};
-use crate::bytes::{i16_at, rr_intervals, u16_at, u32_at, u8_at};
+use crate::bytes::{i16_at, nonzero_u8_at, rr_intervals, u16_at, u8_at, unix_at};
 use crate::packet::Frame;
 
 /// Samples per axis in a v21 IMU buffer (both the accel and gyro count fields carry this).
@@ -9,11 +9,11 @@ const IMU_SAMPLES: usize = 100;
 
 pub fn v18(f: &Frame) -> Option<HistoryRecord> {
     let b = f.inner();
-    let unix = u32_at(b, 7)?;
+    let unix = unix_at(b)?;
     Some(HistoryRecord {
         version: 18,
         unix,
-        heart_rate: u8_at(b, 14).filter(|&h| h > 0),
+        heart_rate: nonzero_u8_at(b, 14),
         rr_intervals: rr_intervals(b, 15, 16, 4),
         gravity: gravity3(b, 37),
         skin_temp_c: u16_at(b, 65).map(|r| r as f32 / 100.0).filter(|c| (5.0..45.0).contains(c)),
@@ -26,7 +26,7 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
 
 pub fn v26(f: &Frame) -> Option<PpgRecord> {
     let b = f.inner();
-    let unix = u32_at(b, 7)?;
+    let unix = unix_at(b)?;
     let record_id = u16_at(b, 3); // strap record counter, not a wavelength channel
     let mut samples = Vec::with_capacity(24);
     for i in 0..24 {
@@ -43,7 +43,7 @@ pub fn v21_imu(f: &Frame) -> Option<ImuRecord> {
     if u16_at(b, 16)? != IMU_SAMPLES as u16 || u16_at(b, 622)? != IMU_SAMPLES as u16 {
         return None;
     }
-    let unix = u32_at(b, 7)?;
+    let unix = unix_at(b)?;
     let mut accel = Vec::with_capacity(IMU_SAMPLES);
     let mut gyro = Vec::with_capacity(IMU_SAMPLES);
     for i in 0..IMU_SAMPLES {

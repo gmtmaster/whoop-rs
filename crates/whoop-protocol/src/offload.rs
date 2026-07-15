@@ -55,9 +55,7 @@ impl Offload {
             PacketType::Metadata => match MetadataType::from_u8(f.cmd()) {
                 MetadataType::HistoryEnd => match history_end_data(f) {
                     Some(ed) => {
-                        let mut payload = Vec::with_capacity(9);
-                        payload.push(0x01);
-                        payload.extend_from_slice(&ed);
+                        let payload = crate::bytes::prefixed(0x01, &ed);
                         vec![OffloadStep::Ack(self.command(command::HISTORICAL_DATA_RESULT, &payload))]
                     }
                     None => Vec::new(),
@@ -72,7 +70,7 @@ impl Offload {
     fn command(&mut self, cmd: u8, payload: &[u8]) -> Vec<u8> {
         let seq = self.seq;
         self.seq = self.seq.wrapping_add(1);
-        framing::encode(self.family, PacketType::Command.to_u8(), seq, cmd, payload)
+        framing::command(self.family, seq, cmd, payload)
     }
 }
 

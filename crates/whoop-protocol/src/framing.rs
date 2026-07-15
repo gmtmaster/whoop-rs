@@ -5,7 +5,12 @@ use crate::bytes::{u16_at, u32_at};
 use crate::crc::{crc16_modbus, crc32_zlib, crc8};
 use crate::error::ProtocolError;
 use crate::family::{Family, HeaderCrc};
-use crate::packet::Frame;
+use crate::packet::{Frame, PacketType};
+
+/// Build a COMMAND frame — the common `encode` case, so the Command packet-type isn't retyped per call.
+pub fn command(family: Family, seq: u8, cmd: u8, payload: &[u8]) -> Vec<u8> {
+    encode(family, PacketType::Command.to_u8(), seq, cmd, payload)
+}
 
 /// Build a complete outbound frame for `[type][seq][cmd] + payload`. GEN5 inners are padded to a
 /// 4-byte boundary before length/CRC (the strap rejects unpadded 5/MG command inners).

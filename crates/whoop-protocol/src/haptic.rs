@@ -4,12 +4,11 @@
 use crate::command;
 use crate::family::Family;
 use crate::framing;
-use crate::packet::PacketType;
 
 /// A ready-to-write 5/MG one-shot buzz (RUN_HAPTIC_PATTERN_MAVERICK 0x13, the notification preset).
 pub fn maverick_buzz_frame(seq: u8) -> Vec<u8> {
     let body = [0x01u8, 47, 152, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    framing::encode(Family::Gen5, PacketType::Command.to_u8(), seq, command::RUN_HAPTIC_PATTERN_MAVERICK, &body)
+    framing::command(Family::Gen5, seq, command::RUN_HAPTIC_PATTERN_MAVERICK, &body)
 }
 
 // Haptic-Clock pulse/gap timing (ms). Long = a "tens" pulse, short = a "units" pulse.

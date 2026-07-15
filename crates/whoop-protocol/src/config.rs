@@ -2,10 +2,10 @@
 //! SET_DEVICE_CONFIG one 33-byte device value; the R22 sequence unlocks the deep biometric streams.
 //! Reversible. Frames are built via `framing::encode`.
 
+use crate::bytes::prefixed;
 use crate::command;
 use crate::family::Family;
 use crate::framing;
-use crate::packet::PacketType;
 
 /// One persistent flag and the value the official app writes for it (`b'1'` or `b'2'`).
 pub struct Flag {
@@ -65,9 +65,7 @@ pub fn device_body(name: &str, value: u8) -> Vec<u8> {
 
 /// Wrap a config body as a GEN5 COMMAND frame: `0x01` prefix + `body`, opcode `cmd`.
 fn config_frame(seq: u8, cmd: u8, body: &[u8]) -> Vec<u8> {
-    let mut payload = vec![0x01];
-    payload.extend_from_slice(body);
-    framing::encode(Family::Gen5, PacketType::Command.to_u8(), seq, cmd, &payload)
+    framing::command(Family::Gen5, seq, cmd, &prefixed(0x01, body))
 }
 
 /// A ready-to-write SET_CONFIG frame for one feature flag (0x01 prefix + 40-byte body).

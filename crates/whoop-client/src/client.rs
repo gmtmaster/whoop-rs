@@ -267,7 +267,7 @@ impl<T: BleTransport> WhoopClient<T> {
 
     /// Warm-reboot the strap (opcode 29; stored data kept). Caller confirms; never automatic.
     pub async fn reboot(&self) -> Result<(), Error> {
-        let frame = framing::encode(self.family, PacketType::Command.to_u8(), self.next_seq(), command::REBOOT_STRAP, &[]);
+        let frame = framing::command(self.family, self.next_seq(), command::REBOOT_STRAP, &[]);
         self.write_cmd(&frame).await
     }
 
@@ -276,7 +276,7 @@ impl<T: BleTransport> WhoopClient<T> {
         if command::is_forbidden(opcode) {
             return Err(Error::Forbidden(opcode));
         }
-        let frame = framing::encode(self.family, PacketType::Command.to_u8(), self.next_seq(), opcode, payload);
+        let frame = framing::command(self.family, self.next_seq(), opcode, payload);
         self.write_cmd(&frame).await
     }
 

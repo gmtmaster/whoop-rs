@@ -7,6 +7,11 @@ pub fn u8_at(b: &[u8], i: usize) -> Option<u8> {
     b.get(i).copied()
 }
 
+/// A byte where 0 means "field absent" (an unpopulated slot), not a literal zero.
+pub fn nonzero_u8_at(b: &[u8], i: usize) -> Option<u8> {
+    u8_at(b, i).filter(|&v| v > 0)
+}
+
 pub fn u16_at(b: &[u8], i: usize) -> Option<u16> {
     b.get(i..i + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
 }
@@ -21,6 +26,19 @@ pub fn i16_at(b: &[u8], i: usize) -> Option<i16> {
 
 pub fn f32_at(b: &[u8], i: usize) -> Option<f32> {
     b.get(i..i + 4).map(|s| f32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+}
+
+/// The inner-relative offset-7 unix timestamp — the shared read for every historical/live record.
+pub fn unix_at(b: &[u8]) -> Option<u32> {
+    u32_at(b, 7)
+}
+
+/// A `[marker][body]` buffer — the b3-prefixed command-payload shape.
+pub fn prefixed(marker: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(1 + body.len());
+    v.push(marker);
+    v.extend_from_slice(body);
+    v
 }
 
 /// Read the R-R intervals of a record: a `u8` count at `count_off` (clamped to `max` slots), then that

@@ -1,7 +1,7 @@
 //! Live (non-historical) decoders: REALTIME_DATA, EVENT, and the METADATA end_data the offload ACK
 //! echoes. Inner-relative offsets, so one decoder serves both generations.
 
-use crate::bytes::{f32_at, rr_intervals, u16_at, u32_at, u8_at};
+use crate::bytes::{f32_at, nonzero_u8_at, rr_intervals, u16_at, u32_at, u8_at, unix_at};
 use crate::packet::Frame;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,9 +34,9 @@ pub struct R22Live {
 pub fn r22_live(f: &Frame) -> Option<R22Live> {
     let b = f.inner();
     Some(R22Live {
-        timestamp: u32_at(b, 7)?,
+        timestamp: unix_at(b)?,
         hr_ch1: u8_at(b, 14)?,
-        hr_ch2: u8_at(b, 29).filter(|&h| h > 0),
+        hr_ch2: nonzero_u8_at(b, 29),
         accel: [f32_at(b, 37)?, f32_at(b, 41)?, f32_at(b, 45)?],
     })
 }
