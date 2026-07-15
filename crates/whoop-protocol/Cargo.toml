@@ -1,0 +1,17 @@
+[package]
+name = "whoop-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure WHOOP BLE wire codec: crc, framing, enums, records, offload. No BLE, no async."
+
+[dependencies]
+thiserror.workspace = true
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+# Derive `Serialize` on the decoded records so a caller can persist them (e.g. whoopctl → JSONL).
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = "1"

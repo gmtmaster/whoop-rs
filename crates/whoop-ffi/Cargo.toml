@@ -1,0 +1,14 @@
+[package]
+name = "whoop-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "uniffi bindings exposing the pure WHOOP codec + sans-IO offload to Kotlin and Swift."
+
+[lib]
+# cdylib for Android (.so) / iOS (staticlib); lib so it builds + tests on the host too.
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+whoop-protocol.workspace = true
+uniffi = "0.32"

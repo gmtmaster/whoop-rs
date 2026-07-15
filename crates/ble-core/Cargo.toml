@@ -1,0 +1,15 @@
+[package]
+name = "ble-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Generic BLE central transport trait + a hardware-free mock. No btleplug."
+
+[dependencies]
+uuid.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio.workspace = true

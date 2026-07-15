@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target
+
+# Local working notes — provenance + per-crate clean confirm, not shipped
+/dev-docs/
+
+# Decoded history dumps + live BLE captures (real personal HR/timestamps) — never commit
+*.jsonl
+*.log
+mon-*.txt
+
+# Editor / OS
+*.swp
+.DS_Store

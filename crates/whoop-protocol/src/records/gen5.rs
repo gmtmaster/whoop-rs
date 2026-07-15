@@ -1,0 +1,130 @@
+//! WHOOP 5.0/MG historical records, decoded inner-relative (frame-absolute − 8). v18 carries no SpO2.
+
+use super::{gravity3, HistoryRecord, ImuRecord, PpgRecord};
+use crate::bytes::{i16_at, rr_intervals, u16_at, u32_at, u8_at};
+use crate::packet::Frame;
+
+/// Samples per axis in a v21 IMU buffer (both the accel and gyro count fields carry this).
+const IMU_SAMPLES: usize = 100;
+
+pub fn v18(f: &Frame) -> Option<HistoryRecord> {
+    let b = f.inner();
+    let unix = u32_at(b, 7)?;
+    Some(HistoryRecord {
+        version: 18,
+        unix,
+        heart_rate: u8_at(b, 14).filter(|&h| h > 0),
+        rr_intervals: rr_intervals(b, 15, 16, 4),
+        gravity: gravity3(b, 37),
+        skin_temp_c: u16_at(b, 65).map(|r| r as f32 / 100.0).filter(|c| (5.0..45.0).contains(c)),
+        steps: u16_at(b, 49),
+        activity_class: u8_at(b, 55),
+        sleep_state: u8_at(b, 73).map(|v| (v >> 4) & 3),
+        ..Default::default()
+    })
+}
+
+pub fn v26(f: &Frame) -> Option<PpgRecord> {
+    let b = f.inner();
+    let unix = u32_at(b, 7)?;
+    let record_id = u16_at(b, 3); // strap record counter, not a wavelength channel
+    let mut samples = Vec::with_capacity(24);
+    for i in 0..24 {
+        samples.push(i16_at(b, 19 + i * 2)?);
+    }
+    Some(PpgRecord { version: 26, unix, record_id, samples })
+}
+
+/// v21 — the 100 Hz raw 6-axis IMU offload buffer. Columnar i16 LE inner offsets: unix@7, count_a@16,
+/// ax@20 ay@220 az@420, count_b@622, gx@632 gy@832 gz@1032. Gated on both counts (=100), not the version
+/// byte, so it can't misfire; a short buffer fails the trailing reads.
+pub fn v21_imu(f: &Frame) -> Option<ImuRecord> {
+    let b = f.inner();
+    if u16_at(b, 16)? != IMU_SAMPLES as u16 || u16_at(b, 622)? != IMU_SAMPLES as u16 {
+        return None;
+    }
+    let unix = u32_at(b, 7)?;
+    let mut accel = Vec::with_capacity(IMU_SAMPLES);
+    let mut gyro = Vec::with_capacity(IMU_SAMPLES);
+    for i in 0..IMU_SAMPLES {
+        let o = i * 2;
+        accel.push([i16_at(b, 20 + o)?, i16_at(b, 220 + o)?, i16_at(b, 420 + o)?]);
+        gyro.push([i16_at(b, 632 + o)?, i16_at(b, 832 + o)?, i16_at(b, 1032 + o)?]);
+    }
+    Some(ImuRecord { version: f.version(), unix, sample_rate_hz: IMU_SAMPLES as u16, accel, gyro })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::family::Family;
+    use crate::framing;
+
+    #[test]
+    fn v18_decodes_hr_rr_gravity() {
+        // Build a synthetic v18: type 47, version 18. Inner-relative: unix@7, hr@14, rr_count@15, rr@16,
+        // gravity@37. Payload = inner[3..], so payload index = inner offset - 3.
+        let mut payload = vec![0u8; 80];
+        payload[7 - 3..11 - 3].copy_from_slice(&1_784_000_000u32.to_le_bytes()); // unix @ inner 7
+        payload[14 - 3] = 96; // hr @ inner 14
+        payload[15 - 3] = 1; // rr_count @ inner 15
+        payload[16 - 3..18 - 3].copy_from_slice(&600u16.to_le_bytes()); // rr[0] @ inner 16
+        payload[37 - 3..41 - 3].copy_from_slice(&0.1f32.to_le_bytes()); // gx
+        payload[41 - 3..45 - 3].copy_from_slice(&0.0f32.to_le_bytes()); // gy
+        payload[45 - 3..49 - 3].copy_from_slice(&0.99f32.to_le_bytes()); // gz  (|g| ≈ 1)
+
+        let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+        let r = v18(&frame).unwrap();
+        assert_eq!(r.heart_rate, Some(96));
+        assert_eq!(r.rr_intervals, vec![600]);
+        assert!(r.gravity.is_some());
+        assert_eq!(r.unix, 1_784_000_000);
+    }
+
+    #[test]
+    fn v21_imu_decodes_100_sample_6axis() {
+        // payload index = inner offset − 3. inner = 3 + 1229 = 1232 = gz end (already 4-aligned).
+        let mut payload = vec![0u8; 1229];
+        payload[4..8].copy_from_slice(&1_784_000_000u32.to_le_bytes()); // unix @ inner 7
+        payload[13..15].copy_from_slice(&100u16.to_le_bytes()); // count_a @ inner 16
+        payload[17..19].copy_from_slice(&4096i16.to_le_bytes()); // ax[0] @ inner 20 (= 1 g)
+        payload[619..621].copy_from_slice(&100u16.to_le_bytes()); // count_b @ inner 622
+        payload[629..631].copy_from_slice(&250i16.to_le_bytes()); // gx[0] @ inner 632
+
+        let wire = framing::encode(Family::Gen5, 47, 21, 0, &payload);
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+
+        let r = v21_imu(&frame).unwrap();
+        assert_eq!(r.unix, 1_784_000_000);
+        assert_eq!(r.sample_rate_hz, 100);
+        assert_eq!(r.accel.len(), 100);
+        assert_eq!(r.gyro.len(), 100);
+        assert_eq!(r.accel[0], [4096, 0, 0]);
+        assert_eq!(r.gyro[0], [250, 0, 0]);
+
+        // An unmapped GEN5 version routes here through the public dispatcher.
+        assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Imu(_))));
+    }
+
+    #[test]
+    fn v21_imu_rejects_wrong_sample_count() {
+        let mut payload = vec![0u8; 1229];
+        payload[13..15].copy_from_slice(&99u16.to_le_bytes()); // count_a != 100
+        payload[619..621].copy_from_slice(&100u16.to_le_bytes());
+        let wire = framing::encode(Family::Gen5, 47, 21, 0, &payload);
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+        assert!(v21_imu(&frame).is_none());
+    }
+
+    #[test]
+    fn imu_buffer_decodes_regardless_of_version_byte() {
+        // A buffer whose version byte collides with v18 still routes to Imu via the count gate, not v18.
+        let mut payload = vec![0u8; 1229];
+        payload[13..15].copy_from_slice(&100u16.to_le_bytes()); // count_a @ inner 16
+        payload[619..621].copy_from_slice(&100u16.to_le_bytes()); // count_b @ inner 622
+        let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload); // version byte = 18
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+        assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Imu(_))));
+    }
+}

@@ -1,0 +1,9 @@
+[package]
+name = "whoop-metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure derived-metric layer over decoded WHOOP records: HRV-readiness, SpO2. No BLE, no IO."
+
+[dependencies]
+whoop-protocol.workspace = true

@@ -1,0 +1,44 @@
+# Workspace root. Layering (leaf → app):
+#   whoop-protocol : pure wire codec — crc, framing, enums, records, offload. No BLE, no async.
+#   ble-core       : generic BLE transport trait + mock. No btleplug.
+#   ble-btleplug   : the btleplug transport impl (the only crate that links btleplug).
+#   whoop-client   : WhoopClient<T: BleTransport> — bond, sweep, offload driver.
+#   whoopctl       : CLI binary.
+[workspace]
+resolver = "2"
+members = [
+    "crates/whoop-protocol",
+    "crates/ble-core",
+    "crates/ble-btleplug",
+    "crates/whoop-client",
+    "crates/whoop-metrics",
+    "crates/whoopctl",
+    "crates/whoop-ffi",
+]
+# Toolchain: this project is pinned to MSVC via `rustup override` (in-dir). btleplug's WinRT deps build
+# cleanly on MSVC (raw-dylib, no dlltool). The pure/testable core (whoop-protocol, ble-core,
+# whoop-client) also builds on any toolchain if the radio ever needs isolating again.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[workspace.dependencies]
+whoop-protocol = { path = "crates/whoop-protocol" }
+ble-core = { path = "crates/ble-core" }
+ble-btleplug = { path = "crates/ble-btleplug" }
+whoop-client = { path = "crates/whoop-client" }
+whoop-metrics = { path = "crates/whoop-metrics" }
+btleplug = "0.12"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+futures = "0.3"
+uuid = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+
+# Local override: btleplug fork implementing the WinRT `add_peripheral` (connect-by-address) fix, so a
+# bonded/connected band is reachable without an advertisement. Pending upstream PR to deviceplug/btleplug.
+[patch.crates-io]
+btleplug = { path = "../btleplug" }

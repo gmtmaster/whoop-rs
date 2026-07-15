@@ -1,0 +1,18 @@
+[package]
+name = "ble-btleplug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "btleplug 0.12 implementation of ble_core::BleTransport — the only crate that links btleplug."
+
+[dependencies]
+ble-core.workspace = true
+btleplug.workspace = true
+tokio.workspace = true
+futures.workspace = true
+uuid.workspace = true
+async-trait = "0.1"
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Devices_Bluetooth", "Devices_Enumeration", "Foundation"] }
