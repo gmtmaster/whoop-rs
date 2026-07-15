@@ -22,13 +22,17 @@ HRV-readiness, SpO2) reads decoded records with no BLE/IO. The codec never sees 
 ```bash
 cd whoop-rs
 cargo build
-cargo test                 # 65 tests
+cargo test                 # 66 tests
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```
 
 Pinned to **MSVC** via an in-dir `rustup override` (btleplug's WinRT deps need the MSVC linker; the
 windows-GNU `dlltool` is incomplete). Fresh clone: `rustup override set stable-x86_64-pc-windows-msvc`.
+
+The workspace `[patch.crates-io]`es `btleplug` to a sibling `../btleplug` fork (the WinRT `add_peripheral`
+by-address fix). A fresh clone needs that sibling checkout present until the upstream PR lands; drop the
+patch once it does.
 
 ## Guardrails (always on)
 
@@ -48,7 +52,7 @@ windows-GNU `dlltool` is incomplete). Fresh clone: `rustup override set stable-x
   run, fold them into usable overall docs in `docs/`** (update `docs/architecture.md`, don't leave a pile
   of handoff files). One authoritative `architecture.md`, not N floating dev docs. Provenance +
   per-crate clean-state confirm live in `dev-docs/{external-sources,crates}.md`.
-- **Verify by READING the `cargo test` / `cargo build` output** (32 passed, 0 warnings, 0 clippy), never
+- **Verify by READING the `cargo test` / `cargo build` output** (66 passed, 0 warnings, 0 clippy), never
   a piped exit code. That invariant must hold after every change.
 - **Gated writes only.** `command::FORBIDDEN`/`DESTRUCTIVE` refuse firmware-load/trim/DFU/config-write
   on the blind path; legitimate ones (reboot, R22) have dedicated intentional methods a UI opt-in gates.
@@ -62,7 +66,8 @@ place (`framing`).
 
 ### Comments (strict)
 
-- **NEVER extensive comments.** A comment is at most **3 lines**, and only when it earns its place.
+- **NEVER extensive comments.** A comment is at most **3 lines**, and only when it earns its place. The
+  3-line cap is for in-body `///`/`//`; a crate/module-overview `//!` header may run a little longer to orient.
 - **Only** say **what it does** and **where it connects** (in-tree). No narration, no history, no rationale essays.
 - **NEVER refer to external things** in a comment — no PR/issue numbers, URLs, spec/doc section refs, other
   repos, source filenames it was ported from, or firmware/hardware version strings. Those belong in
