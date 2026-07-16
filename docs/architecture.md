@@ -220,8 +220,8 @@ TODO.)
 The sans-IO design pays off across platforms: **no BLE and no async cross the FFI.** `whoop-ffi`
 (uniffi) exposes a `WhoopCodec` object that mirrors the whole client, so a native app can drop its own
 decoder:
-- **decode** — `feed(chan, bytes) -> [Step]` (reassemble + drive offload), `decode_history` (full 14-field
-  `HistorySummary`), `decode_live` (realtime HR/R-R, on-wrist r22, event/battery, console), `decode_response`
+- **decode** — `feed(chan, bytes) -> [Step]` (reassemble + drive offload), `decode_history` (the full
+  `HistorySummary` — every decoded field), `decode_live` (realtime HR/R-R, on-wrist r22, event/battery, console), `decode_response`
   (identity/battery/clock/data-range/firmware).
 - **command frames to write** (the FFI never writes) — `client_hello` / `offload_start` / `offload_abort` /
   `r22_frames` / `get_hello`/`get_battery`/`get_data_range` / `stop_raw_flood` / `toggle_realtime_hr` /

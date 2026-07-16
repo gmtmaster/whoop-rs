@@ -325,22 +325,23 @@ impl WhoopCodec {
         self.inner.lock().unwrap().offload.abort_frame()
     }
 
-    /// GET_HELLO (identity + firmware), family-forked.
+    /// GET_HELLO (identity + firmware), family-forked. The `[0x00]` payload matches the client's default
+    /// no-arg body (frame-identical to empty on Gen5 after padding; it is the trailing byte Gen4 expects).
     pub fn get_hello_frame(&self, seq: u8) -> Vec<u8> {
         match self.family {
             Family::Gen5 => framing::command(self.family, seq, command::GET_HELLO, &[0x01]),
-            Family::Gen4 => framing::command(self.family, seq, command::GET_HELLO_HARVARD, &[]),
+            Family::Gen4 => framing::command(self.family, seq, command::GET_HELLO_HARVARD, &[0x00]),
         }
     }
 
     /// GET_BATTERY_LEVEL (also the bond-establishing write on 5/MG).
     pub fn get_battery_frame(&self, seq: u8) -> Vec<u8> {
-        framing::command(self.family, seq, command::GET_BATTERY_LEVEL, &[])
+        framing::command(self.family, seq, command::GET_BATTERY_LEVEL, &[0x00])
     }
 
     /// GET_DATA_RANGE (the oldest/newest banked seconds).
     pub fn get_data_range_frame(&self, seq: u8) -> Vec<u8> {
-        framing::command(self.family, seq, command::GET_DATA_RANGE, &[])
+        framing::command(self.family, seq, command::GET_DATA_RANGE, &[0x00])
     }
 
     /// Stop the live type-43 raw flood (sent during the handshake).
