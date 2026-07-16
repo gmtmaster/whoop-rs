@@ -94,10 +94,9 @@ impl HrvReadiness {
         Self::rmssd_runs(runs.iter().map(Vec::as_slice))
     }
 
-    /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, ready for
-    /// `evaluate`. Groups records into UTC days, then applies `rmssd_gap_aware` within each day. One
-    /// source of truth shared by the store and the CLI. (A sleep that straddles UTC midnight is split
-    /// across two days; see `whoop-store`'s note on the calendar-day bucket.)
+    /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
+    /// Groups records into UTC days, then applies `rmssd_gap_aware` per day. A sleep that straddles UTC
+    /// midnight is split across the two days.
     pub fn nightly_rmssd(history: &[HistoryRecord]) -> Vec<Option<f64>> {
         let mut by_day: std::collections::BTreeMap<u32, Vec<(u32, Vec<u16>)>> = std::collections::BTreeMap::new();
         for h in history {
