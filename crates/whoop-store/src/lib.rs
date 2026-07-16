@@ -1,10 +1,14 @@
 //! Per-(person, strap) calibration store. Persists each drain's nightly metrics to SQLite keyed on the
 //! person wearing the strap AND the strap serial, so a new person or a new strap starts a fresh
 //! calibration period (you never calibrate against someone else's data). A metric's baseline finalizes
-//! once its (person, strap) reaches the WHOOP milestone from `whoop_metrics::calibration`.
+//! once its (person, strap) reaches the WHOOP milestone from `whoop_metrics::calibration`. Nightly RMSSD is
+//! gap-aware (successive differences pool only within time-contiguous, plausible R-R runs). A per-strap
+//! linear fit (`reference ≈ scale·field + offset`) can also be finalized and persisted from paired columns.
+//! Known limit: nights are bucketed by UTC calendar day, so a sleep that straddles UTC midnight is split
+//! across two rows (the one beat-pair at the boundary is dropped). A physiological-day cutover is a TODO.
 
-use rusqlite::{params, Connection};
-use whoop_metrics::{calibration, stats, HrvReadiness};
+use rusqlite::{params, Connection, OptionalExtension};
+use whoop_metrics::{calibration, stats, HrvReadiness, LinearFit};
 use whoop_protocol::{HistoryRecord, Record};
 
 /// One calendar day's summary for a (person, strap), segmented from a drain.
@@ -25,6 +29,15 @@ pub enum CalState {
     Baseline { value: f64, nights: usize },
 }
 
+/// A per-strap linear-fit state: gathering paired nights, enough nights but no spread to fit, or a
+/// finalized (and persisted) coefficient.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FitState {
+    Calibrating { have: usize, need: u32 },
+    Unfittable { nights: usize },
+    Fit { fit: LinearFit, nights: usize },
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum StoreError {
     #[error("sqlite: {0}")]
@@ -39,7 +52,12 @@ CREATE TABLE IF NOT EXISTS strap_night(
 CREATE TABLE IF NOT EXISTS baseline(
   person TEXT NOT NULL, strap TEXT NOT NULL, metric TEXT NOT NULL,
   value REAL NOT NULL, nights INTEGER NOT NULL, finalized_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  PRIMARY KEY(person, strap, metric));";
+  PRIMARY KEY(person, strap, metric));
+CREATE TABLE IF NOT EXISTS fit_baseline(
+  person TEXT NOT NULL, strap TEXT NOT NULL, name TEXT NOT NULL,
+  scale REAL NOT NULL, offset REAL NOT NULL, r REAL NOT NULL, nights INTEGER NOT NULL,
+  finalized_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY(person, strap, name));";
 
 pub struct Store {
     conn: Connection,
@@ -127,6 +145,63 @@ impl Store {
     pub fn hrv_state(&self, person: &str, strap: &str) -> Result<CalState, StoreError> {
         self.calibrate(person, strap, "hrv", "rmssd_ms", calibration::RECOVERY_SCORE)
     }
+
+    /// Paired nightly (field, reference) values for (person, strap) where both columns are non-null,
+    /// oldest → newest. Column names come from code constants, not user input (same pattern as `column`).
+    fn pairs(&self, person: &str, strap: &str, field: &str, reference: &str) -> Result<Vec<(f64, f64)>, StoreError> {
+        let sql = format!(
+            "SELECT {field}, {reference} FROM strap_night
+             WHERE person=?1 AND strap=?2 AND {field} IS NOT NULL AND {reference} IS NOT NULL ORDER BY day"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![person, strap], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))?;
+        Ok(rows.filter_map(Result::ok).collect())
+    }
+
+    /// Fit a device-relative field column against a reference column over the accumulated (person, strap)
+    /// nights, persisting the per-strap coefficient (`reference ≈ scale·field + offset`, plus `r`) once
+    /// `milestone.full` paired nights exist. This is how a raw sensor field earns a strap-specific
+    /// scale/offset from its own captures instead of borrowing another strap's number. Still `Calibrating`
+    /// if there aren't enough nights, or if the field never varied enough to fit.
+    pub fn calibrate_fit(
+        &self,
+        person: &str,
+        strap: &str,
+        name: &str,
+        field: &str,
+        reference: &str,
+        milestone: calibration::Calibration,
+    ) -> Result<FitState, StoreError> {
+        let pairs = self.pairs(person, strap, field, reference)?;
+        if (pairs.len() as u32) < milestone.full {
+            return Ok(FitState::Calibrating { have: pairs.len(), need: milestone.full });
+        }
+        let (fields, refs): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
+        let Some(fit) = stats::linear_fit(&fields, &refs) else {
+            return Ok(FitState::Unfittable { nights: fields.len() });
+        };
+        self.conn.execute(
+            "INSERT INTO fit_baseline(person,strap,name,scale,offset,r,nights) VALUES(?1,?2,?3,?4,?5,?6,?7)
+             ON CONFLICT(person,strap,name) DO UPDATE SET
+               scale=excluded.scale, offset=excluded.offset, r=excluded.r, nights=excluded.nights,
+               finalized_at=unixepoch()",
+            params![person, strap, name, fit.scale, fit.offset, fit.r, fields.len()],
+        )?;
+        Ok(FitState::Fit { fit, nights: fields.len() })
+    }
+
+    /// The persisted per-strap fit for (person, strap, name), if one has finalized.
+    pub fn fit(&self, person: &str, strap: &str, name: &str) -> Result<Option<(LinearFit, usize)>, StoreError> {
+        let got = self
+            .conn
+            .query_row(
+                "SELECT scale, offset, r, nights FROM fit_baseline WHERE person=?1 AND strap=?2 AND name=?3",
+                params![person, strap, name],
+                |r| Ok((LinearFit { scale: r.get(0)?, offset: r.get(1)?, r: r.get(2)? }, r.get::<_, i64>(3)? as usize)),
+            )
+            .optional()?;
+        Ok(got)
+    }
 }
 
 /// Group history records by calendar day into one summary per day.
@@ -134,7 +209,7 @@ fn segment(records: &[Record]) -> Vec<NightMetrics> {
     let mut by_day: std::collections::BTreeMap<u32, DayAcc> = std::collections::BTreeMap::new();
     for r in records {
         if let Record::History(h) = r {
-            by_day.entry(h.unix / 86_400).or_default().push(h);
+            by_day.entry(h.unix / whoop_metrics::SECS_PER_DAY).or_default().push(h);
         }
     }
     by_day.into_iter().map(|(day, acc)| acc.finish(day)).collect()
@@ -143,7 +218,7 @@ fn segment(records: &[Record]) -> Vec<NightMetrics> {
 #[derive(Default)]
 struct DayAcc {
     spo2: Vec<f64>,
-    rr: Vec<u16>,
+    beats: Vec<(u32, Vec<u16>)>,
     hr_min: Option<u8>,
     hr_max: Option<u8>,
     records: u32,
@@ -154,7 +229,9 @@ impl DayAcc {
         if let Some(p) = h.spo2_pct {
             self.spo2.push(p as f64);
         }
-        self.rr.extend(&h.rr_intervals);
+        if !h.rr_intervals.is_empty() {
+            self.beats.push((h.unix, h.rr_intervals.clone()));
+        }
         if let Some(hr) = h.heart_rate {
             self.hr_min = Some(self.hr_min.map_or(hr, |m| m.min(hr)));
             self.hr_max = Some(self.hr_max.map_or(hr, |m| m.max(hr)));
@@ -166,7 +243,7 @@ impl DayAcc {
         NightMetrics {
             day,
             spo2_median: (!self.spo2.is_empty()).then(|| stats::median(&self.spo2)),
-            rmssd_ms: HrvReadiness::rmssd(&self.rr),
+            rmssd_ms: HrvReadiness::rmssd_gap_aware(&self.beats),
             hr_min: self.hr_min,
             hr_max: self.hr_max,
             records: self.records,
@@ -180,6 +257,10 @@ mod tests {
 
     fn hist(unix: u32, spo2: Option<u8>) -> Record {
         Record::History(HistoryRecord { version: 18, unix, spo2_pct: spo2, heart_rate: Some(60), ..Default::default() })
+    }
+
+    fn hr_hist(unix: u32, hr: u8) -> Record {
+        Record::History(HistoryRecord { version: 18, unix, heart_rate: Some(hr), ..Default::default() })
     }
 
     #[test]
@@ -207,5 +288,50 @@ mod tests {
             }
             other => panic!("expected baseline, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn nightly_rmssd_is_gap_aware_not_inflated_across_offload_gaps() {
+        // A drain where two contiguous records of steady beats are followed by a far-away single 1400 ms
+        // beat. The persisted nightly RMSSD must stay small, not blow up on the cross-gap jump.
+        let s = Store::open_memory().unwrap();
+        let rr = |t: u32, rr: Vec<u16>| {
+            Record::History(HistoryRecord { version: 18, unix: t, heart_rate: Some(60), rr_intervals: rr, ..Default::default() })
+        };
+        s.ingest("1", "A", &[rr(0, vec![600, 610]), rr(1, vec![605, 615]), rr(10_000, vec![1400])]).unwrap();
+        let persisted: f64 = s
+            .conn
+            .query_row("SELECT rmssd_ms FROM strap_night WHERE person='1' AND strap='A'", [], |r| r.get(0))
+            .unwrap();
+        assert!(persisted < 20.0, "persisted nightly RMSSD should be gap-aware, got {persisted}");
+    }
+
+    #[test]
+    fn calibrate_fit_recovers_a_per_strap_line_and_persists_it() {
+        let s = Store::open_memory().unwrap();
+        // Three nights; each night hr_max = 2·hr_min + 10 (a synthetic device-relative → reference line).
+        for (day, lo) in [(0u32, 50u8), (1, 55), (2, 60)] {
+            let t = day * 86_400;
+            s.ingest("1", "A", &[hr_hist(t, lo), hr_hist(t + 10, 2 * lo + 10)]).unwrap();
+        }
+        let milestone = calibration::RECOVERY_SCORE; // full = 3
+        match s.calibrate_fit("1", "A", "hr_span", "hr_min", "hr_max", milestone).unwrap() {
+            FitState::Fit { fit, nights } => {
+                assert_eq!(nights, 3);
+                assert!((fit.scale - 2.0).abs() < 1e-6 && (fit.offset - 10.0).abs() < 1e-6 && (fit.r - 1.0).abs() < 1e-6);
+            }
+            other => panic!("expected fit, got {other:?}"),
+        }
+        // persisted and read back
+        let (fit, n) = s.fit("1", "A", "hr_span").unwrap().unwrap();
+        assert_eq!(n, 3);
+        assert!((fit.scale - 2.0).abs() < 1e-6);
+        // a different (person, strap) with one night is below the milestone → calibrating, nothing persisted
+        s.ingest("2", "B", &[hr_hist(0, 50), hr_hist(10, 110)]).unwrap();
+        assert!(matches!(
+            s.calibrate_fit("2", "B", "hr_span", "hr_min", "hr_max", milestone).unwrap(),
+            FitState::Calibrating { have: 1, need: 3 }
+        ));
+        assert!(s.fit("2", "B", "hr_span").unwrap().is_none());
     }
 }

@@ -3,6 +3,10 @@
 //! Returns `None` (calibrating) below `MIN_NIGHTS` valid nights. Wellness only, never medical.
 
 use crate::stats::{least_squares_slope, mean, sample_sd};
+use whoop_protocol::HistoryRecord;
+
+/// Seconds per calendar day, the bucket a nightly metric is keyed on.
+pub const SECS_PER_DAY: u32 = 86_400;
 
 const HRV_MIN_MS: f64 = 5.0;
 const HRV_MAX_MS: f64 = 250.0;
@@ -15,6 +19,11 @@ const SWC_K: f64 = 0.5;
 const MIN_NIGHTS: usize = crate::calibration::RECOVERY_SCORE.unlock as usize;
 const CV_TREND_WINDOW: usize = 28;
 const LONG_SD_FLOOR: f64 = 1e-9;
+/// R-R records more than this many seconds apart start a new run (an offload gap breaks the beat chain).
+const MAX_GAP_S: u32 = 5;
+/// A physiologically plausible R-R interval (ms); values outside break the chain rather than inflate RMSSD.
+const RR_MIN_MS: u16 = 300;
+const RR_MAX_MS: u16 = 2000;
 
 /// Where the short baseline sits vs the personal normal band.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,13 +47,65 @@ pub struct HrvReadinessResult {
 pub struct HrvReadiness;
 
 impl HrvReadiness {
-    /// RMSSD (ms) of one night's R-R: sqrt(mean of squared successive differences). `None` for < 2 beats.
-    pub fn rmssd(rr_ms: &[u16]) -> Option<f64> {
-        if rr_ms.len() < 2 {
-            return None;
+    /// Gap-aware RMSSD (ms): pools squared successive differences **within** each run of consecutive beats
+    /// and never across the break between runs, so a jump across an offload gap or an artifact interval
+    /// can't inflate it. `None` if no run has two beats. The caller splits R-R into runs on time gaps.
+    pub fn rmssd_runs<'a>(runs: impl IntoIterator<Item = &'a [u16]>) -> Option<f64> {
+        let (mut sumsq, mut pairs) = (0.0f64, 0usize);
+        for run in runs {
+            for w in run.windows(2) {
+                let d = w[1] as f64 - w[0] as f64;
+                sumsq += d * d;
+                pairs += 1;
+            }
         }
-        let sum: f64 = rr_ms.windows(2).map(|w| (w[1] as f64 - w[0] as f64).powi(2)).sum();
-        Some((sum / (rr_ms.len() - 1) as f64).sqrt())
+        (pairs > 0).then(|| (sumsq / pairs as f64).sqrt())
+    }
+
+    /// RMSSD (ms) of one run of consecutive R-R beats. `None` for < 2 beats.
+    pub fn rmssd(rr_ms: &[u16]) -> Option<f64> {
+        Self::rmssd_runs(std::iter::once(rr_ms))
+    }
+
+    /// Gap-aware nightly RMSSD (ms) from one night's per-record `(unix, R-R)` beats. Splits them into
+    /// time-contiguous, physiologically-plausible runs (breaking on a gap over `MAX_GAP_S` or an interval
+    /// outside the plausible band) and pools only within-run successive differences, so an offload gap or
+    /// an artifact can't inflate it. Input need not be sorted. `None` if no run has two beats.
+    pub fn rmssd_gap_aware(beats: &[(u32, Vec<u16>)]) -> Option<f64> {
+        let mut order: Vec<&(u32, Vec<u16>)> = beats.iter().collect();
+        order.sort_by_key(|(t, _)| *t);
+        let mut runs: Vec<Vec<u16>> = Vec::new();
+        let mut cur: Vec<u16> = Vec::new();
+        let mut last: Option<u32> = None;
+        for (unix, rr) in order {
+            if last.is_some_and(|p| unix.saturating_sub(p) > MAX_GAP_S) {
+                runs.push(std::mem::take(&mut cur));
+            }
+            for &ms in rr {
+                if (RR_MIN_MS..=RR_MAX_MS).contains(&ms) {
+                    cur.push(ms);
+                } else {
+                    runs.push(std::mem::take(&mut cur));
+                }
+            }
+            last = Some(*unix);
+        }
+        runs.push(cur);
+        Self::rmssd_runs(runs.iter().map(Vec::as_slice))
+    }
+
+    /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, ready for
+    /// `evaluate`. Groups records into UTC days, then applies `rmssd_gap_aware` within each day. One
+    /// source of truth shared by the store and the CLI. (A sleep that straddles UTC midnight is split
+    /// across two days; see `whoop-store`'s note on the calendar-day bucket.)
+    pub fn nightly_rmssd(history: &[HistoryRecord]) -> Vec<Option<f64>> {
+        let mut by_day: std::collections::BTreeMap<u32, Vec<(u32, Vec<u16>)>> = std::collections::BTreeMap::new();
+        for h in history {
+            if !h.rr_intervals.is_empty() {
+                by_day.entry(h.unix / SECS_PER_DAY).or_default().push((h.unix, h.rr_intervals.clone()));
+            }
+        }
+        by_day.values().map(|beats| Self::rmssd_gap_aware(beats)).collect()
     }
 
     /// Readiness over a nightly RMSSD series (ms), oldest → newest; `None` slots = missing nights.
@@ -118,6 +179,40 @@ mod tests {
         // successive diffs 10, 10 → mean square 100 → sqrt 10.
         assert_eq!(HrvReadiness::rmssd(&[800, 810, 820]), Some(10.0));
         assert_eq!(HrvReadiness::rmssd(&[800]), None);
+    }
+
+    #[test]
+    fn rmssd_runs_pools_within_runs_only() {
+        // Two runs; the break between them (810 → 100) must never be differenced.
+        let a: &[u16] = &[800, 810];
+        let b: &[u16] = &[100, 110];
+        assert!((HrvReadiness::rmssd_runs([a, b]).unwrap() - 10.0).abs() < 1e-9);
+        // No run with two beats → None.
+        assert_eq!(HrvReadiness::rmssd_runs([[500u16].as_slice(), [600].as_slice()]), None);
+        assert_eq!(HrvReadiness::rmssd_runs(std::iter::empty::<&[u16]>()), None);
+    }
+
+    #[test]
+    fn nightly_rmssd_produces_one_gap_aware_value_per_day() {
+        let rec = |unix: u32, rr: Vec<u16>| HistoryRecord { version: 18, unix, rr_intervals: rr, ..Default::default() };
+        // day 0: two contiguous records; day 1: one record with two beats.
+        let hist = vec![rec(0, vec![600, 610]), rec(1, vec![605, 615]), rec(SECS_PER_DAY, vec![700, 720])];
+        let series = HrvReadiness::nightly_rmssd(&hist);
+        assert_eq!(series.len(), 2);
+        assert!(series.iter().all(|v| v.is_some()));
+    }
+
+    #[test]
+    fn rmssd_gap_aware_breaks_on_time_gaps_and_artifacts() {
+        // Steady contiguous beats, then a far-away single beat (unsorted input) and an artifact interval.
+        let beats = vec![
+            (10_000u32, vec![1400u16]), // far gap isolates it into a lone 1-beat run (1400 ms is plausible)
+            (0, vec![600, 610]),
+            (1, vec![605, 615]),
+            (2, vec![5, 620]), // the 5 ms artifact breaks the chain, the 620 survives
+        ];
+        let g = HrvReadiness::rmssd_gap_aware(&beats).unwrap();
+        assert!(g < 20.0, "gap-aware RMSSD should stay small, got {g}");
     }
 
     #[test]

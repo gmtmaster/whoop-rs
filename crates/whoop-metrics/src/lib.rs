@@ -8,6 +8,6 @@ pub mod spo2;
 pub mod stats;
 
 pub use calibration::Calibration;
-pub use hrv_readiness::{HrvReadiness, HrvReadinessResult, ReadinessTier};
+pub use hrv_readiness::{HrvReadiness, HrvReadinessResult, ReadinessTier, SECS_PER_DAY};
 pub use spo2::{RollingReading, Spo2};
 pub use stats::{linear_fit, pearson, LinearFit};

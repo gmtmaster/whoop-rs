@@ -421,7 +421,7 @@ fn report_metrics(records: &[Record], fam: Family) {
         print_spo2_5(&history);
     }
 
-    let nightly = nightly_rmssd(&history);
+    let nightly = HrvReadiness::nightly_rmssd(&history);
     let nights = nightly.iter().filter(|n| n.is_some()).count();
     match HrvReadiness::evaluate(&nightly) {
         Some(r) => println!(
@@ -474,17 +474,6 @@ fn print_spo2_5(history: &[HistoryRecord]) {
     };
     let mean = spo2.iter().map(|&v| v as u32).sum::<u32>() as f32 / spo2.len() as f32;
     println!("SpO2 (5.0/MG): {} sleep readings, {lo}-{hi}% (mean {mean:.1}%)", spo2.len());
-}
-
-/// Per-day RMSSD (ms) from the R-R carried in history records, oldest → newest, for HRV-readiness.
-fn nightly_rmssd(history: &[HistoryRecord]) -> Vec<Option<f64>> {
-    let mut by_day: BTreeMap<u32, Vec<u16>> = BTreeMap::new();
-    for h in history {
-        if !h.rr_intervals.is_empty() {
-            by_day.entry(h.unix / 86_400).or_default().extend(&h.rr_intervals);
-        }
-    }
-    by_day.values().map(|rr| HrvReadiness::rmssd(rr)).collect()
 }
 
 /// Print a one-look summary of a decode: counts by kind, HR range, R-R total, time span, and where saved.
