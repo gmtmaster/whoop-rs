@@ -32,16 +32,16 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 
 | Crate | Role | Size | Tests |
 |---|---|---|---|
-| `whoop-protocol` | Pure wire codec: framing, CRC, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~1900 LOC | 29 |
+| `whoop-protocol` | Pure wire codec: framing, CRC, hex, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~1420 LOC | 30 |
 | `ble-core` | `BleTransport` async trait + neutral `Notification`/`BleError` + `MockTransport` | ~130 LOC | 1 |
 | `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (scan/connect/subscribe/notify/write) | ~215 LOC | 1 |
-| `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture, backfill policy | ~640 LOC | 15 |
-| `whoop-metrics` | Pure derived metrics: HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient primitive | ~430 LOC | 15 |
-| `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines | ~230 LOC | 2 |
-| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db` calibration store | ~360 LOC | 2 |
+| `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~640 LOC | 16 |
+| `whoop-metrics` | Pure derived metrics/DSP: gap-aware HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), HR-from-PPG (`ppg_hr`), the wellness HR-at-rest watch, the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient | ~800 LOC | 22 |
+| `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~330 LOC | 4 |
+| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db`/`--hr-watch` | ~580 LOC | 4 |
 | `whoop-ffi` | uniffi surface exposing `WhoopCodec` to Kotlin + iOS from one Rust source | ~230 LOC | 6 |
 
-**71 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
+**85 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
 predicate; the radio path is hardware-integration-verified (`whoopctl scan`), not mockable in-process.
 
 ---
