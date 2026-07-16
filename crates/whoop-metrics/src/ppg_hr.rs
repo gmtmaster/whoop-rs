@@ -1,6 +1,6 @@
 //! Derive heart rate from the v26 optical PPG waveform (24 Hz), which carries no per-second HR: group
-//! samples into consecutive-second runs, detrend a centred window, remove the record-rate comb, then
-//! pick the fundamental autocorrelation period. Pure.
+//! samples into consecutive-second runs, detrend a centred window, remove the record-rate comb, pick the
+//! fundamental autocorrelation period, then sub-lag parabolic-refine it. Pure.
 
 use crate::stats::{least_squares_line, mean};
 use std::collections::{HashMap, HashSet};
@@ -192,7 +192,19 @@ fn estimate_window(values: &[f64], ts: i64) -> Option<Estimate> {
         best_lag = argmax;
     }
 
-    let bpm = (fs * 60.0 / best_lag as f64).round() as i32;
+    // Sub-lag parabolic refine: fit a parabola to the ACF peak and its two neighbours so a true HR
+    // between two integer lags is not quantized (integer steps reach ~16 bpm near 150). Interior lags
+    // only; a non-concave fit falls back to the integer lag. conf stays the integer peak.
+    let mut refined = best_lag as f64;
+    if best_lag > lo_lag && best_lag < hi_lag {
+        let (y0, y1, y2) = (vals[&(best_lag - 1)], vals[&best_lag], vals[&(best_lag + 1)]);
+        let denom = y0 - 2.0 * y1 + y2;
+        if denom < 0.0 {
+            let delta = (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0);
+            refined = (best_lag as f64 + delta).clamp(lo_lag as f64, hi_lag as f64);
+        }
+    }
+    let bpm = (fs * 60.0 / refined).round() as i32;
     let conf = (vals[&best_lag] * 1000.0).round() / 1000.0;
     Some(Estimate { ts, bpm, conf })
 }
