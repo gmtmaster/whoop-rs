@@ -69,6 +69,17 @@ gravity widen is asserted byte-for-byte on the worn v18 frame.
   vectors with no radio; the FFI drives the identical machine on mobile.
 - **The transport trait returns an owned `'static` notification stream** so a caller can hold it
   while still issuing writes on `&self` (the borrow that otherwise fights the checker).
+- **Adjudicated decode = one source of truth.** Where the Kotlin app and this codec once diverged, each
+  field was adjudicated against real captures + external RE and the better implementation lives here, not
+  a blind clone of either side. Locked choices: **ppgHr** does a sub-lag parabolic ACF refine
+  (`ppg_hr` in `whoop-metrics`) — a real-data win on the 838 night (sub-lag MAE 2.12 vs integer-lag 2.50
+  bpm on the clean windows), never worse across a synthetic 45-150 bpm noise sweep, with an
+  integer-fallback on a bad concave fit; **battery SOC** divides the integer deci-percent in f64
+  (`Response.Battery.percent` / `BatteryPack.socPct` are f64, 999 → exact 99.9); **gravity** is gated to
+  |g| ∈ [0.5,1.5] (drops non-finite/garbage the ungated path would store — never fired on 1861 real v18
+  frames). Raw scalars (skin-temp, activity, spo2, resp, sleep-state, steps) decode-agree and are stored
+  raw. The 5.0 sleep spo2 percent is decoded here even though the app does not yet store it. Adjudication
+  evidence is in `whoop-research/decoder-adjudication/`.
 
 These converge with both mature Rust prior-art implementations (openwhoop, goose); see
 `dev-docs/external-sources.md`.
