@@ -265,31 +265,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Decode a raw-capture JSON Lines file into history records (+ the strap serial from `session_id`), to
-/// backfill the calibration store from a past drain without a band.
+/// Read a raw-capture JSON Lines file and decode it into history records (+ the strap serial), to backfill
+/// the calibration store from a past drain without a band. The line/frame decode is owned by whoop-client.
 fn decode_capture(path: &Path, fam: Family) -> Result<(Option<String>, Vec<Record>)> {
     let text = std::fs::read_to_string(path)?;
-    let mut records = Vec::new();
-    let mut strap = None;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = serde_json::from_str(line)?;
-        if strap.is_none() {
-            strap = v.get("session_id").and_then(|s| s.as_str()).map(str::to_string);
-        }
-        let Some(hex) = v.get("hex").and_then(|h| h.as_str()) else { continue };
-        let Ok(bytes) = parse_hex(hex) else { continue };
-        let Ok(frame) = whoop_protocol::framing::decode(fam, &bytes) else { continue };
-        if frame.packet().canonical() == PacketType::HistoricalData {
-            if let Some(rec) = records::decode(&frame) {
-                records.push(rec);
-            }
-        }
-    }
-    Ok((strap, records))
+    Ok(whoop_client::decode_capture(&text, fam))
 }
 
 /// Refuse `--wipe` when the strap serial matches the local `WHOOPCTL_PROTECT` allowlist (comma-separated
@@ -552,12 +532,7 @@ fn report_sync(records: &[Record], out: &Path, wiped: bool) {
 }
 
 fn parse_hex(s: &str) -> Result<Vec<u8>> {
-    let s = s.trim();
-    anyhow::ensure!(s.len().is_multiple_of(2), "odd hex length");
-    (0..s.len())
-        .step_by(2)
-        .map(|i| -> Result<u8> { Ok(u8::from_str_radix(&s[i..i + 2], 16)?) })
-        .collect()
+    whoop_protocol::bytes::from_hex(s.trim()).ok_or_else(|| anyhow::anyhow!("invalid hex"))
 }
 
 #[cfg(test)]

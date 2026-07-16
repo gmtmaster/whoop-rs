@@ -65,3 +65,26 @@ pub fn to_hex(b: &[u8]) -> String {
     }
     s
 }
+
+/// Bytes from a hex string (either case, no separators), the inverse of `to_hex`; `None` on an odd length
+/// or a non-hex digit.
+pub fn from_hex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_round_trips_and_rejects_bad_input() {
+        assert_eq!(from_hex("0a1bff").unwrap(), vec![0x0a, 0x1b, 0xff]);
+        assert_eq!(from_hex(&to_hex(&[0xde, 0xad, 0xbe, 0xef])).unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(from_hex("0A1BFF").unwrap(), vec![0x0a, 0x1b, 0xff]); // upper-case
+        assert!(from_hex("abc").is_none()); // odd length
+        assert!(from_hex("zz").is_none()); // non-hex
+    }
+}

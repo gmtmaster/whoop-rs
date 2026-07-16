@@ -1,8 +1,8 @@
 //! Lossless capture-tap + reject-archive JSONL encoder. One snake_case line per reassembled frame; the
 //! file IO (rotation / evict-oldest) belongs to the platform layer, this is the pure line.
 
-use whoop_protocol::bytes::to_hex;
-use whoop_protocol::{live, records, Frame, PacketType, Record};
+use whoop_protocol::bytes::{from_hex, to_hex};
+use whoop_protocol::{framing, live, records, Family, Frame, PacketType, Record};
 
 /// Encode one captured frame as a JSONL line. `offload` marks frames seen during a history drain.
 pub fn capture_line(captured_at_ms: i64, session_id: &str, characteristic: &str, frame: &Frame, offload: bool) -> String {
@@ -23,6 +23,39 @@ pub fn capture_line(captured_at_ms: i64, session_id: &str, characteristic: &str,
 /// The reject archive (undecodable frames captured before the trim ACK) uses the same line shape.
 pub fn archive_line(captured_at_ms: i64, session_id: &str, frame: &Frame) -> String {
     capture_line(captured_at_ms, session_id, "rejected", frame, true)
+}
+
+/// Decode a raw-capture JSONL blob back into history records (plus the strap serial from `session_id`),
+/// the file-level inverse of `capture_line`. Lines without a decodable historical frame are skipped.
+pub fn decode_capture(text: &str, family: Family) -> (Option<String>, Vec<Record>) {
+    let mut records = Vec::new();
+    let mut strap = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if strap.is_none() {
+            strap = string_field(line, "session_id");
+        }
+        let Some(bytes) = string_field(line, "hex").and_then(|h| from_hex(&h)) else { continue };
+        let Ok(frame) = framing::decode(family, &bytes) else { continue };
+        if frame.packet().canonical() == PacketType::HistoricalData {
+            if let Some(rec) = records::decode(&frame) {
+                records.push(rec);
+            }
+        }
+    }
+    (strap, records)
+}
+
+/// Extract a quoted string field `"key":"value"` from one capture line (these values carry no escaped quotes).
+fn string_field(line: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\":\"");
+    let start = line.find(&pat)? + pat.len();
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 fn parsed_fields(f: &Frame) -> String {
@@ -73,5 +106,23 @@ mod tests {
         assert!(line.contains("\"offload\":true"));
         assert!(line.contains("\"heart_rate\":96"));
         assert!(line.contains(&format!("\"size\":{}", frame.raw().len())));
+    }
+
+    #[test]
+    fn decode_capture_inverts_capture_line() {
+        let mut v18 = vec![0u8; 40];
+        v18[4..8].copy_from_slice(&1_784_000_000u32.to_le_bytes());
+        v18[11] = 96; // heart_rate
+        let wire = framing::encode(Family::Gen5, 47, 18, 0, &v18);
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+        let line = capture_line(1_700_000_000_000, "5AG0507838", "fd4b0005", &frame, true);
+
+        let (strap, records) = decode_capture(&line, Family::Gen5);
+        assert_eq!(strap.as_deref(), Some("5AG0507838"));
+        assert_eq!(records.len(), 1);
+        match &records[0] {
+            Record::History(h) => assert_eq!(h.heart_rate, Some(96)),
+            other => panic!("expected history, got {other:?}"),
+        }
     }
 }
