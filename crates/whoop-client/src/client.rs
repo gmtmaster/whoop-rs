@@ -172,6 +172,7 @@ impl<T: BleTransport> WhoopClient<T> {
             (command::REPORT_VERSION_INFO, &[][..]),
             (clock, &[][..]),
             (command::GET_BATTERY_LEVEL, &[0x01][..]), // the 4.0 needs b3 0x01 to reply; the 5.0 ignores it
+            (command::GET_EXTENDED_BATTERY_INFO, &[0x01][..]), // 4.0 strap fuel gauge (5.0 answers unsupported)
             (command::GET_DATA_RANGE, &[0x00][..]),
         ] {
             self.send_raw(op, b3).await?;

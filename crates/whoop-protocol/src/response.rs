@@ -2,7 +2,7 @@
 //! battery vs GEN5 direct percent; GEN5-only hello name/firmware), so it dispatches on family here.
 //! Offsets are payload-relative (payload = inner[3..]).
 
-use crate::bytes::{u16_at, u32_at, u8_at};
+use crate::bytes::{i16_at, u16_at, u32_at, u8_at};
 use crate::command;
 use crate::event::ResultCode;
 use crate::family::Family;
@@ -15,6 +15,9 @@ pub enum CommandResponse {
     Hello { device_name: String, fw_version: Option<[u8; 4]> },
     DataRange { oldest: u32, newest: u32 },
     VersionInfo { fw: [u32; 4] },
+    /// 4.0 strap fuel gauge (GET_EXTENDED_BATTERY_INFO). Voltage, remaining capacity (remaining/full = the
+    /// SOC), and the signed instantaneous current.
+    ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
     /// 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO). `millivolts` is the pack voltage; `pack_id` is a
     /// per-pack 32-bit id distinct from `serial`.
     BatteryPack { serial: String, soc_pct: f32, millivolts: u16, pack_id: u32 },
@@ -63,6 +66,13 @@ fn decode_gen4(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
         command::GET_CLOCK_GEN4 => Some(CommandResponse::Clock { unix: u32_at(p, 2)? }),
         command::REPORT_VERSION_INFO => Some(CommandResponse::VersionInfo {
             fw: [u32_at(p, 3)?, u32_at(p, 7)?, u32_at(p, 11)?, u32_at(p, 15)?],
+        }),
+        // Fuel gauge pinned by 3-strap correlation vs SOC: mV@7, remaining-capacity@13 (remaining/full=SOC),
+        // signed current@3.
+        command::GET_EXTENDED_BATTERY_INFO => Some(CommandResponse::ExtendedBattery {
+            millivolts: u16_at(p, 7)?,
+            remaining_mah: u16_at(p, 13)?,
+            current_ma: i16_at(p, 3)?,
         }),
         command::GET_HELLO_HARVARD => {
             let serial = ascii_z(p, 16);
@@ -159,6 +169,20 @@ mod tests {
                 millivolts: 3700,
                 pack_id: 0x1122_3344,
             })
+        );
+    }
+
+    #[test]
+    fn gen4_extended_battery_reads_mv_capacity_current() {
+        let mut p = vec![0u8; 30];
+        p[3..5].copy_from_slice(&(-532i16).to_le_bytes()); // current
+        p[7..9].copy_from_slice(&4363u16.to_le_bytes()); // mV
+        p[13..15].copy_from_slice(&2017u16.to_le_bytes()); // remaining mAh
+        let wire = framing::encode(Family::Gen4, 36, 0, command::GET_EXTENDED_BATTERY_INFO, &p);
+        let f = framing::decode(Family::Gen4, &wire).unwrap();
+        assert_eq!(
+            decode(&f),
+            Some(CommandResponse::ExtendedBattery { millivolts: 4363, remaining_mah: 2017, current_ma: -532 })
         );
     }
 

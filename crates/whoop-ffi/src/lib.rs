@@ -143,6 +143,7 @@ pub enum Response {
     Hello { device_name: String, fw_version: Option<Vec<u8>> },
     DataRange { oldest: u32, newest: u32 },
     Version { fw: Vec<u32> },
+    ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
     BatteryPack { serial: String, soc_pct: f32, millivolts: u16, pack_id: u32 },
     Other { cmd: u8, result: Option<u8> },
 }
@@ -317,6 +318,9 @@ impl WhoopCodec {
             }
             C::DataRange { oldest, newest } => Response::DataRange { oldest, newest },
             C::VersionInfo { fw } => Response::Version { fw: fw.to_vec() },
+            C::ExtendedBattery { millivolts, remaining_mah, current_ma } => {
+                Response::ExtendedBattery { millivolts, remaining_mah, current_ma }
+            }
             C::BatteryPack { serial, soc_pct, millivolts, pack_id } => {
                 Response::BatteryPack { serial, soc_pct, millivolts, pack_id }
             }
