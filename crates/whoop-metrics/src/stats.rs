@@ -39,6 +39,14 @@ pub fn least_squares_slope(ys: &[f64]) -> f64 {
     }
 }
 
+/// OLS line of `ys` over x = 0, 1, 2, … as `(slope, intercept)`. `(0.0, mean)` for fewer than two points.
+/// The single source for both the slope (`least_squares_slope`) and a full linear detrend.
+pub fn least_squares_line(ys: &[f64]) -> (f64, f64) {
+    let slope = least_squares_slope(ys);
+    let mean_x = ys.len().saturating_sub(1) as f64 / 2.0;
+    (slope, mean(ys) - slope * mean_x)
+}
+
 /// Median: the middle on odd counts, the mean of the two middles on even counts. Caller ensures non-empty.
 pub fn median(xs: &[f64]) -> f64 {
     let mut s = xs.to_vec();
@@ -136,6 +144,16 @@ mod tests {
         assert!((sample_sd(&[2.0, 4.0, 6.0]) - 2.0).abs() < 1e-12);
         assert!((least_squares_slope(&[1.0, 2.0, 3.0, 4.0]) - 1.0).abs() < 1e-12);
         assert_eq!(least_squares_slope(&[5.0]), 0.0);
+    }
+
+    #[test]
+    fn least_squares_line_matches_slope_and_recovers_intercept() {
+        // y = 2x + 3 over x = 0..4 → slope 2, intercept 3.
+        let ys = [3.0, 5.0, 7.0, 9.0, 11.0];
+        let (slope, intercept) = least_squares_line(&ys);
+        assert!((slope - 2.0).abs() < 1e-12 && (intercept - 3.0).abs() < 1e-12);
+        assert!((slope - least_squares_slope(&ys)).abs() < 1e-12);
+        assert_eq!(least_squares_line(&[42.0]), (0.0, 42.0)); // < 2 points → (0, mean)
     }
 
     #[test]

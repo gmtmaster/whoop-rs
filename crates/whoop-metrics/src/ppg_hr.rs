@@ -2,7 +2,7 @@
 //! samples into consecutive-second runs, detrend a centred window, remove the record-rate comb, then
 //! pick the fundamental autocorrelation period. Pure.
 
-use crate::stats::mean;
+use crate::stats::{least_squares_line, mean};
 use std::collections::{HashMap, HashSet};
 
 pub const SAMPLE_RATE_HZ: usize = 24;
@@ -86,27 +86,8 @@ pub fn estimate(samples: &[Sample]) -> Vec<Estimate> {
 }
 
 fn detrend(x: &[f64]) -> Vec<f64> {
-    let n = x.len();
-    if n <= 1 {
-        return vec![0.0; n];
-    }
-    let nd = n as f64;
-    let sum_i = nd * (nd - 1.0) / 2.0;
-    let sum_i2 = (nd - 1.0) * nd * (2.0 * nd - 1.0) / 6.0;
-    let mut sum_y = 0.0;
-    let mut sum_iy = 0.0;
-    for (i, &v) in x.iter().enumerate() {
-        sum_y += v;
-        sum_iy += i as f64 * v;
-    }
-    let denom = nd * sum_i2 - sum_i * sum_i;
-    if denom == 0.0 {
-        let m = sum_y / nd;
-        return x.iter().map(|v| v - m).collect();
-    }
-    let slope = (nd * sum_iy - sum_i * sum_y) / denom;
-    let intercept = (sum_y - slope * sum_i) / nd;
-    (0..n).map(|i| x[i] - (slope * i as f64 + intercept)).collect()
+    let (slope, intercept) = least_squares_line(x);
+    (0..x.len()).map(|i| x[i] - (slope * i as f64 + intercept)).collect()
 }
 
 fn acf(x: &[f64], lag: usize) -> f64 {
