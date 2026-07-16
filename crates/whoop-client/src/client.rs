@@ -171,7 +171,7 @@ impl<T: BleTransport> WhoopClient<T> {
             (command::GET_ADVERTISING_NAME, &[0x01][..]),
             (command::REPORT_VERSION_INFO, &[][..]),
             (clock, &[][..]),
-            (command::GET_BATTERY_LEVEL, &[][..]),
+            (command::GET_BATTERY_LEVEL, &[0x01][..]), // the 4.0 needs b3 0x01 to reply; the 5.0 ignores it
             (command::GET_DATA_RANGE, &[0x00][..]),
         ] {
             self.send_raw(op, b3).await?;
@@ -490,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn info_decodes_scripted_command_responses() {
         let mut body = vec![0u8; 20];
-        body[13] = 93; // GEN5 battery = direct percent @ payload 13
+        body[2] = 93; // GEN5 battery = direct percent @ payload 2
         let resp = framing::encode(Family::Gen5, 36, 0, command::GET_BATTERY_LEVEL, &body);
         let mock = MockTransport::new(vec![note(Channel::CmdNotify, resp)]);
         let mut client = WhoopClient::new(mock, Family::Gen5);

@@ -77,9 +77,17 @@ async fn main() -> Result<()> {
             client.disconnect().await.ok();
         }
         Cmd::Pack => {
+            use whoop_protocol::response::CommandResponse;
             let mut client = connect(&cli).await?;
             for resp in client.battery_pack().await? {
-                println!("{resp:?}");
+                match resp {
+                    // A wired charge (no pack) answers success but all-zero.
+                    CommandResponse::BatteryPack { pack_id: 0, .. } => println!("no battery pack attached"),
+                    CommandResponse::BatteryPack { serial, soc_pct, millivolts, pack_id } => {
+                        println!("pack {serial}  soc={soc_pct:.1}%  mv={millivolts}  id={pack_id:#010x}");
+                    }
+                    other => println!("{other:?}"),
+                }
             }
             client.disconnect().await.ok();
         }

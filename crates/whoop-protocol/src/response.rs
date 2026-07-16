@@ -32,7 +32,7 @@ pub fn decode(f: &Frame) -> Option<CommandResponse> {
 
 fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
     match cmd {
-        command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u8_at(p, 13)? as f32 }),
+        command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u8_at(p, 2)? as f32 }),
         command::GET_HELLO => Some(CommandResponse::Hello {
             device_name: ascii_z(p, 16),
             // Gate on the "5.x" marker; the `?` stays inside the closure so a truncated fw block yields
@@ -103,7 +103,7 @@ mod tests {
     fn gen5_battery_is_direct_percent() {
         let mut p = vec![0u8; 20];
         p[1] = 1; // result = SUCCESS
-        p[13] = 93; // battery @ payload 13
+        p[2] = 93; // battery % @ payload 2 (real 5.0 layout: 035=100, 206=89)
         let wire = framing::encode(Family::Gen5, 36, 0, command::GET_BATTERY_LEVEL, &p);
         let f = framing::decode(Family::Gen5, &wire).unwrap();
         assert_eq!(decode(&f), Some(CommandResponse::Battery { percent: 93.0 }));
