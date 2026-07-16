@@ -24,6 +24,9 @@ const MAX_GAP_S: u32 = 5;
 /// A physiologically plausible R-R interval (ms); values outside break the chain rather than inflate RMSSD.
 const RR_MIN_MS: u16 = 300;
 const RR_MAX_MS: u16 = 2000;
+/// A beat-to-beat R-R change beyond this (ms) is an artifact (ectopic/missed beat), not real variability,
+/// so its squared difference is dropped from RMSSD — the standard HRV artifact-correction step.
+const MAX_BEAT_DELTA_MS: f64 = 200.0;
 
 /// Where the short baseline sits vs the personal normal band.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,14 +50,18 @@ pub struct HrvReadinessResult {
 pub struct HrvReadiness;
 
 impl HrvReadiness {
-    /// Gap-aware RMSSD (ms): pools squared successive differences **within** each run of consecutive beats
-    /// and never across the break between runs, so a jump across an offload gap or an artifact interval
-    /// can't inflate it. `None` if no run has two beats. The caller splits R-R into runs on time gaps.
+    /// Gap-aware, artifact-corrected RMSSD (ms): pools squared successive differences **within** each run
+    /// of consecutive beats, never across the break between runs, and drops any single beat-to-beat change
+    /// over `MAX_BEAT_DELTA_MS` (an ectopic/missed beat), so neither an offload gap nor an artifact can
+    /// inflate it. `None` if no run has two beats. The caller splits R-R into runs on time gaps.
     pub fn rmssd_runs<'a>(runs: impl IntoIterator<Item = &'a [u16]>) -> Option<f64> {
         let (mut sumsq, mut pairs) = (0.0f64, 0usize);
         for run in runs {
             for w in run.windows(2) {
                 let d = w[1] as f64 - w[0] as f64;
+                if d.abs() > MAX_BEAT_DELTA_MS {
+                    continue; // ectopic / missed beat, not physiological variability
+                }
                 sumsq += d * d;
                 pairs += 1;
             }
@@ -189,6 +196,15 @@ mod tests {
         // No run with two beats → None.
         assert_eq!(HrvReadiness::rmssd_runs([[500u16].as_slice(), [600].as_slice()]), None);
         assert_eq!(HrvReadiness::rmssd_runs(std::iter::empty::<&[u16]>()), None);
+    }
+
+    #[test]
+    fn rmssd_runs_excludes_artifact_beat_jumps() {
+        // A 900 ms jump in the middle (an ectopic/missed beat) must not inflate RMSSD; only the clean
+        // 10 ms diffs survive → ~10 ms, not the ~600 ms a raw pooling would give.
+        let run: &[u16] = &[600, 610, 1500, 610, 600];
+        let v = HrvReadiness::rmssd_runs([run]).unwrap();
+        assert!(v < 20.0, "artifact beat-to-beat jumps should be excluded, got {v}");
     }
 
     #[test]

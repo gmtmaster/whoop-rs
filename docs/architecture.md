@@ -36,12 +36,12 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 | `ble-core` | `BleTransport` async trait + neutral `Notification`/`BleError` + `MockTransport` | ~130 LOC | 1 |
 | `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (scan/connect/subscribe/notify/write) | ~215 LOC | 1 |
 | `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~640 LOC | 16 |
-| `whoop-metrics` | Pure derived metrics/DSP: gap-aware HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), HR-from-PPG (`ppg_hr`), the wellness HR-at-rest watch, the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient | ~800 LOC | 23 |
+| `whoop-metrics` | Pure derived metrics/DSP: gap-aware + artifact-corrected HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), HR-from-PPG (`ppg_hr`), the wellness HR-at-rest watch, the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient | ~800 LOC | 24 |
 | `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~330 LOC | 4 |
 | `whoopctl` | clap CLI (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~600 LOC | 4 |
 | `whoop-ffi` | uniffi surface exposing `WhoopCodec` to Kotlin + iOS from one Rust source | ~230 LOC | 6 |
 
-**86 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
+**87 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
 predicate; the radio path is hardware-integration-verified (`whoopctl scan`), not mockable in-process.
 
 ---
@@ -206,7 +206,7 @@ median, RMSSD, HR range) and persists them to SQLite keyed on **(person, strap)*
 same person on a new strap, is a fresh key, so a shared or handed-off strap never calibrates against another
 wearer's data. A metric's baseline finalizes once its (person, strap) reaches the calibration milestone.
 `whoopctl --person <id>` picks the wearer; `ingest <capture>` backfills from a saved raw JSONL, no band.
-Nightly RMSSD is **gap-aware** (successive differences pool only within time-contiguous, plausible R-R runs,
+Nightly RMSSD is **gap-aware and artifact-corrected** (successive differences pool only within time-contiguous, plausible R-R runs, and any ectopic/missed-beat jump over 200 ms is dropped — validated on the 838 drain: 29-37 ms, vs 150-184 ms without it,
 shared with the CLI via `HrvReadiness::rmssd_gap_aware`). `calibrate_fit` wires `linear_fit` into the store:
 a device-relative field is fitted against a reference over the accumulated nights and the `{scale, offset,
 r}` persisted to a `fit_baseline` table once the milestone is met. (Known limit: nights bucket by UTC

@@ -2,7 +2,8 @@
 //! person wearing the strap AND the strap serial, so a new person or a new strap starts a fresh
 //! calibration period (you never calibrate against someone else's data). A metric's baseline finalizes
 //! once its (person, strap) reaches the WHOOP milestone from `whoop_metrics::calibration`. Nightly RMSSD is
-//! gap-aware (successive differences pool only within time-contiguous, plausible R-R runs). A per-strap
+//! gap-aware and artifact-corrected (successive differences pool only within time-contiguous, plausible
+//! R-R runs, dropping ectopic/missed-beat jumps). A per-strap
 //! linear fit (`reference ≈ scale·field + offset`) can also be finalized and persisted from paired columns.
 //! Known limit: nights are bucketed by UTC calendar day, so a sleep that straddles UTC midnight is split
 //! across two rows (the one beat-pair at the boundary is dropped). A physiological-day cutover is a TODO.
