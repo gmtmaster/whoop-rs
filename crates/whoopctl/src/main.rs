@@ -117,9 +117,10 @@ async fn main() -> Result<()> {
         Cmd::Send { op, payload } => {
             let op = u8::from_str_radix(op.trim_start_matches("0x"), 16)?;
             let pay = payload.as_deref().map(parse_hex).transpose()?.unwrap_or_default();
-            let client = connect(&cli).await?;
-            client.send_raw(op, &pay).await?;
-            println!("sent {op:#04x}");
+            let mut client = connect(&cli).await?;
+            for f in client.probe(op, &pay, 2).await? {
+                println!("{} cmd={} crc={} {}", f.packet().name(), f.cmd(), f.crc_ok, to_hex(f.raw()));
+            }
             client.disconnect().await.ok();
         }
         Cmd::Metrics => {

@@ -157,10 +157,17 @@ impl<T: BleTransport> WhoopClient<T> {
     pub async fn info(&mut self) -> Result<Vec<CommandResponse>, Error> {
         let notifications = self.transport.notifications().await?;
         let clock = if self.family == Family::Gen5 { command::GET_CLOCK_GEN5 } else { command::GET_CLOCK_GEN4 };
+        // Hello opcode + b3 are per generation: GEN5 uses GET_HELLO (0x91) with b3 0x01; the 4.0's hello is
+        // GET_HELLO_HARVARD (0x23) and takes no b3 (its CRC8 envelope has no b3 byte).
+        let (hello, hello_b3): (u8, &[u8]) = match self.family {
+            Family::Gen5 => (command::GET_HELLO, &[0x01]),
+            // The 4.0 hello needs a 9-byte client-time arg to reply (content is ignored); empty gets silence.
+            Family::Gen4 => (command::GET_HELLO_HARVARD, &[0u8; 9]),
+        };
         // b3 (4th inner byte) is per-command; the wrong value is silently ignored. Hello/adv-name want
         // 0x01, data-range 0x00; the rest we leave bare.
         for (op, b3) in [
-            (command::GET_HELLO, &[0x01u8][..]),
+            (hello, hello_b3),
             (command::GET_ADVERTISING_NAME, &[0x01][..]),
             (command::REPORT_VERSION_INFO, &[][..]),
             (clock, &[][..]),
@@ -179,6 +186,16 @@ impl<T: BleTransport> WhoopClient<T> {
             }
         })
         .await?;
+        Ok(out)
+    }
+
+    /// Send one command and collect every frame that arrives for `secs` — the probe behind `whoopctl send`,
+    /// so a response can be inspected raw (stream opened before the write → no missed reply).
+    pub async fn probe(&mut self, op: u8, payload: &[u8], secs: u64) -> Result<Vec<Frame>, Error> {
+        let notifications = self.transport.notifications().await?;
+        self.send_raw(op, payload).await?;
+        let mut out = Vec::new();
+        self.collect_frames(notifications, secs, |f| out.push(f)).await?;
         Ok(out)
     }
 

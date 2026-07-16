@@ -49,6 +49,20 @@ fn decode_gen4(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
         command::REPORT_VERSION_INFO => Some(CommandResponse::VersionInfo {
             fw: [u32_at(p, 3)?, u32_at(p, 7)?, u32_at(p, 11)?, u32_at(p, 15)?],
         }),
+        command::GET_HELLO_HARVARD => {
+            let serial = ascii_z(p, 16);
+            // The serial is followed by a variable-length ASCII-hex session token, then a u32 status block
+            // whose 4th..7th words are the firmware. Skip the token (its trailing byte is non-hex) to find
+            // the block, and gate on a plausible major so a wrong offset yields None.
+            let mut block = 16 + serial.len() + 1;
+            while p.get(block).is_some_and(|&b| b.is_ascii_hexdigit()) {
+                block += 1;
+            }
+            let fw = u32_at(p, block + 12).filter(|&v| (1..=99).contains(&v)).and_then(|maj| {
+                Some([maj as u8, u32_at(p, block + 16)? as u8, u32_at(p, block + 20)? as u8, u32_at(p, block + 24)? as u8])
+            });
+            Some(CommandResponse::Hello { device_name: serial, fw_version: fw })
+        }
         _ => Some(CommandResponse::Other { cmd, result: None }),
     }
 }
@@ -88,6 +102,27 @@ mod tests {
         let f = framing::decode(Family::Gen5, &wire).unwrap();
         match decode(&f).unwrap() {
             CommandResponse::Hello { device_name, .. } => assert_eq!(device_name, "5AG0546409"),
+            other => panic!("expected Hello, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gen4_hello_reads_serial_and_firmware() {
+        let mut p = vec![0u8; 120];
+        p[16..25].copy_from_slice(b"TEST12345"); // serial, NUL-terminated by the zero at p[25]
+        let token = b"8e2782b74f40284c"; // ASCII-hex session token (any length); the block follows it
+        p[26..26 + token.len()].copy_from_slice(token);
+        let block = 26 + token.len(); // first non-hex byte after the token
+        p[block + 12] = 41;
+        p[block + 16] = 17;
+        p[block + 20] = 6;
+        let wire = framing::encode(Family::Gen4, 36, 0, command::GET_HELLO_HARVARD, &p);
+        let f = framing::decode(Family::Gen4, &wire).unwrap();
+        match decode(&f).unwrap() {
+            CommandResponse::Hello { device_name, fw_version } => {
+                assert_eq!(device_name, "TEST12345");
+                assert_eq!(fw_version, Some([41, 17, 6, 0]));
+            }
             other => panic!("expected Hello, got {other:?}"),
         }
     }
