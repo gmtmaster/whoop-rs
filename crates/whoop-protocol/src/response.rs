@@ -15,6 +15,9 @@ pub enum CommandResponse {
     Hello { device_name: String, fw_version: Option<[u8; 4]> },
     DataRange { oldest: u32, newest: u32 },
     VersionInfo { fw: [u32; 4] },
+    /// 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO). `millivolts` is the pack voltage; `pack_id` is a
+    /// per-pack 32-bit id distinct from `serial`.
+    BatteryPack { serial: String, soc_pct: f32, millivolts: u16, pack_id: u32 },
     Other { cmd: u8, result: Option<ResultCode> },
 }
 
@@ -39,6 +42,17 @@ fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
             }),
         }),
         command::GET_DATA_RANGE => Some(CommandResponse::DataRange { oldest: u32_at(p, 3)?, newest: u32_at(p, 7)? }),
+        // Pack fuel gauge: pack-id u32@4, mV u16@8, ASCII serial @10 (NUL-terminated), SOC u16@26 (raw/10).
+        // The `?` is closure-scoped so a short/unsupported reply degrades to Other, not a lost response.
+        command::GET_BATTERY_PACK_INFO => (|| {
+            Some(CommandResponse::BatteryPack {
+                pack_id: u32_at(p, 4)?,
+                millivolts: u16_at(p, 8)?,
+                serial: ascii_z(p, 10),
+                soc_pct: u16_at(p, 26)? as f32 / 10.0,
+            })
+        })()
+        .or_else(|| Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) })),
         _ => Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) }),
     }
 }
@@ -125,6 +139,26 @@ mod tests {
         assert_eq!(
             decode_p(&p),
             CommandResponse::Hello { device_name: "5AG0268206".into(), fw_version: None }
+        );
+    }
+
+    #[test]
+    fn gen5_battery_pack_decodes_serial_soc_mv_id() {
+        let mut p = vec![0u8; 40];
+        p[4..8].copy_from_slice(&0x1122_3344u32.to_le_bytes()); // pack-id
+        p[8..10].copy_from_slice(&3700u16.to_le_bytes()); // mV
+        p[10..23].copy_from_slice(b"WBBTEST123456"); // serial, NUL at p[23]
+        p[26..28].copy_from_slice(&875u16.to_le_bytes()); // SOC 87.5%
+        let wire = framing::encode(Family::Gen5, 36, 0, command::GET_BATTERY_PACK_INFO, &p);
+        let f = framing::decode(Family::Gen5, &wire).unwrap();
+        assert_eq!(
+            decode(&f),
+            Some(CommandResponse::BatteryPack {
+                serial: "WBBTEST123456".into(),
+                soc_pct: 87.5,
+                millivolts: 3700,
+                pack_id: 0x1122_3344,
+            })
         );
     }
 

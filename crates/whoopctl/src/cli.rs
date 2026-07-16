@@ -45,6 +45,8 @@ pub(crate) enum Cmd {
     Identify,
     /// Connect, bond, read identity/battery/data-range.
     Info,
+    /// Connect, bond, read the 5.0 battery-pack fuel gauge (serial, SOC, mV, pack-id). 5.0 only.
+    Pack,
     /// Connect, bond, read banked history, decode it to JSON Lines. Keeps the strap intact by default.
     Sync {
         /// Write decoded records here as JSON Lines.

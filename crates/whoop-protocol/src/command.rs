@@ -30,7 +30,9 @@ pub const START_RAW_DATA: u8 = 81;
 pub const STOP_RAW_DATA: u8 = 82;
 pub const SELECT_WRIST: u8 = 123;
 pub const GET_EXTENDED_BATTERY_INFO: u8 = 98;
+pub const RESET_FUEL_GAUGE: u8 = 99;
 pub const SET_IMU_DATA_STREAM: u8 = 106;
+pub const GET_BATTERY_PACK_INFO: u8 = 151;
 pub const SET_DEVICE_CONFIG: u8 = 119;
 pub const SET_CONFIG: u8 = 120;
 pub const STOP_HAPTICS: u8 = 122;
@@ -50,6 +52,7 @@ pub const FORBIDDEN: &[u8] = &[
     SET_ADVERTISING_NAME, // 77 — persistently renames the strap's BLE advertising name
     SET_DEVICE_CONFIG,
     SET_CONFIG,
+    RESET_FUEL_GAUGE, // 99 — clears the pack/strap fuel-gauge state
     SELECT_WRIST, // 123 — persistent device-config write
     142,
     143,

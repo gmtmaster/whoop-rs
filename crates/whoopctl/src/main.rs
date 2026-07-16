@@ -76,6 +76,13 @@ async fn main() -> Result<()> {
             }
             client.disconnect().await.ok();
         }
+        Cmd::Pack => {
+            let mut client = connect(&cli).await?;
+            for resp in client.battery_pack().await? {
+                println!("{resp:?}");
+            }
+            client.disconnect().await.ok();
+        }
         Cmd::Sync { out, raw, wipe } => {
             let mut client = connect(&cli).await?;
             if *wipe {

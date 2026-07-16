@@ -176,17 +176,15 @@ impl<T: BleTransport> WhoopClient<T> {
         ] {
             self.send_raw(op, b3).await?;
         }
+        self.collect_responses(notifications, 3).await
+    }
 
-        let mut out = Vec::new();
-        self.collect_frames(notifications, 3, |frame| {
-            if frame.packet().canonical() == PacketType::CommandResponse {
-                if let Some(resp) = response::decode(&frame) {
-                    out.push(resp);
-                }
-            }
-        })
-        .await?;
-        Ok(out)
+    /// Read the 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO) — serial, SOC, mV, pack-id. Empty on a
+    /// 4.0 (no pack command) or when no pack is attached.
+    pub async fn battery_pack(&mut self) -> Result<Vec<CommandResponse>, Error> {
+        let notifications = self.transport.notifications().await?;
+        self.send_raw(command::GET_BATTERY_PACK_INFO, &[0x01]).await?;
+        self.collect_responses(notifications, 2).await
     }
 
     /// Send one command and collect every frame that arrives for `secs` — the probe behind `whoopctl send`,
@@ -232,6 +230,24 @@ impl<T: BleTransport> WhoopClient<T> {
     /// Pump every reassembled frame from an already-opened stream through `on_frame` until `secs` elapse.
     /// The caller opens the stream before its triggering writes (race fix). Shared by `info`/`monitor`;
     /// `sync_history` keeps its own loop (idle timeout + async ACK writes + early return).
+    /// Collect + decode the COMMAND_RESPONSE frames arriving on an already-opened stream for `secs`.
+    async fn collect_responses(
+        &mut self,
+        notifications: BoxStream<'static, Notification>,
+        secs: u64,
+    ) -> Result<Vec<CommandResponse>, Error> {
+        let mut out = Vec::new();
+        self.collect_frames(notifications, secs, |frame| {
+            if frame.packet().canonical() == PacketType::CommandResponse {
+                if let Some(resp) = response::decode(&frame) {
+                    out.push(resp);
+                }
+            }
+        })
+        .await?;
+        Ok(out)
+    }
+
     async fn collect_frames<F: FnMut(Frame)>(
         &mut self,
         mut notifications: BoxStream<'static, Notification>,
