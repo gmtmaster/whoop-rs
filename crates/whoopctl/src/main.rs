@@ -31,6 +31,13 @@ struct Cli {
     /// Target band by serial, full or suffix (connects to each candidate and reads its serial).
     #[arg(long)]
     sn: Option<String>,
+    /// Who is wearing the strap. Calibration is per (person, strap): a new person, or the same person on
+    /// a new strap, starts a fresh calibration period — you never calibrate against someone else's data.
+    #[arg(long, default_value = "default")]
+    person: String,
+    /// Calibration store (SQLite) path.
+    #[arg(long, default_value = "whoop-cal.db")]
+    db: PathBuf,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -93,6 +100,11 @@ enum Cmd {
     Buzz,
     /// Warm-reboot the strap (data kept).
     Reboot,
+    /// Ingest a previously captured raw JSON Lines file into the calibration store (no band needed).
+    Ingest {
+        /// A raw-capture file (from `sync --raw`).
+        capture: PathBuf,
+    },
 }
 
 fn family(gen: u8) -> Family {
@@ -160,10 +172,13 @@ async fn main() -> Result<()> {
                 }
             }
             let outcome = drain_to_jsonl(&mut client, out, raw.as_deref(), *wipe).await;
+            let strap = client.serial().await.or_else(|| cli.sn.clone()).or_else(|| cli.address.clone())
+                .unwrap_or_else(|| "unknown".into());
             client.disconnect().await.ok();
             let (records, stats) = outcome?;
             report_sync(&records, out, *wipe);
             report_frames(&stats, raw.as_deref());
+            persist_calibration(&cli, &strap, &records);
         }
         Cmd::Monitor { r#type, secs } => {
             let mut client = connect(&cli).await?;
@@ -236,8 +251,41 @@ async fn main() -> Result<()> {
             println!("reboot sent");
             client.disconnect().await.ok();
         }
+        Cmd::Ingest { capture } => {
+            let (strap, records) = decode_capture(capture, fam)?;
+            let strap = strap.or_else(|| cli.sn.clone()).unwrap_or_else(|| "unknown".into());
+            println!("decoded {} history records from {}", records.len(), capture.display());
+            persist_calibration(&cli, &strap, &records);
+        }
     }
     Ok(())
+}
+
+/// Decode a raw-capture JSON Lines file into history records (+ the strap serial from `session_id`), to
+/// backfill the calibration store from a past drain without a band.
+fn decode_capture(path: &Path, fam: Family) -> Result<(Option<String>, Vec<Record>)> {
+    let text = std::fs::read_to_string(path)?;
+    let mut records = Vec::new();
+    let mut strap = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        if strap.is_none() {
+            strap = v.get("session_id").and_then(|s| s.as_str()).map(str::to_string);
+        }
+        let Some(hex) = v.get("hex").and_then(|h| h.as_str()) else { continue };
+        let Ok(bytes) = parse_hex(hex) else { continue };
+        let Ok(frame) = whoop_protocol::framing::decode(fam, &bytes) else { continue };
+        if frame.packet().canonical() == PacketType::HistoricalData {
+            if let Some(rec) = records::decode(&frame) {
+                records.push(rec);
+            }
+        }
+    }
+    Ok((strap, records))
 }
 
 /// Refuse `--wipe` when the strap serial matches the local `WHOOPCTL_PROTECT` allowlist (comma-separated
@@ -384,6 +432,36 @@ fn report_metrics(records: &[Record], fam: Family) {
             "HRV-readiness: calibrating ({nights} night(s) of R-R; needs {})",
             whoop_metrics::calibration::RECOVERY_SCORE.unlock
         ),
+    }
+}
+
+/// Persist the drain's nights under (person, strap) and report each metric's calibration state. A new
+/// person, or the same person on a new strap, is a fresh key — so it never mixes another wearer's data.
+fn persist_calibration(cli: &Cli, strap: &str, records: &[Record]) {
+    let store = match whoop_store::Store::open(&cli.db.to_string_lossy()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("calibration store: {e}");
+            return;
+        }
+    };
+    match store.ingest(&cli.person, strap, records) {
+        Ok(n) => println!("calibration: +{n} night(s) for person '{}' on strap {strap} → {}", cli.person, cli.db.display()),
+        Err(e) => {
+            eprintln!("calibration ingest: {e}");
+            return;
+        }
+    }
+    report_cal_state("SpO2 baseline (%)", store.spo2_state(&cli.person, strap));
+    report_cal_state("HRV baseline (ms)", store.hrv_state(&cli.person, strap));
+}
+
+fn report_cal_state(label: &str, state: Result<whoop_store::CalState, whoop_store::StoreError>) {
+    use whoop_store::CalState;
+    match state {
+        Ok(CalState::Baseline { value, nights }) => println!("  {label}: {value:.1} ({nights} night(s), calibrated)"),
+        Ok(CalState::Calibrating { have, need }) => println!("  {label}: calibrating ({have}/{need} night(s))"),
+        Err(e) => eprintln!("  {label}: {e}"),
     }
 }
 

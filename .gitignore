@@ -12,3 +12,6 @@ mon-*.txt
 # Editor / OS
 *.swp
 .DS_Store
+
+# Calibration store (per-strap personal data) — never commit
+*.db

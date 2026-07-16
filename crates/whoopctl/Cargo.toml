@@ -13,6 +13,7 @@ path = "src/main.rs"
 whoop-protocol = { workspace = true, features = ["serde"] }
 whoop-client.workspace = true
 whoop-metrics.workspace = true
+whoop-store.workspace = true
 ble-btleplug.workspace = true
 tokio = { workspace = true }
 anyhow.workspace = true
