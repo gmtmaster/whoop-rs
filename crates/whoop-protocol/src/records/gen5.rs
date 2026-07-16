@@ -17,6 +17,8 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
         rr_intervals: rr_intervals(b, 15, 16, 4),
         gravity: gravity3(b, 37),
         skin_temp_c: u16_at(b, 65).map(|r| r as f32 / 100.0).filter(|c| (5.0..45.0).contains(c)),
+        // Sleep-only tri-mode byte: a %-range value is a real SpO2; bit-7 sentinels and sub-70 codes → None.
+        spo2_pct: u8_at(b, 74).filter(|&v| (70..=100).contains(&v)),
         steps: u16_at(b, 49),
         activity_class: u8_at(b, 55),
         sleep_state: u8_at(b, 73).map(|v| (v >> 4) & 3),
@@ -72,6 +74,7 @@ mod tests {
         payload[37 - 3..41 - 3].copy_from_slice(&0.1f32.to_le_bytes()); // gx
         payload[41 - 3..45 - 3].copy_from_slice(&0.0f32.to_le_bytes()); // gy
         payload[45 - 3..49 - 3].copy_from_slice(&0.99f32.to_le_bytes()); // gz  (|g| ≈ 1)
+        payload[74 - 3] = 97; // spo2 @ inner 74 (a valid %)
 
         let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
         let frame = framing::decode(Family::Gen5, &wire).unwrap();
@@ -80,6 +83,21 @@ mod tests {
         assert_eq!(r.rr_intervals, vec![600]);
         assert!(r.gravity.is_some());
         assert_eq!(r.unix, 1_784_000_000);
+        assert_eq!(r.spo2_pct, Some(97));
+    }
+
+    #[test]
+    fn v18_spo2_tri_mode_gates_sentinels_and_codes() {
+        let decode = |byte74: u8| {
+            let mut payload = vec![0u8; 80];
+            payload[74 - 3] = byte74;
+            let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+            v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap().spo2_pct
+        };
+        assert_eq!(decode(98), Some(98)); // real percentage
+        assert_eq!(decode(8), None); // low diagnostic code
+        assert_eq!(decode(0xA8), None); // bit-7 saturation sentinel
+        assert_eq!(decode(0), None); // no reading
     }
 
     #[test]

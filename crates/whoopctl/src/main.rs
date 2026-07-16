@@ -370,7 +370,7 @@ fn report_metrics(records: &[Record], fam: Family) {
             None => println!("SpO2 (4.0): no pulsatile red/IR window (is the band worn?)"),
         }
     } else {
-        println!("SpO2 (5.0/MG): unavailable — v26 optical is a single AC-coupled waveform, no red/IR pair");
+        print_spo2_5(&history);
     }
 
     let nightly = nightly_rmssd(&history);
@@ -382,6 +382,17 @@ fn report_metrics(records: &[Record], fam: Family) {
         ),
         None => println!("HRV-readiness: calibrating ({nights} night(s) of R-R; needs 14)"),
     }
+}
+
+/// The 5.0/MG SpO2 summary from the v18 spo2_pct field (the sleep-only computed percent).
+fn print_spo2_5(history: &[HistoryRecord]) {
+    let spo2: Vec<u8> = history.iter().filter_map(|h| h.spo2_pct).collect();
+    let (Some(&lo), Some(&hi)) = (spo2.iter().min(), spo2.iter().max()) else {
+        println!("SpO2 (5.0/MG): no sleep readings in this drain (generated on-wrist during sleep)");
+        return;
+    };
+    let mean = spo2.iter().map(|&v| v as u32).sum::<u32>() as f32 / spo2.len() as f32;
+    println!("SpO2 (5.0/MG): {} sleep readings, {lo}-{hi}% (mean {mean:.1}%)", spo2.len());
 }
 
 /// Per-day RMSSD (ms) from the R-R carried in history records, oldest → newest, for HRV-readiness.
@@ -429,6 +440,13 @@ fn report_sync(records: &[Record], out: &Path, wiped: bool) {
     println!("{} records  (history {hist}, ppg {ppg}, imu {imu})", records.len());
     if hr_hi > 0 {
         println!("heart rate {hr_lo}-{hr_hi} bpm, {rr} R-R intervals");
+    }
+    let spo2: Vec<u8> = records.iter().filter_map(|r| match r {
+        Record::History(h) => h.spo2_pct,
+        _ => None,
+    }).collect();
+    if let (Some(lo), Some(hi)) = (spo2.iter().min(), spo2.iter().max()) {
+        println!("SpO2 (5.0 sleep): {} readings, {lo}-{hi}%", spo2.len());
     }
     if t0 != u32::MAX {
         println!("span unix {t0}..{t1} ({}s)", t1 - t0);

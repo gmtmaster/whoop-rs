@@ -15,7 +15,7 @@ pub fn v24(f: &Frame) -> Option<HistoryRecord> {
         heart_rate: nonzero_u8_at(b, 17),
         rr_intervals: rr_intervals(b, 18, 19, 4),
         gravity: gravity3(b, 36),
-        // 4.0 skin-temp scale not pinned — keep raw only (skin_temp_c defaults None), don't fabricate Celsius.
+        skin_temp_c: i16_at(b, 68).map(|r| r as f32 * 0.04).filter(|c| (20.0..45.0).contains(c)),
         spo2: match (u16_at(b, 64), u16_at(b, 66)) {
             (Some(red), Some(ir)) => Some((red, ir)),
             _ => None,

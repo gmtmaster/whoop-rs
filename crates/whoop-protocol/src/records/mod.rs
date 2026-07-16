@@ -21,10 +21,11 @@ pub struct HistoryRecord {
     pub gravity: Option<[f32; 3]>,
     pub skin_temp_c: Option<f32>,
     pub spo2: Option<(u16, u16)>, // 4.0 v24 raw red/IR ADC
+    pub spo2_pct: Option<u8>,     // 5.0 v18 computed SpO2 %; sleep-only tri-mode byte, %-range only
     pub resp_raw: Option<u16>,    // 4.0 v24 raw respiration ADC
     pub steps: Option<u16>,       // 5.0 v18 cumulative counter
     pub activity_class: Option<u8>, // 5.0 v18 (0 still / 1 walk / 2 run)
-    pub sleep_state: Option<u8>,  // 5.0 v18 (0 wake / 1 still / 2 asleep / 3 up)
+    pub sleep_state: Option<u8>,  // 5.0 v18 packed state, provisional {0 still / 1 wake / 2 asleep / 3 up}
 }
 
 /// A raw 24 Hz optical buffer (v26 on 5.0/MG). One record = one strap second.
