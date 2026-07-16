@@ -1310,7 +1310,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a782a48d72cfd7a2d65cfc7c691dbf5375c43104b3c195f7eccc716dcc3540c8"
 dependencies = [
  "anyhow",
+ "camino",
  "cargo_metadata",
+ "clap",
  "uniffi_bindgen",
  "uniffi_core",
  "uniffi_macros",
@@ -1537,6 +1539,7 @@ name = "whoop-ffi"
 version = "0.1.0"
 dependencies = [
  "uniffi",
+ "whoop-metrics",
  "whoop-protocol",
 ]
 

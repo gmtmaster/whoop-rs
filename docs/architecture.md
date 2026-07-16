@@ -39,9 +39,9 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 | `whoop-metrics` | Pure derived metrics/DSP: gap-aware + artifact-corrected HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), HR-from-PPG (`ppg_hr`), the wellness HR-at-rest watch, the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient | ~800 LOC | 24 |
 | `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~330 LOC | 4 |
 | `whoopctl` | clap CLI (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~600 LOC | 4 |
-| `whoop-ffi` | uniffi surface exposing `WhoopCodec` to Kotlin + iOS from one Rust source | ~230 LOC | 6 |
+| `whoop-ffi` | uniffi surface (depends on whoop-protocol **and** whoop-metrics): `WhoopCodec` (decode history/live/response + offload + command frames) plus the derived-metric free fns (ppg-hr, HRV, SpO2) to Kotlin + iOS from one Rust source | ~460 LOC | 9 |
 
-**87 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
+**90 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
 predicate; the radio path is hardware-integration-verified (`whoopctl scan`), not mockable in-process.
 
 ---
@@ -218,11 +218,21 @@ TODO.)
 ## 6. Mobile — one core, native radios, universal easy-connect
 
 The sans-IO design pays off across platforms: **no BLE and no async cross the FFI.** `whoop-ffi`
-(uniffi) exposes a `WhoopCodec` object — `feed(chan, bytes) -> [Step]` (reassemble + drive offload),
-plus `client_hello()` / `offload_start()` / `r22_frames()` / `decode_history()`. Each platform does
-its own BLE natively and feeds notification bytes in; the app loop is: map notify UUID → `Chan`, call
-`feed`, and for each `Step` persist a record / write an `Ack` frame confirmed / stop on `Complete`.
-Bindings generate from the one surface via `uniffi-bindgen generate --language kotlin|swift`.
+(uniffi) exposes a `WhoopCodec` object that mirrors the whole client, so a native app can drop its own
+decoder:
+- **decode** — `feed(chan, bytes) -> [Step]` (reassemble + drive offload), `decode_history` (full 14-field
+  `HistorySummary`), `decode_live` (realtime HR/R-R, on-wrist r22, event/battery, console), `decode_response`
+  (identity/battery/clock/data-range/firmware).
+- **command frames to write** (the FFI never writes) — `client_hello` / `offload_start` / `offload_abort` /
+  `r22_frames` / `get_hello`/`get_battery`/`get_data_range` / `stop_raw_flood` / `toggle_realtime_hr` /
+  `reboot` / `buzz` / `broadcast_hr` / `set_config` / `alarm_set`/`alarm_disable`.
+- **derived metrics** (free fns) — `ppg_hr`, `hrv_rmssd_gap_aware`, `hrv_readiness`, `spo2_from_paired`,
+  `haptic_clock_pulses`.
+
+Each platform does its own BLE natively and feeds notification bytes in; the app loop is: map notify UUID →
+`Chan`, call `feed`, and for each `Step` persist a record / write an `Ack` frame confirmed / stop on
+`Complete`. What stays native: the radio, write orchestration (seq/gates), JSONL capture, standard-GATT
+profiles, and timezone→epoch. Bindings generate via `uniffi-bindgen generate --language kotlin|swift`.
 
 **Universal easy-connect** — "attach to a band already connected (held by the WHOOP app) without
 scanning" — is a per-OS primitive, wired natively behind the same `attachToConnectedWhoop()` contract:

@@ -21,4 +21,5 @@ cli = ["uniffi/cli"]
 
 [dependencies]
 whoop-protocol.workspace = true
+whoop-metrics.workspace = true
 uniffi = "0.32"

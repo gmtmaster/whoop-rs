@@ -73,6 +73,11 @@ pub fn feature_frame(seq: u8, flag: &Flag) -> Vec<u8> {
     config_frame(seq, command::SET_CONFIG, &feature_body(flag.name, flag.value))
 }
 
+/// A SET_CONFIG frame for a runtime-named feature flag (the arbitrary-flag builder the FFI needs).
+pub fn feature_frame_named(seq: u8, name: &str, value: u8) -> Vec<u8> {
+    config_frame(seq, command::SET_CONFIG, &feature_body(name, value))
+}
+
 /// A ready-to-write SET_DEVICE_CONFIG frame (0x01 prefix + 33-byte body).
 pub fn device_frame(seq: u8, name: &str, value: u8) -> Vec<u8> {
     config_frame(seq, command::SET_DEVICE_CONFIG, &device_body(name, value))
