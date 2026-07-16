@@ -12,9 +12,10 @@ parameters are hardware-verified and live in the code doc-comments; this documen
 
 ## 1. Workspace layout
 
-Seven crates. Dependencies point strictly inward — the pure codec knows nothing about BLE or async,
-the BLE core knows nothing about WHOOP, only one crate ever links a radio backend, and the derived-metric
-layer reads decoded records without touching BLE or IO.
+Eight crates. Dependencies point strictly inward — the pure codec knows nothing about BLE or async,
+the BLE core knows nothing about WHOOP, only one crate ever links a radio backend, the derived-metric
+layer reads decoded records without touching BLE or IO, and a thin store persists per-(person, strap)
+calibration to SQLite.
 
 ```
 whoop-protocol   pure sans-IO wire codec  (deps: thiserror only)         ── no BLE, no async
@@ -31,15 +32,16 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 
 | Crate | Role | Size | Tests |
 |---|---|---|---|
-| `whoop-protocol` | Pure wire codec: framing, CRC, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders | ~1900 LOC | 28 |
+| `whoop-protocol` | Pure wire codec: framing, CRC, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~1900 LOC | 29 |
 | `ble-core` | `BleTransport` async trait + neutral `Notification`/`BleError` + `MockTransport` | ~130 LOC | 1 |
 | `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (scan/connect/subscribe/notify/write) | ~215 LOC | 1 |
 | `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture, backfill policy | ~640 LOC | 15 |
-| `whoop-metrics` | Pure derived metrics over decoded records: HRV-readiness (R-R → tier), SpO2 (ratio-of-ratios, 4.0 paired red/IR; 5.0 has no red/IR pair) | ~330 LOC | 12 |
-| `whoopctl` | clap CLI over the btleplug transport (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`) | ~300 LOC | 2 |
+| `whoop-metrics` | Pure derived metrics: HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient primitive | ~430 LOC | 15 |
+| `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines | ~230 LOC | 2 |
+| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db` calibration store | ~360 LOC | 2 |
 | `whoop-ffi` | uniffi surface exposing `WhoopCodec` to Kotlin + iOS from one Rust source | ~230 LOC | 6 |
 
-**65 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
+**71 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
 predicate; the radio path is hardware-integration-verified (`whoopctl scan`), not mockable in-process.
 
 ---
@@ -97,7 +99,8 @@ aliases (37/38/53/54/56) which `canonical()` folds onto their base so routing is
 
 **Historical record versions** (fork by version byte, `records/`): GEN4 = v5/7/9/12/24/25 (v24 = full
 DSP block: HR, R-R, gravity, SpO₂ red/IR, skin-temp, respiration); GEN5/MG = v18 (per-second HR, R-R,
-gravity, skin-temp, steps, activity, sleep-state — no SpO₂), v26 (raw 24 Hz optical buffer), and the
+gravity, skin-temp, steps, activity, sleep-state, **and a sleep-only computed SpO₂ percent at inner 74** —
+a tri-mode byte, %-range only), v26 (raw 24 Hz optical buffer), and the
 100 Hz raw 6-axis IMU deep buffer (accel + gyro; the live IMU stream is firmware-refused, so this
 historical path is the only way to reach it). The IMU buffer is identified by its own length + in-packet
 sample counts, **not** a version byte (its place in the version scheme is unconfirmed — noop #423/#455),
@@ -135,11 +138,13 @@ The write surface is gated in `whoop-protocol/src/command.rs` + `whoop-client`:
 - Every gated write (`enable_r22`, `set_broadcast_hr`, `buzz`, `reboot`) is reversible /
   non-destructive and numbered from the client's running seq counter.
 - History offload drops CRC-bad frames so a forged HISTORY_END can't advance the trim cursor.
-- **History sync keeps the strap's data by default.** Acking a chunk advances the trim cursor
-  (the records leave the strap permanently), so `sync_history_with(ack, sink)` only acks when `ack =
-  true`; the CLI default (`sync`, no `--wipe`) never acks — it reads the first chunk and leaves
-  everything on the strap. Each record reaches the sink **before** its chunk's ACK, so even a full
-  `--wipe` never trims unstored data, and a sink error aborts before that chunk is acked.
+- **History sync never deletes the strap's data.** The ACK (`0x17`) only advances the strap's read
+  pointer to release the next chunk; it does not free the buffer — only FORCE_TRIM (`0x19`, in FORBIDDEN,
+  never sent) deletes. Keep-mode (`sync`, no `--wipe`) reads the first chunk without acking and leaves the
+  read pointer put; `--wipe` acks forward through the whole backlog (needed to reach nights banked behind an
+  already-consumed edge) but still deletes nothing — the records persist on the strap until it overwrites
+  them. Each record reaches the sink **before** its chunk's ACK, so a sink error aborts before advancing,
+  and a CRC-bad HISTORY_END can't move the pointer over unstored data.
 - `whoopctl` refuses `--wipe` on any serial matching the local `WHOOPCTL_PROTECT` allowlist
   (comma-separated suffixes, checked against the serial read off the band, not the typed `--sn`), and
   refuses when the serial can't be read to verify it — a fail-safe, environment-local guard.
@@ -170,7 +175,8 @@ so its output feeds the existing `tools/capture-layout.py` unchanged).
 `whoopctl` is the clap CLI over the real btleplug transport: `scan` (list bands in range, each with its
 identity read from GATT), `identify` (connect unbonded, read name/serial/fw/hardware), `info`
 (identity/battery/data-range), `sync` (decode history to JSON Lines; keeps the strap by default, `--wipe` to drain), `monitor` (stream frames), `send` (one opcode,
-FORBIDDEN-refused), `r22on`, `buzz`, `reboot`. A band is targeted with `--address` (surest), `--sn`
+FORBIDDEN-refused), `r22on`, `buzz`, `reboot`, `ingest` (backfill the calibration store from a saved
+capture). A band is targeted with `--address` (surest), `--sn`
 (full or suffix — connects to each candidate and reads its serial, since the serial isn't advertised),
 or `--name`. On-band behaviour is validated here, not in unit tests — a connect proves nothing about a
 real strap.
@@ -183,15 +189,25 @@ user-customizable, so the serial (`0x2A25`) is the reliable ID. GATT strings are
 
 Build/run: `cargo run -p whoopctl -- scan`.
 
-**Derived metrics (`whoop-metrics`).** A pure analytics layer over decoded records — no BLE, no IO, and no
-algorithms in the codec. `HrvReadiness` reads a log-domain 7-night baseline against a personal-normal
-±0.5 SD band from a nightly RMSSD series (RMSSD comes from the R-R both generations decode) and returns a
-tier + the band, `None` while calibrating. `Spo2` is ratio-of-ratios from the 4.0 v24 paired red/IR the
-record carries; **5.0/MG has no SpO2 path** — its v26 optical buffer is a single AC-coupled waveform (one
-wavelength, verified on real captures: what looked like a `ppg_channel` is a record counter), not a red/IR
-pair, so `from_history` only yields a value on 4.0. The one 5.0 red/IR candidate left is the R22 deep optical
-buffer (2140 B), which is gated and not yet captured. Both metrics return `None` rather than a fabricated
-number when the signal is absent.
+**Derived metrics (`whoop-metrics`).** A pure analytics layer over decoded records — no BLE, no IO, no
+algorithms in the codec. `HrvReadiness` reads a log-domain baseline against a personal-normal ±0.5 SD band
+from a nightly RMSSD series and returns a tier, `None` while calibrating. SpO2 has two paths: the 4.0 v24
+paired red/IR via ratio-of-ratios, and the **5.0/MG computed scalar** the strap writes at v18 inner 74
+during sleep — a tri-mode byte (a %-range value is a real reading; bit-7 saturation sentinels and sub-70
+diagnostic codes gate to `None`), verified on a real overnight drain (363 sleep readings, 95-100%). The raw
+red/IR pair still does not cross 5.0 BLE; the strap computes the % on-device. `calibration` encodes WHOOP's
+per-feature unlock/full schedule (blood-oxygen 1 night, recovery 3, skin-temp 7, …) so readouts gate on the
+same periods the app uses. `linear_fit(field, reference)` is the per-strap coefficient primitive — a
+universal client computes a device-relative field's `{scale, offset, r}` from that strap's own captures
+instead of hardcoding another strap's number. Metrics return `None` rather than a fabricated value.
+
+**Calibration store (`whoop-store`).** Each `sync`/`ingest` segments a drain into nightly summaries (SpO2
+median, RMSSD, HR range) and persists them to SQLite keyed on **(person, strap)** — a new person, or the
+same person on a new strap, is a fresh key, so a shared or handed-off strap never calibrates against another
+wearer's data. A metric's baseline finalizes once its (person, strap) reaches the calibration milestone.
+`whoopctl --person <id>` picks the wearer; `ingest <capture>` backfills from a saved raw JSONL, no band. (A
+known follow-up: nightly RMSSD is concatenated across the night and needs gap-aware windowing before the HRV
+baseline is trustworthy.)
 
 ---
 
@@ -223,7 +239,7 @@ iOS via an `.xcframework` for `aarch64-apple-ios` + SwiftUI (needs a Mac + Xcode
 ```bash
 cd whoop-rs
 cargo build           # whole workspace
-cargo test            # 65 tests
+cargo test            # 71 tests
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```
@@ -243,11 +259,14 @@ Windows-toolchain detail only; the code is portable to Linux/macOS.
   targeting work over an unbonded connection. The command channel is bond-gated (`0x80650005`); the
   WinRT `ConfirmOnly` pairing in `ensure_paired` establishes a bond WHOOP accepts (band in pairing mode
   the first time, off-body triple-double-tap), so `info`/`buzz`/`sync` all run bonded.
-- **Get-and-decode is proven end-to-end.** A keep-mode `sync` of a real 5.0 band pulled banked type-47
-  history and decoded v18 records to JSON Lines — HR, gravity (`|g| ≈ 0.99`, the offset check),
-  skin-temp (~33 °C), steps, activity/sleep state — with the strap left untrimmed.
-- **Next:** a `--wipe` full-drain run on a sanctioned band, R22 deep buffers (IMU) after `enable_r22`,
-  then the Android app (cargo-ndk + Kotlin BLE + easy-connect + `WhoopCodec`), then iOS (Mac-gated).
+- **Get-and-decode + SpO₂ proven end-to-end.** A full overnight `--wipe` drain of a real 5.0 band
+  (5AG0507838, 35 310 records, 11.6 h) decoded v18 (HR, gravity, skin-temp, steps, activity, sleep-state)
+  **and located the computed SpO₂ at inner 74** (363 sleep readings, 95-100%), independently confirmed by
+  external RE (`whoop-research/`). The per-(person, strap) calibration store ingested it into a finalized
+  SpO₂ baseline (98%).
+- **Next:** gap-aware nightly RMSSD (so the HRV baseline is trustworthy), R22 deep buffers (IMU / v20 / v21)
+  after `enable_r22` on a worn band, wiring `linear_fit` into the store for device-relative fields, then the
+  Android app (cargo-ndk + Kotlin BLE + easy-connect + `WhoopCodec`), then iOS (Mac-gated).
 
 Working notes, source provenance, and the per-crate clean-state confirm live in the git-ignored
 `dev-docs/` folder.
