@@ -5,6 +5,7 @@
 pub mod calibration;
 pub mod hr_anomaly;
 pub mod hrv_readiness;
+pub mod ppg_hr;
 pub mod spo2;
 pub mod stats;
 

@@ -22,7 +22,6 @@ pub mod hello;
 pub mod live;
 pub mod offload;
 pub mod packet;
-pub mod ppg_hr;
 pub mod records;
 pub mod response;
 
