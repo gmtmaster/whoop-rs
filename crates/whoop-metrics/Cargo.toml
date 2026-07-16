@@ -7,3 +7,6 @@ description = "Pure derived-metric layer over decoded WHOOP records: HRV-readine
 
 [dependencies]
 whoop-protocol.workspace = true
+
+[dev-dependencies]
+serde_json = "1"

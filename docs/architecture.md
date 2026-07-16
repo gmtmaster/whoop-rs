@@ -32,7 +32,7 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 
 | Crate | Role | Size | Tests |
 |---|---|---|---|
-| `whoop-protocol` | Pure wire codec: framing, CRC, hex, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~1420 LOC | 30 |
+| `whoop-protocol` | Pure wire codec: framing, CRC, hex, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~1420 LOC | 37 |
 | `ble-core` | `BleTransport` async trait + neutral `Notification`/`BleError` + `MockTransport` | ~130 LOC | 1 |
 | `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (scan/connect/subscribe/notify/write) | ~215 LOC | 1 |
 | `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~640 LOC | 16 |
@@ -41,8 +41,13 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 | `whoopctl` | clap CLI (`scan`/`identify`/`info`/`pack`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~600 LOC | 4 |
 | `whoop-ffi` | uniffi surface (depends on whoop-protocol **and** whoop-metrics): `WhoopCodec` (decode history/live/response + offload + command frames) plus the derived-metric free fns (ppg-hr, HRV, SpO2) to Kotlin + iOS from one Rust source | ~460 LOC | 9 |
 
-**90 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
+**100 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
 predicate; the radio path is hardware-integration-verified (`whoopctl scan`), not mockable in-process.
+
+Golden parity for the Android shadow-decode: `whoop-protocol` pins a 40-frame consecutive v26 PPG
+burst and battery/wrist-on EVENT frames (`real_frames.rs`), and `whoop-metrics` pins the derived
+`ppg_hr` estimates (`ppg_hr_real.rs`), all from a real 5.0 on-device capture. The exact f32→f64
+gravity widen is asserted byte-for-byte on the worn v18 frame.
 
 ---
 
@@ -256,7 +261,7 @@ iOS via an `.xcframework` for `aarch64-apple-ios` + SwiftUI (needs a Mac + Xcode
 ```bash
 cd whoop-rs
 cargo build           # whole workspace
-cargo test            # 76 tests
+cargo test            # 100 tests
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```

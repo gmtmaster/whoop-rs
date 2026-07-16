@@ -4,12 +4,21 @@
 use serde_json::Value;
 use whoop_protocol::bytes::from_hex;
 use whoop_protocol::family::Family;
-use whoop_protocol::framing;
 use whoop_protocol::records::{decode, Record};
+use whoop_protocol::{framing, live};
+
+fn oracle() -> Value {
+    serde_json::from_str(include_str!("fixtures/real_frames.json")).unwrap()
+}
+
+fn gen5_frame(f: &Value) -> whoop_protocol::packet::Frame {
+    let wire = from_hex(f["hex"].as_str().unwrap()).unwrap();
+    framing::decode(Family::Gen5, &wire).unwrap()
+}
 
 #[test]
 fn real_frames_decode_to_pinned_values() {
-    let oracle: Value = serde_json::from_str(include_str!("fixtures/real_frames.json")).unwrap();
+    let oracle = oracle();
     let frames = oracle["frames"].as_array().unwrap();
     assert!(frames.len() >= 7, "fixture shrank unexpectedly");
 
@@ -45,6 +54,13 @@ fn real_frames_decode_to_pinned_values() {
             let mag = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
             assert!((0.9..1.1).contains(&mag), "{name}: |g| = {mag}");
         }
+        // Exact f32->f64 widening: the decoded triplet must equal the wire f32s (not an i16/16384 scale).
+        if let Some(gv) = e.get("gravity").and_then(Value::as_array) {
+            let g = r.gravity.unwrap_or_else(|| panic!("{name}: gravity absent"));
+            for (i, want) in gv.iter().enumerate() {
+                assert!((f64::from(g[i]) - want.as_f64().unwrap()).abs() < 1e-6, "{name}: gravity[{i}]");
+            }
+        }
         if e.get("skin_temp_raw").is_some() {
             assert_eq!(r.skin_temp_raw, Some(u16_of("skin_temp_raw")), "{name}: skin_temp_raw");
         }
@@ -60,6 +76,55 @@ fn real_frames_decode_to_pinned_values() {
         if let Some(sp) = e.get("spo2").and_then(Value::as_array) {
             let (red, ir) = (sp[0].as_u64().unwrap() as u16, sp[1].as_u64().unwrap() as u16);
             assert_eq!(r.spo2, Some((red, ir)), "{name}: spo2");
+        }
+    }
+}
+
+#[test]
+fn real_v26_ppg_frames_decode_to_pinned_values() {
+    let oracle = oracle();
+    let frames = oracle["ppg_frames"].as_array().unwrap();
+    assert!(frames.len() >= 3, "ppg fixture shrank unexpectedly");
+
+    let mut last_rid: Option<u16> = None;
+    for f in frames {
+        let frame = gen5_frame(f);
+        let p = match decode(&frame) {
+            Some(Record::Ppg(p)) => p,
+            other => panic!("v26: expected a Ppg record, got {other:?}"),
+        };
+        assert_eq!(p.version, 26, "v26: version");
+        assert_eq!(u64::from(p.unix), f["unix"].as_u64().unwrap(), "v26: unix");
+        let rid = f["record_id"].as_u64().unwrap() as u16;
+        assert_eq!(p.record_id, Some(rid), "v26: record_id");
+        assert_eq!(p.samples.len(), 24, "v26: sample count");
+        // record_id is a monotonic strap counter across the consecutive burst.
+        if let Some(prev) = last_rid {
+            assert_eq!(rid, prev.wrapping_add(1), "v26: record_id not consecutive");
+        }
+        last_rid = Some(rid);
+        // Exact optical samples pinned on the first frame only (24 i16 LE from the wire).
+        if let Some(s) = f.get("samples").and_then(Value::as_array) {
+            let want: Vec<i16> = s.iter().map(|x| x.as_i64().unwrap() as i16).collect();
+            assert_eq!(p.samples, want, "v26: samples");
+        }
+    }
+}
+
+#[test]
+fn real_event_frames_decode_to_pinned_values() {
+    let oracle = oracle();
+    for f in oracle["event_frames"].as_array().unwrap() {
+        let name = f["name"].as_str().unwrap();
+        let frame = gen5_frame(f);
+        let ev = live::event(&frame).unwrap_or_else(|| panic!("{name}: event absent"));
+        assert_eq!(ev.number, f["number"].as_u64().unwrap() as u8, "{name}: number");
+        assert_eq!(u64::from(ev.timestamp), f["timestamp"].as_u64().unwrap(), "{name}: timestamp");
+        if let Some(b) = f.get("battery") {
+            let be = live::battery_event(&frame).unwrap_or_else(|| panic!("{name}: battery absent"));
+            assert!((f64::from(be.soc_percent) - b["soc_percent"].as_f64().unwrap()).abs() < 1e-3, "{name}: soc");
+            assert_eq!(u64::from(be.millivolts), b["millivolts"].as_u64().unwrap(), "{name}: mv");
+            assert_eq!(be.charging, b["charging"].as_bool().unwrap(), "{name}: charging");
         }
     }
 }
