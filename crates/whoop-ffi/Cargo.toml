@@ -9,6 +9,16 @@ description = "uniffi bindings exposing the pure WHOOP codec + sans-IO offload t
 # cdylib for Android (.so) / iOS (staticlib); lib so it builds + tests on the host too.
 crate-type = ["cdylib", "staticlib", "lib"]
 
+# The uniffi binding generator (library mode); only built with `--features cli`, so it never enters the
+# cross-compiled `.so`.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
+
 [dependencies]
 whoop-protocol.workspace = true
 uniffi = "0.32"
