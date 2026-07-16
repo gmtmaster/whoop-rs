@@ -2,9 +2,12 @@
 //! deterministic, no BLE, no IO. Every metric returns `None` rather than a fabricated number when the
 //! signal is absent. Outputs are wellness estimates, never medical.
 
+pub mod calibration;
 pub mod hrv_readiness;
 pub mod spo2;
 pub mod stats;
 
+pub use calibration::Calibration;
 pub use hrv_readiness::{HrvReadiness, HrvReadinessResult, ReadinessTier};
 pub use spo2::{RollingReading, Spo2};
+pub use stats::{linear_fit, pearson, LinearFit};

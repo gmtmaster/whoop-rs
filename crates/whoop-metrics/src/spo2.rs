@@ -19,7 +19,8 @@ const RECENT_NIGHTS: usize = 7;
 const ANCHOR: f64 = 96.5;
 const ROLLING_CLAMP_LOW: f64 = 88.0;
 const ROLLING_CLAMP_HIGH: f64 = 100.0;
-const MIN_NIGHTS: usize = 3;
+// WHOOP shows blood oxygen after one recovery, so we report from the first night.
+const MIN_NIGHTS: usize = crate::calibration::BLOOD_OXYGEN.unlock as usize;
 
 /// A smoothed multi-night readout: `pct` once calibrated, else `calibrating_nights` carries the count.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -141,8 +142,9 @@ mod tests {
 
     #[test]
     fn rolling_reading_calibrates_then_reports() {
-        assert_eq!(Spo2::rolling_reading(&[96.0, 96.0]).calibrating_nights, Some(2));
+        // WHOOP unlocks blood oxygen after one recovery: 0 nights = calibrating, 1 = reported.
+        assert_eq!(Spo2::rolling_reading(&[]).calibrating_nights, Some(0));
         // median 96 → offset 0.5 → recent median 96 → 96.5 → round 97.
-        assert_eq!(Spo2::rolling_reading(&[96.0, 96.0, 96.0]).pct, Some(97.0));
+        assert_eq!(Spo2::rolling_reading(&[96.0]).pct, Some(97.0));
     }
 }

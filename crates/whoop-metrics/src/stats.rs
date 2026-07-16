@@ -74,6 +74,58 @@ pub fn amplitude(xs: &[f64]) -> f64 {
     percentile(&s, 0.95) - percentile(&s, 0.05)
 }
 
+/// Pearson correlation of two equal-length series; `None` for < 2 pairs or a zero-variance series. The
+/// per-strap "is this field signal against a known reference" number — computed, never assumed.
+pub fn pearson(xs: &[f64], ys: &[f64]) -> Option<f64> {
+    let n = xs.len().min(ys.len());
+    if n < 2 {
+        return None;
+    }
+    let (mx, my) = (mean(&xs[..n]), mean(&ys[..n]));
+    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+    for i in 0..n {
+        let (dx, dy) = (xs[i] - mx, ys[i] - my);
+        sxy += dx * dy;
+        sxx += dx * dx;
+        syy += dy * dy;
+    }
+    if sxx <= 0.0 || syy <= 0.0 {
+        return None;
+    }
+    Some(sxy / (sxx * syy).sqrt())
+}
+
+/// A per-strap linear calibration `reference ≈ scale·field + offset`, with the `r` that says how far to
+/// trust it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LinearFit {
+    pub scale: f64,
+    pub offset: f64,
+    pub r: f64,
+}
+
+/// Least-squares fit of `reference` onto `field` (`ref ≈ scale·field + offset`) plus the Pearson `r`.
+/// `None` for < 2 pairs or a field with no spread. How the client derives a device-specific coefficient
+/// from one strap's own captures instead of hardcoding another strap's number.
+pub fn linear_fit(field: &[f64], reference: &[f64]) -> Option<LinearFit> {
+    let n = field.len().min(reference.len());
+    if n < 2 {
+        return None;
+    }
+    let (mf, mr) = (mean(&field[..n]), mean(&reference[..n]));
+    let (mut sfr, mut sff) = (0.0, 0.0);
+    for i in 0..n {
+        let df = field[i] - mf;
+        sfr += df * (reference[i] - mr);
+        sff += df * df;
+    }
+    if sff <= 0.0 {
+        return None;
+    }
+    let scale = sfr / sff;
+    Some(LinearFit { scale, offset: mr - scale * mf, r: pearson(&field[..n], &reference[..n])? })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +148,17 @@ mod tests {
     fn amplitude_is_p95_minus_p5() {
         let win: Vec<f64> = std::iter::repeat_n(98.0, 10).chain(std::iter::repeat_n(102.0, 10)).collect();
         assert!((amplitude(&win) - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn linear_fit_recovers_a_known_line() {
+        // reference = 2·field + 3, perfectly correlated.
+        let field = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let reference: Vec<f64> = field.iter().map(|&x| 2.0 * x + 3.0).collect();
+        assert!((pearson(&field, &reference).unwrap() - 1.0).abs() < 1e-12);
+        let fit = linear_fit(&field, &reference).unwrap();
+        assert!((fit.scale - 2.0).abs() < 1e-9 && (fit.offset - 3.0).abs() < 1e-9 && (fit.r - 1.0).abs() < 1e-9);
+        // A flat field has no spread — nothing to calibrate.
+        assert!(linear_fit(&[5.0, 5.0, 5.0], &[1.0, 2.0, 3.0]).is_none());
     }
 }

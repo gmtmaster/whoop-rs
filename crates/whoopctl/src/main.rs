@@ -380,7 +380,10 @@ fn report_metrics(records: &[Record], fam: Family) {
             "HRV-readiness: {:?}  (7-night baseline {:.0} ms, normal {:.0}-{:.0} ms)",
             r.tier, r.baseline7_ms, r.normal_low_ms, r.normal_high_ms
         ),
-        None => println!("HRV-readiness: calibrating ({nights} night(s) of R-R; needs 14)"),
+        None => println!(
+            "HRV-readiness: calibrating ({nights} night(s) of R-R; needs {})",
+            whoop_metrics::calibration::RECOVERY_SCORE.unlock
+        ),
     }
 }
 

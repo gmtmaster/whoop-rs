@@ -10,7 +10,9 @@ const ROLL_WINDOW: usize = 7;
 const LONG_WINDOW: usize = 60;
 const LONG_WINDOW_FALLBACK: usize = 30;
 const SWC_K: f64 = 0.5;
-const MIN_NIGHTS: usize = 14;
+// The readiness tier mirrors WHOOP's recovery score, which unlocks after 3 recoveries; the 7-night
+// baseline and long-window band keep refining past that.
+const MIN_NIGHTS: usize = crate::calibration::RECOVERY_SCORE.unlock as usize;
 const CV_TREND_WINDOW: usize = 28;
 const LONG_SD_FLOOR: f64 = 1e-9;
 
@@ -143,8 +145,8 @@ mod tests {
 
     #[test]
     fn implausible_and_missing_nights_are_dropped() {
-        // 13 valid + a null + an out-of-range 400 → still only 13 valid → calibrating.
-        let mut nights = vec![Some(50.0); 13];
+        // 2 valid + a null + an out-of-range 400 → still only 2 valid → below MIN_NIGHTS → calibrating.
+        let mut nights = vec![Some(50.0); 2];
         nights.push(None);
         nights.push(Some(400.0));
         assert!(HrvReadiness::evaluate(&nights).is_none());
