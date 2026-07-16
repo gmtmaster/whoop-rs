@@ -38,7 +38,7 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 | `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~640 LOC | 16 |
 | `whoop-metrics` | Pure derived metrics/DSP: gap-aware + artifact-corrected HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), HR-from-PPG (`ppg_hr`), the wellness HR-at-rest watch, the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient | ~800 LOC | 24 |
 | `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~330 LOC | 4 |
-| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~600 LOC | 4 |
+| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`pack`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~600 LOC | 4 |
 | `whoop-ffi` | uniffi surface (depends on whoop-protocol **and** whoop-metrics): `WhoopCodec` (decode history/live/response + offload + command frames) plus the derived-metric free fns (ppg-hr, HRV, SpO2) to Kotlin + iOS from one Rust source | ~460 LOC | 9 |
 
 **90 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
@@ -173,10 +173,13 @@ lossless capture-tap JSONL (`capture.rs` — snake_case, byte-identical to noop 
 so its output feeds the existing `tools/capture-layout.py` unchanged).
 
 `whoopctl` is the clap CLI over the real btleplug transport: `scan` (list bands in range, each with its
-identity read from GATT), `identify` (connect unbonded, read name/serial/fw/hardware), `info`
-(identity/battery/data-range), `sync` (decode history to JSON Lines; keeps the strap by default, `--wipe` to drain), `monitor` (stream frames), `send` (one opcode,
-FORBIDDEN-refused), `r22on`, `buzz`, `reboot`, `ingest` (backfill the calibration store from a saved
-capture). A band is targeted with `--address` (surest), `--sn`
+identity read from GATT — scans every generation via an empty filter + name/service match, so a renamed or
+4.0 band still appears), `identify` (connect unbonded, read name/serial/fw/hardware), `info`
+(identity/battery/extended-fuel-gauge/data-range; a 4.0 serial+firmware come from the GET_HELLO_HARVARD reply
+since the 4.0 omits the DeviceInfo GATT service), `pack` (5.0 battery-pack fuel gauge — serial/SOC/mV/pack-id),
+`sync` (decode history to JSON Lines; keeps the strap by default, `--wipe` to drain), `monitor` (stream frames),
+`send` (one opcode, FORBIDDEN-refused, prints the raw response), `r22on`, `buzz`, `reboot`, `ingest` (backfill
+the calibration store from a saved capture). A band is targeted with `--address` (surest), `--sn`
 (full or suffix — connects to each candidate and reads its serial, since the serial isn't advertised),
 or `--name`. On-band behaviour is validated here, not in unit tests — a connect proves nothing about a
 real strap.
