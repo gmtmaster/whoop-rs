@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use ble_btleplug::{scan_whoops, BtleplugTransport};
 use whoop_client::{capture_line, WhoopClient};
-use whoop_metrics::{HrvReadiness, Spo2};
+use whoop_metrics::{HrWatch, HrWatchState, HrvReadiness, Spo2};
 use whoop_protocol::bytes::to_hex;
 use whoop_protocol::{records, Family, Frame, HistoryRecord, PacketType, Record};
 
@@ -38,6 +38,10 @@ struct Cli {
     /// Calibration store (SQLite) path.
     #[arg(long, default_value = "whoop-cal.db")]
     db: PathBuf,
+    /// Opt in to the wellness HR watch: a display-only nudge on a sustained elevated at-rest heart rate.
+    /// Retrospective and never medical; no device write, no buzz.
+    #[arg(long, default_value_t = false)]
+    hr_watch: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -213,7 +217,7 @@ async fn main() -> Result<()> {
             let mut client = connect(&cli).await?;
             let records = client.sync_history_with(false, |_| Ok(())).await?; // keep-mode: never trims
             client.disconnect().await.ok();
-            report_metrics(&records, fam);
+            report_metrics(&records, fam, cli.hr_watch);
         }
         Cmd::Raw { secs, out } => {
             let mut client = connect(&cli).await?;
@@ -403,7 +407,7 @@ fn report_frames(stats: &FrameStats, raw: Option<&Path>) {
 
 /// Compute + print the derived metrics from a keep-mode drain: SpO2 (4.0 paired red/IR only) and
 /// HRV-readiness from the R-R.
-fn report_metrics(records: &[Record], fam: Family) {
+fn report_metrics(records: &[Record], fam: Family, hr_watch: bool) {
     let history: Vec<HistoryRecord> = records.iter().filter_map(|r| match r {
         Record::History(h) => Some(h.clone()),
         _ => None,
@@ -431,6 +435,26 @@ fn report_metrics(records: &[Record], fam: Family) {
         None => println!(
             "HRV-readiness: calibrating ({nights} night(s) of R-R; needs {})",
             whoop_metrics::calibration::RECOVERY_SCORE.unlock
+        ),
+    }
+
+    if hr_watch {
+        println!("{}", format_hr_watch(HrWatch::evaluate(&history)));
+    }
+}
+
+/// Render the opt-in HR watch as a display-only line. Wellness wording only — the guard test forbids any
+/// clinical term so this can never read as a diagnosis.
+fn format_hr_watch(state: HrWatchState) -> String {
+    match state {
+        HrWatchState::Calibrating { have, need } => {
+            format!("HR watch: building your at-rest baseline ({have}/{need} at-rest samples)")
+        }
+        HrWatchState::Normal => "HR watch: at-rest heart rate within your usual range".to_string(),
+        HrWatchState::ElevatedAtRest { peak_bpm, dur_s, .. } => format!(
+            "HR watch: sustained higher-than-usual heart rate while at rest ({peak_bpm} bpm for {} min) \
+             — a wellness nudge, not medical",
+            dur_s / 60
         ),
     }
 }
@@ -538,7 +562,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{family, parse_hex, Family};
+    use super::{family, format_hr_watch, parse_hex, Family, HrWatchState};
 
     #[test]
     fn family_maps_gen_number() {
@@ -551,5 +575,28 @@ mod tests {
     fn parse_hex_decodes_and_rejects_odd_length() {
         assert_eq!(parse_hex("0a1bFF").unwrap(), vec![0x0a, 0x1b, 0xff]);
         assert!(parse_hex("abc").is_err());
+    }
+
+    #[test]
+    fn hr_watch_line_carries_no_clinical_terms() {
+        // Every wording the HR watch can emit must read as wellness, never as a diagnosis.
+        let banned = ["afib", "fibrillat", "arrhythm", "cardiac", "ecg", "ekg", "diagnos", "alarm", "emergency"];
+        let lines = [
+            format_hr_watch(HrWatchState::Calibrating { have: 10, need: 600 }),
+            format_hr_watch(HrWatchState::Normal),
+            format_hr_watch(HrWatchState::ElevatedAtRest { peak_bpm: 118, start_unix: 0, dur_s: 480 }),
+        ];
+        for line in lines {
+            let low = line.to_lowercase();
+            for term in banned {
+                assert!(!low.contains(term), "clinical term '{term}' in HR-watch line: {line}");
+            }
+        }
+    }
+
+    #[test]
+    fn hr_watch_elevated_line_reports_bpm_and_minutes() {
+        let line = format_hr_watch(HrWatchState::ElevatedAtRest { peak_bpm: 118, start_unix: 0, dur_s: 480 });
+        assert!(line.contains("118 bpm") && line.contains("8 min"));
     }
 }

@@ -24,6 +24,8 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
         steps: u16_at(b, 49),
         activity_class: u8_at(b, 55),
         sleep_state: u8_at(b, 73).map(|v| (v >> 4) & 3),
+        signal_flags: u8_at(b, 25),
+        signal_quality: u8_at(b, 32),
         ..Default::default()
     })
 }
@@ -100,6 +102,17 @@ mod tests {
         assert_eq!(decode(8), None); // low diagnostic code
         assert_eq!(decode(0xA8), None); // bit-7 saturation sentinel
         assert_eq!(decode(0), None); // no reading
+    }
+
+    #[test]
+    fn v18_decodes_signal_flags_and_quality() {
+        let mut payload = vec![0u8; 80];
+        payload[25 - 3] = 0x10; // signal_flags @ inner 25 (bit 4 = off-wrist)
+        payload[32 - 3] = 255; // signal_quality @ inner 32 (clean)
+        let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+        let r = v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap();
+        assert_eq!(r.signal_flags, Some(0x10));
+        assert_eq!(r.signal_quality, Some(255));
     }
 
     #[test]
