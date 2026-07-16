@@ -18,7 +18,7 @@ mod cli;
 mod report;
 
 use cli::{Cli, Cmd};
-use report::{persist_calibration, report_frames, report_metrics, report_sync, FrameStats};
+use report::{hr_watch, persist_calibration, report_frames, report_metrics, report_sync, FrameStats};
 
 fn family(gen: u8) -> Family {
     if gen == 4 {
@@ -169,6 +169,9 @@ async fn main() -> Result<()> {
             let strap = strap.or_else(|| cli.sn.clone()).unwrap_or_else(|| "unknown".into());
             println!("decoded {} history records from {}", records.len(), capture.display());
             persist_calibration(&cli, &strap, &records);
+            if cli.hr_watch {
+                hr_watch(&records);
+            }
         }
     }
     Ok(())

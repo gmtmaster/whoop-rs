@@ -58,13 +58,27 @@ pub(crate) fn report_frames(stats: &FrameStats, raw: Option<&Path>) {
     }
 }
 
+/// The history records of a decode, cloned out of the mixed record stream.
+fn history_of(records: &[Record]) -> Vec<HistoryRecord> {
+    records.iter().filter_map(|r| match r {
+        Record::History(h) => Some(h.clone()),
+        _ => None,
+    }).collect()
+}
+
+/// Print the wellness HR-watch line for a decode (opt-in; filters history first).
+pub(crate) fn hr_watch(records: &[Record]) {
+    hr_watch_line(&history_of(records));
+}
+
+fn hr_watch_line(history: &[HistoryRecord]) {
+    println!("{}", format_hr_watch(HrWatch::evaluate(history)));
+}
+
 /// Compute + print the derived metrics from a keep-mode drain: SpO2 (4.0 paired red/IR only) and
 /// HRV-readiness from the R-R.
 pub(crate) fn report_metrics(records: &[Record], fam: Family, hr_watch: bool) {
-    let history: Vec<HistoryRecord> = records.iter().filter_map(|r| match r {
-        Record::History(h) => Some(h.clone()),
-        _ => None,
-    }).collect();
+    let history = history_of(records);
     let ppg = records.iter().filter(|r| matches!(r, Record::Ppg(_))).count();
 
     println!("metrics from {} records ({} history, {} v26 ppg)", records.len(), history.len(), ppg);
@@ -92,7 +106,7 @@ pub(crate) fn report_metrics(records: &[Record], fam: Family, hr_watch: bool) {
     }
 
     if hr_watch {
-        println!("{}", format_hr_watch(HrWatch::evaluate(&history)));
+        hr_watch_line(&history);
     }
 }
 
