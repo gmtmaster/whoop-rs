@@ -205,9 +205,13 @@ instead of hardcoding another strap's number. Metrics return `None` rather than 
 median, RMSSD, HR range) and persists them to SQLite keyed on **(person, strap)** — a new person, or the
 same person on a new strap, is a fresh key, so a shared or handed-off strap never calibrates against another
 wearer's data. A metric's baseline finalizes once its (person, strap) reaches the calibration milestone.
-`whoopctl --person <id>` picks the wearer; `ingest <capture>` backfills from a saved raw JSONL, no band. (A
-known follow-up: nightly RMSSD is concatenated across the night and needs gap-aware windowing before the HRV
-baseline is trustworthy.)
+`whoopctl --person <id>` picks the wearer; `ingest <capture>` backfills from a saved raw JSONL, no band.
+Nightly RMSSD is **gap-aware** (successive differences pool only within time-contiguous, plausible R-R runs,
+shared with the CLI via `HrvReadiness::rmssd_gap_aware`). `calibrate_fit` wires `linear_fit` into the store:
+a device-relative field is fitted against a reference over the accumulated nights and the `{scale, offset,
+r}` persisted to a `fit_baseline` table once the milestone is met. (Known limit: nights bucket by UTC
+calendar day, so a sleep straddling UTC midnight splits across two rows — a physiological-day cutover is a
+TODO.)
 
 ---
 
@@ -239,7 +243,7 @@ iOS via an `.xcframework` for `aarch64-apple-ios` + SwiftUI (needs a Mac + Xcode
 ```bash
 cd whoop-rs
 cargo build           # whole workspace
-cargo test            # 71 tests
+cargo test            # 76 tests
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```
@@ -264,9 +268,16 @@ Windows-toolchain detail only; the code is portable to Linux/macOS.
   **and located the computed SpO₂ at inner 74** (363 sleep readings, 95-100%), independently confirmed by
   external RE (`whoop-research/`). The per-(person, strap) calibration store ingested it into a finalized
   SpO₂ baseline (98%).
-- **Next:** gap-aware nightly RMSSD (so the HRV baseline is trustworthy), R22 deep buffers (IMU / v20 / v21)
-  after `enable_r22` on a worn band, wiring `linear_fit` into the store for device-relative fields, then the
-  Android app (cargo-ndk + Kotlin BLE + easy-connect + `WhoopCodec`), then iOS (Mac-gated).
+- **v26 raw-PPG + v21 IMU decoders validated.** The 838 dump's 1160 v26 frames validate `gen5::v26` +
+  `ppg_hr` end-to-end (982 HR estimates, MAE 4.31 bpm vs the strap's own v18 HR, 89.5% within 5 bpm). v21's
+  offsets and scales are **verified-by-crosscheck** — byte-for-byte identical to noop's hardware-verified
+  gravity-shell capture; only the 100 Hz sample rate is inferred, and a native worn R22 capture is still the
+  nice-to-have ground-truth stamp.
+- **Next:** a physiological-day bucket for nightly metrics, a real worn R22 capture (v20 optical layout,
+  live IMU streams), the Android app (cargo-ndk + Kotlin BLE + easy-connect + `WhoopCodec`), then iOS
+  (Mac-gated). An opt-in wellness HR-at-rest watch is designed and awaiting sign-off — there is **no
+  cardiac-arrest detector on the 5.0** (AFib/ECG is HeartKey/electrode, MG-only and firmware-blocked; the
+  v18 "cardiac" bytes are PPG signal-quality/status, not events).
 
 Working notes, source provenance, and the per-crate clean-state confirm live in the git-ignored
 `dev-docs/` folder.

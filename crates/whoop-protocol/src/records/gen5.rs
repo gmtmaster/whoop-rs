@@ -1,10 +1,12 @@
-//! WHOOP 5.0/MG historical records, decoded inner-relative (frame-absolute − 8). v18 carries no SpO2.
+//! WHOOP 5.0/MG historical records, decoded inner-relative (frame-absolute − 8). v18 carries a sleep-only
+//! SpO2 % byte at inner 74 (tri-mode: %-range kept, sentinels/codes dropped).
 
 use super::{gravity3, HistoryRecord, ImuRecord, PpgRecord};
 use crate::bytes::{i16_at, nonzero_u8_at, rr_intervals, u16_at, u8_at, unix_at};
 use crate::packet::Frame;
 
-/// Samples per axis in a v21 IMU buffer (both the accel and gyro count fields carry this).
+/// Samples per axis in a v21 IMU buffer (both the accel and gyro count fields carry this). Reused as
+/// `sample_rate_hz`: the buffer's time span is unconfirmed, so 100 Hz is inferred from the count, not measured.
 const IMU_SAMPLES: usize = 100;
 
 pub fn v18(f: &Frame) -> Option<HistoryRecord> {
