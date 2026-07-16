@@ -59,6 +59,7 @@ pub struct HistorySummary {
     pub rr_intervals: Vec<u16>,
     pub gravity: Option<Vec<f32>>, // [x, y, z]
     pub skin_temp_c: Option<f32>,
+    pub skin_temp_raw: Option<u16>, // raw register; the consumer applies its family/device-specific °C scale
     pub spo2_red: Option<u16>, // 4.0 v24 raw red ADC
     pub spo2_ir: Option<u16>,  // 4.0 v24 raw IR ADC
     pub spo2_pct: Option<u8>,  // 5.0 v18 computed %, sleep-only
@@ -79,6 +80,7 @@ impl From<records::HistoryRecord> for HistorySummary {
             rr_intervals: h.rr_intervals,
             gravity: h.gravity.map(|g| g.to_vec()),
             skin_temp_c: h.skin_temp_c,
+            skin_temp_raw: h.skin_temp_raw,
             spo2_red: h.spo2.map(|(r, _)| r),
             spo2_ir: h.spo2.map(|(_, i)| i),
             spo2_pct: h.spo2_pct,
@@ -516,6 +518,7 @@ mod tests {
         p[11] = 96; // hr @ inner 14
         p[46..48].copy_from_slice(&123u16.to_le_bytes()); // steps @ inner 49
         p[52] = 2; // activity_class @ inner 55
+        p[62..64].copy_from_slice(&3345u16.to_le_bytes()); // skin temp @ inner 65 (33.45 °C)
         p[71] = 97; // spo2_pct @ inner 74
         let s = WhoopCodec::new(Gen::Gen5)
             .decode_history(framing::encode(Family::Gen5, 47, 18, 0, &p))
@@ -523,6 +526,7 @@ mod tests {
         assert_eq!(s.heart_rate, Some(96));
         assert_eq!(s.steps, Some(123));
         assert_eq!(s.activity_class, Some(2));
+        assert_eq!(s.skin_temp_raw, Some(3345));
         assert_eq!(s.spo2_pct, Some(97));
     }
 

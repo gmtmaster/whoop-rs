@@ -12,17 +12,22 @@ const IMU_SAMPLES: usize = 100;
 pub fn v18(f: &Frame) -> Option<HistoryRecord> {
     let b = f.inner();
     let unix = unix_at(b)?;
+    // Raw skin-temp register, kept only in the physiological band (°C = raw/100 in 5..45); the consumer
+    // owns the final scale.
+    let skin_temp_raw = u16_at(b, 65).filter(|&r| (5.0..45.0).contains(&(r as f32 / 100.0)));
     Some(HistoryRecord {
         version: 18,
         unix,
         heart_rate: nonzero_u8_at(b, 14),
         rr_intervals: rr_intervals(b, 15, 16, 4),
         gravity: gravity3(b, 37),
-        skin_temp_c: u16_at(b, 65).map(|r| r as f32 / 100.0).filter(|c| (5.0..45.0).contains(c)),
+        skin_temp_c: skin_temp_raw.map(|r| r as f32 / 100.0),
+        skin_temp_raw,
         // Sleep-only tri-mode byte: a %-range value is a real SpO2; bit-7 sentinels and sub-70 codes → None.
         spo2_pct: u8_at(b, 74).filter(|&v| (70..=100).contains(&v)),
         steps: u16_at(b, 49),
-        activity_class: u8_at(b, 55),
+        // Only the mapped {0,1,2} codes; a wrong offset / invalid sentinel (0xFF) stores nothing.
+        activity_class: u8_at(b, 55).filter(|&v| v <= 2),
         sleep_state: u8_at(b, 73).map(|v| (v >> 4) & 3),
         signal_flags: u8_at(b, 25),
         signal_quality: u8_at(b, 32),
@@ -102,6 +107,35 @@ mod tests {
         assert_eq!(decode(8), None); // low diagnostic code
         assert_eq!(decode(0xA8), None); // bit-7 saturation sentinel
         assert_eq!(decode(0), None); // no reading
+    }
+
+    #[test]
+    fn v18_skin_temp_raw_kept_in_band_dropped_out_of_band() {
+        let decode = |raw: u16| {
+            let mut payload = vec![0u8; 80];
+            payload[65 - 3..67 - 3].copy_from_slice(&raw.to_le_bytes()); // skin temp @ inner 65
+            let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+            v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap()
+        };
+        let worn = decode(3345); // 33.45 °C
+        assert_eq!(worn.skin_temp_raw, Some(3345));
+        assert_eq!(worn.skin_temp_c, Some(33.45));
+        assert_eq!(decode(300).skin_temp_raw, None); // 3.0 °C, below the 5 °C floor
+        assert_eq!(decode(5000).skin_temp_raw, None); // 50 °C, above the 45 °C ceiling
+    }
+
+    #[test]
+    fn v18_activity_class_gates_out_invalid_codes() {
+        let decode = |b: u8| {
+            let mut payload = vec![0u8; 80];
+            payload[55 - 3] = b; // activity_class @ inner 55
+            let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+            v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap().activity_class
+        };
+        assert_eq!(decode(0), Some(0)); // still
+        assert_eq!(decode(2), Some(2)); // run
+        assert_eq!(decode(0xFF), None); // invalid sentinel
+        assert_eq!(decode(7), None); // unmapped code
     }
 
     #[test]

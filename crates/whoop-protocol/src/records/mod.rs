@@ -20,6 +20,7 @@ pub struct HistoryRecord {
     pub rr_intervals: Vec<u16>,
     pub gravity: Option<[f32; 3]>,
     pub skin_temp_c: Option<f32>,
+    pub skin_temp_raw: Option<u16>, // raw register; the consumer applies the family/device-specific °C scale
     pub spo2: Option<(u16, u16)>, // 4.0 v24 raw red/IR ADC
     pub spo2_pct: Option<u8>,     // 5.0 v18 computed SpO2 %; sleep-only tri-mode byte, %-range only
     pub resp_raw: Option<u16>,    // 4.0 v24 raw respiration ADC
