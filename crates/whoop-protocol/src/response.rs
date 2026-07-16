@@ -32,10 +32,11 @@ fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
         command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u8_at(p, 13)? as f32 }),
         command::GET_HELLO => Some(CommandResponse::Hello {
             device_name: ascii_z(p, 16),
-            fw_version: match u8_at(p, 93) {
-                Some(50) => Some([u8_at(p, 93)?, u8_at(p, 94)?, u8_at(p, 95)?, u8_at(p, 96)?]),
-                _ => None,
-            },
+            // Gate on the "5.x" marker; the `?` stays inside the closure so a truncated fw block yields
+            // fw_version None without discarding the already-decoded serial.
+            fw_version: u8_at(p, 93).filter(|&v| v == 50).and_then(|_| {
+                Some([u8_at(p, 93)?, u8_at(p, 94)?, u8_at(p, 95)?, u8_at(p, 96)?])
+            }),
         }),
         command::GET_DATA_RANGE => Some(CommandResponse::DataRange { oldest: u32_at(p, 3)?, newest: u32_at(p, 7)? }),
         _ => Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) }),
@@ -104,6 +105,27 @@ mod tests {
             CommandResponse::Hello { device_name, .. } => assert_eq!(device_name, "5AG0546409"),
             other => panic!("expected Hello, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn gen5_hello_reads_firmware_and_keeps_serial_on_gate_miss() {
+        let mut p = vec![0u8; 100];
+        p[16..26].copy_from_slice(b"5AG0268206");
+        p[93..97].copy_from_slice(&[50, 40, 1, 0]);
+        let decode_p = |p: &[u8]| {
+            let wire = framing::encode(Family::Gen5, 36, 0, command::GET_HELLO, p);
+            decode(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap()
+        };
+        assert_eq!(
+            decode_p(&p),
+            CommandResponse::Hello { device_name: "5AG0268206".into(), fw_version: Some([50, 40, 1, 0]) }
+        );
+        // A non-5.x marker drops firmware but must keep the serial (the fw `?` is closure-scoped).
+        p[93] = 40;
+        assert_eq!(
+            decode_p(&p),
+            CommandResponse::Hello { device_name: "5AG0268206".into(), fw_version: None }
+        );
     }
 
     #[test]
