@@ -13,4 +13,4 @@ pub use capture::{archive_line, capture_line, decode_capture};
 pub use client::WhoopClient;
 pub use error::Error;
 pub use policy::{reconnect_delay_s, should_run, BackfillTrigger};
-pub use uuids::{characteristic, channel_of, service};
+pub use uuids::{all_services, characteristic, channel_of, service};

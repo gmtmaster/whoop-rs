@@ -129,9 +129,11 @@ pub struct Scanned {
 
 /// Scan for `secs`, then for each WHOOP found connect briefly (no bond) and read its identity from the
 /// standard GATT chars — the name/serial/hardware aren't in the advertisement, only over a connection.
-pub async fn scan_whoops(service: Uuid, secs: u64) -> Result<Vec<Scanned>, BleError> {
+pub async fn scan_whoops(services: &[Uuid], secs: u64) -> Result<Vec<Scanned>, BleError> {
     let adapter = first_adapter().await?;
-    adapter.start_scan(ScanFilter { services: vec![service] }).await.map_err(backend)?;
+    // Empty filter (all devices), then re-check below: a multi-service WinRT filter drops every band, and a
+    // single-service one hides the other generation. matches_whoop also catches a renamed band by service.
+    adapter.start_scan(ScanFilter::default()).await.map_err(backend)?;
     tokio::time::sleep(Duration::from_secs(secs)).await;
     let peripherals = adapter.peripherals().await.map_err(backend)?;
     let _ = adapter.stop_scan().await;
@@ -139,7 +141,7 @@ pub async fn scan_whoops(service: Uuid, secs: u64) -> Result<Vec<Scanned>, BleEr
     let mut out = Vec::new();
     for p in peripherals {
         let Some(props) = p.properties().await.map_err(backend)? else { continue };
-        if !matches_whoop(&props, service) {
+        if !services.iter().any(|s| matches_whoop(&props, *s)) {
             continue;
         }
         let mut band = Scanned {

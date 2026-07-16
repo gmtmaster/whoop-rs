@@ -34,6 +34,11 @@ pub fn service(family: Family) -> Uuid {
     }
 }
 
+/// Both strap service UUIDs, so a scan finds every generation regardless of the `--gen` default.
+pub fn all_services() -> [Uuid; 2] {
+    [GEN4_SERVICE, GEN5_SERVICE]
+}
+
 pub fn characteristic(family: Family, channel: Channel) -> Uuid {
     match (family, channel) {
         (Family::Gen5, Channel::CmdWrite) => GEN5_CMD_WRITE,

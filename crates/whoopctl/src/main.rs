@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
 
     match &cli.cmd {
         Cmd::Scan { secs } => {
-            for b in scan_whoops(whoop_client::service(fam), *secs).await? {
+            for b in scan_whoops(&whoop_client::all_services(), *secs).await? {
                 let f = |s: &str| if s.is_empty() { "?".to_string() } else { s.to_string() };
                 println!(
                     "{}  rssi={:?}  sn={}  hw={}  fw={}  model={}  name=\"{}\"",
