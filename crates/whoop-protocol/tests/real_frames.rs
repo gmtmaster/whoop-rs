@@ -122,7 +122,7 @@ fn real_event_frames_decode_to_pinned_values() {
         assert_eq!(u64::from(ev.timestamp), f["timestamp"].as_u64().unwrap(), "{name}: timestamp");
         if let Some(b) = f.get("battery") {
             let be = live::battery_event(&frame).unwrap_or_else(|| panic!("{name}: battery absent"));
-            assert!((f64::from(be.soc_percent) - b["soc_percent"].as_f64().unwrap()).abs() < 1e-3, "{name}: soc");
+            assert!((be.soc_deci as f64 / 10.0 - b["soc_percent"].as_f64().unwrap()).abs() < 1e-3, "{name}: soc");
             assert_eq!(u64::from(be.millivolts), b["millivolts"].as_u64().unwrap(), "{name}: mv");
             assert_eq!(be.charging, b["charging"].as_bool().unwrap(), "{name}: charging");
         }

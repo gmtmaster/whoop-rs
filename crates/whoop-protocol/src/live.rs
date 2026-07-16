@@ -54,7 +54,8 @@ pub fn event(f: &Frame) -> Option<Event> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BatteryEvent {
-    pub soc_percent: f32,
+    /// Raw deci-percent (812 = 81.2%). Kept as the integer so the consumer divides in f64.
+    pub soc_deci: u16,
     pub millivolts: u16,
     pub charging: bool,
 }
@@ -66,10 +67,25 @@ pub fn battery_event(f: &Frame) -> Option<BatteryEvent> {
     }
     let b = f.inner();
     Some(BatteryEvent {
-        soc_percent: u16_at(b, 13)? as f32 / 10.0,
+        soc_deci: u16_at(b, 13)?,
         millivolts: u16_at(b, 17)?,
         charging: u8_at(b, 22).is_some_and(|v| v & 1 != 0),
     })
+}
+
+/// Gen5 events carry an opaque trailing payload (inner 8..); surface it as lowercase hex for the event
+/// row. Gen4 events have no such residual. `None` when there is nothing past the fixed header.
+pub fn event_payload_hex(f: &Frame) -> Option<String> {
+    if f.family != crate::family::Family::Gen5 {
+        return None;
+    }
+    use std::fmt::Write;
+    let tail = f.inner().get(8..).filter(|t| !t.is_empty())?;
+    let mut s = String::with_capacity(tail.len() * 2);
+    for b in tail {
+        let _ = write!(s, "{b:02x}");
+    }
+    Some(s)
 }
 
 /// METADATA HISTORY_END 8-byte end_data (trim u32 + next u32) @ inner 13..21 — echoed verbatim in the ACK.
@@ -104,5 +120,39 @@ mod tests {
         assert_eq!(r.hr_ch1, 98);
         assert_eq!(r.hr_ch2, Some(99));
         assert!((r.accel[2] - 0.98).abs() < 1e-6);
+    }
+
+    #[test]
+    fn battery_event_carries_raw_deci_and_hex_residual() {
+        // payload = inner[3..]; inner 4/13/17/22 map to payload 1/10/14/19.
+        let mut payload = vec![0u8; 24];
+        payload[1..5].copy_from_slice(&1_784_000_000u32.to_le_bytes()); // event_timestamp
+        payload[10..12].copy_from_slice(&812u16.to_le_bytes()); // soc deci-% = 81.2
+        payload[14..16].copy_from_slice(&4100u16.to_le_bytes()); // mV
+        payload[19] = 1; // charging
+        let wire = framing::encode(Family::Gen5, 48, 0, crate::event::BATTERY_LEVEL, &payload);
+        let f = framing::decode(Family::Gen5, &wire).unwrap();
+
+        let ev = event(&f).unwrap();
+        assert_eq!(ev.number, crate::event::BATTERY_LEVEL);
+        assert_eq!(ev.timestamp, 1_784_000_000);
+
+        let b = battery_event(&f).unwrap();
+        assert_eq!(b.soc_deci, 812); // raw integer, not a float — the consumer divides in f64
+        assert_eq!(b.millivolts, 4100);
+        assert!(b.charging);
+
+        // event_payload_hex = lowercase hex of inner[8..].
+        let hex = event_payload_hex(&f).unwrap();
+        assert_eq!(hex.len(), (f.inner().len() - 8) * 2);
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn gen4_event_has_no_payload_hex() {
+        let payload = vec![0u8; 24];
+        let wire = framing::encode(Family::Gen4, 48, 0, crate::event::WRIST_ON, &payload);
+        let f = framing::decode(Family::Gen4, &wire).unwrap();
+        assert_eq!(event_payload_hex(&f), None);
     }
 }

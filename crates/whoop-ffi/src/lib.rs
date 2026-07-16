@@ -130,21 +130,29 @@ fn to_step(s: OffloadStep) -> Step {
 pub enum Live {
     Realtime { unix: u32, heart_rate: u8, rr_intervals: Vec<u16> },
     R22 { unix: u32, hr_ch1: u8, hr_ch2: Option<u8>, accel: Vec<f32> },
-    Event { number: u8, unix: u32 },
-    Battery { soc_percent: f32, millivolts: u16, charging: bool },
+    /// An EVENT frame. `battery_*` are Some only for BATTERY_LEVEL (raw deci-% + mV + charging — the
+    /// consumer divides the deci-% in f64). `payload_hex` is the Gen5 opaque residual (lowercase hex).
+    Event {
+        number: u8,
+        unix: u32,
+        battery_soc_deci: Option<u16>,
+        battery_millivolts: Option<u16>,
+        battery_charging: Option<bool>,
+        payload_hex: Option<String>,
+    },
     Console { text: String },
 }
 
 /// A decoded command response (identity, battery, clock, data range, firmware).
 #[derive(uniffi::Enum)]
 pub enum Response {
-    Battery { percent: f32 },
+    Battery { percent: f64 },
     Clock { unix: u32 },
     Hello { device_name: String, fw_version: Option<Vec<u8>> },
     DataRange { oldest: u32, newest: u32 },
     Version { fw: Vec<u32> },
     ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
-    BatteryPack { serial: String, soc_pct: f32, millivolts: u16, pack_id: u32 },
+    BatteryPack { serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
     Other { cmd: u8, result: Option<u8> },
 }
 
@@ -292,9 +300,17 @@ impl WhoopCodec {
                 heart_rate: r.heart_rate,
                 rr_intervals: r.rr_intervals,
             }),
-            PacketType::Event => live::battery_event(&f)
-                .map(|b| Live::Battery { soc_percent: b.soc_percent, millivolts: b.millivolts, charging: b.charging })
-                .or_else(|| live::event(&f).map(|e| Live::Event { number: e.number, unix: e.timestamp })),
+            PacketType::Event => live::event(&f).map(|e| {
+                let batt = live::battery_event(&f);
+                Live::Event {
+                    number: e.number,
+                    unix: e.timestamp,
+                    battery_soc_deci: batt.map(|b| b.soc_deci),
+                    battery_millivolts: batt.map(|b| b.millivolts),
+                    battery_charging: batt.map(|b| b.charging),
+                    payload_hex: live::event_payload_hex(&f),
+                }
+            }),
             PacketType::ConsoleLogs => console::text(&f).map(|text| Live::Console { text }),
             PacketType::HistoricalData if matches!(f.cmd(), 0x80 | 0x82) => live::r22_live(&f).map(|r| Live::R22 {
                 unix: r.timestamp,
@@ -536,6 +552,29 @@ mod tests {
         assert_eq!(s.activity_class, Some(2));
         assert_eq!(s.skin_temp_raw, Some(3345));
         assert_eq!(s.spo2_pct, Some(97));
+    }
+
+    #[test]
+    fn decode_live_folds_battery_into_event() {
+        use super::Live;
+        // Battery EVENT: payload = inner[3..]; inner 4/13/17/22 = payload 1/10/14/19.
+        let mut p = vec![0u8; 24];
+        p[1..5].copy_from_slice(&1_784_000_000u32.to_le_bytes());
+        p[10..12].copy_from_slice(&812u16.to_le_bytes()); // 81.2%
+        p[14..16].copy_from_slice(&4100u16.to_le_bytes());
+        p[19] = 1;
+        let wire = framing::encode(Family::Gen5, 48, 0, 3, &p); // cmd 3 = BATTERY_LEVEL
+        match WhoopCodec::new(Gen::Gen5).decode_live(wire).unwrap() {
+            Live::Event { number, unix, battery_soc_deci, battery_millivolts, battery_charging, payload_hex } => {
+                assert_eq!(number, 3);
+                assert_eq!(unix, 1_784_000_000);
+                assert_eq!(battery_soc_deci, Some(812));
+                assert_eq!(battery_millivolts, Some(4100));
+                assert_eq!(battery_charging, Some(true));
+                assert!(payload_hex.is_some());
+            }
+            _ => panic!("expected Live::Event"),
+        }
     }
 
     #[test]

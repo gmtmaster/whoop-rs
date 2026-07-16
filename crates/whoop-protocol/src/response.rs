@@ -10,7 +10,7 @@ use crate::packet::Frame;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CommandResponse {
-    Battery { percent: f32 },
+    Battery { percent: f64 },
     Clock { unix: u32 },
     Hello { device_name: String, fw_version: Option<[u8; 4]> },
     DataRange { oldest: u32, newest: u32 },
@@ -20,7 +20,7 @@ pub enum CommandResponse {
     ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
     /// 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO). `millivolts` is the pack voltage; `pack_id` is a
     /// per-pack 32-bit id distinct from `serial`.
-    BatteryPack { serial: String, soc_pct: f32, millivolts: u16, pack_id: u32 },
+    BatteryPack { serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
     Other { cmd: u8, result: Option<ResultCode> },
 }
 
@@ -35,7 +35,7 @@ pub fn decode(f: &Frame) -> Option<CommandResponse> {
 
 fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
     match cmd {
-        command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u8_at(p, 2)? as f32 }),
+        command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u8_at(p, 2)? as f64 }),
         command::GET_HELLO => Some(CommandResponse::Hello {
             device_name: ascii_z(p, 16),
             // Gate on the "5.x" marker; the `?` stays inside the closure so a truncated fw block yields
@@ -52,7 +52,7 @@ fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
                 pack_id: u32_at(p, 4)?,
                 millivolts: u16_at(p, 8)?,
                 serial: ascii_z(p, 10),
-                soc_pct: u16_at(p, 26)? as f32 / 10.0,
+                soc_pct: u16_at(p, 26)? as f64 / 10.0,
             })
         })()
         .or_else(|| Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) })),
@@ -62,7 +62,7 @@ fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
 
 fn decode_gen4(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
     match cmd {
-        command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u16_at(p, 2)? as f32 / 10.0 }),
+        command::GET_BATTERY_LEVEL => Some(CommandResponse::Battery { percent: u16_at(p, 2)? as f64 / 10.0 }),
         command::GET_CLOCK_GEN4 => Some(CommandResponse::Clock { unix: u32_at(p, 2)? }),
         command::REPORT_VERSION_INFO => Some(CommandResponse::VersionInfo {
             fw: [u32_at(p, 3)?, u32_at(p, 7)?, u32_at(p, 11)?, u32_at(p, 15)?],
@@ -214,5 +214,17 @@ mod tests {
         let wire = framing::encode(Family::Gen4, 36, 0, command::GET_BATTERY_LEVEL, &p);
         let f = framing::decode(Family::Gen4, &wire).unwrap();
         assert_eq!(decode(&f), Some(CommandResponse::Battery { percent: 81.2 }));
+    }
+
+    #[test]
+    fn gen4_battery_divides_in_f64() {
+        // Deci-% divided in f64 lands on the exact stored Double: 999 -> 99.9 (f32 would give
+        // 99.90000152587891). This is the adjudicated precision improvement over the old f32 path.
+        let mut p = vec![0u8; 8];
+        p[2..4].copy_from_slice(&999u16.to_le_bytes());
+        let wire = framing::encode(Family::Gen4, 36, 0, command::GET_BATTERY_LEVEL, &p);
+        let f = framing::decode(Family::Gen4, &wire).unwrap();
+        assert_eq!(decode(&f), Some(CommandResponse::Battery { percent: 99.9 }));
+        assert_ne!((999.0f32 / 10.0) as f64, 99.9); // the old f32-domain division was NOT exact
     }
 }
