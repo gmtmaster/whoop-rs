@@ -22,6 +22,8 @@ const LONG_SD_FLOOR: f64 = 1e-9;
 /// A physiologically plausible R-R interval (ms); values outside are dropped before cleaning.
 const RR_MIN_MS: u16 = 300;
 const RR_MAX_MS: u16 = 2000;
+/// Width (s) of the tumbling window the app pools per-bucket RMSSD over for its stored session avgHrv.
+const HRV_WINDOW_SECS: u64 = 300;
 /// A beat-to-beat R-R change beyond this (ms) is an artifact (ectopic/missed beat), not real variability,
 /// so its squared difference is dropped from RMSSD — the standard HRV artifact-correction step.
 const MAX_BEAT_DELTA_MS: f64 = 200.0;
@@ -86,16 +88,35 @@ impl HrvReadiness {
         order.sort_by_key(|(t, _)| *t);
         let flat: Vec<u16> = order.iter().flat_map(|(_, rr)| rr.iter().copied()).collect();
         let (nn, contiguous) = clean_rr_gap_aware(&flat);
-        let (mut sumsq, mut count) = (0.0f64, 0usize);
-        for i in 1..nn.len() {
-            if !contiguous[i] {
-                continue;
-            }
-            let d = nn[i] as f64 - nn[i - 1] as f64;
-            sumsq += d * d;
-            count += 1;
+        rmssd_from_clean(&nn, &contiguous)
+    }
+
+    /// Windowed session RMSSD (ms): the mean of per-`HRV_WINDOW_SECS`-bucket gap-aware RMSSD over the
+    /// `[start, end]` span, matching the app's stored session avgHrv. `beats` are `(unix, rr)` in the
+    /// caller's chronological order; buckets tumble from `start`, each range+ectopic-cleaned then
+    /// gap-aware-RMSSD'd (kept only with >= 2 clean beats and a surviving contiguous pair). No whole-night
+    /// beat-count gate. `None` when no bucket yields a value.
+    pub fn windowed_avg_hrv(start: u32, end: u32, beats: &[(u32, u16)]) -> Option<f64> {
+        let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
+        if seg.is_empty() {
+            return None;
         }
-        (count > 0).then(|| (sumsq / count as f64).sqrt())
+        let (start, end) = (start as u64, end as u64);
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        let mut t = start;
+        while t < end {
+            let hi = t + HRV_WINDOW_SECS;
+            let bucket: Vec<u16> =
+                seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi).map(|&(_, rr)| rr).collect();
+            let (nn, contiguous) = clean_rr_gap_aware(&bucket);
+            let val = if nn.len() >= 2 { rmssd_from_clean(&nn, &contiguous) } else { None };
+            if let Some(v) = val {
+                sum += v;
+                n += 1;
+            }
+            t = hi;
+        }
+        (n > 0).then(|| sum / n as f64)
     }
 
     /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
@@ -154,6 +175,21 @@ impl HrvReadiness {
             overreaching_watch,
         })
     }
+}
+
+/// Task-Force RMSSD (ms) over a cleaned series, pooling only successive differences whose two beats were
+/// adjacent in the source (`contiguous[i]`). `None` when no contiguous pair survives.
+fn rmssd_from_clean(nn: &[u16], contiguous: &[bool]) -> Option<f64> {
+    let (mut sumsq, mut count) = (0.0f64, 0usize);
+    for i in 1..nn.len() {
+        if !contiguous[i] {
+            continue;
+        }
+        let d = nn[i] as f64 - nn[i - 1] as f64;
+        sumsq += d * d;
+        count += 1;
+    }
+    (count > 0).then(|| (sumsq / count as f64).sqrt())
 }
 
 /// The last `n` elements, or all if fewer.
@@ -278,6 +314,38 @@ mod tests {
         // A clean series has no splices, so it equals the plain Task-Force RMSSD (÷ n-1). sqrt(325/4).
         let clean = vec![(0u32, vec![800u16, 810, 820, 815, 805])];
         assert!((HrvReadiness::rmssd_gap_aware(&clean).unwrap() - 9.013878188659973).abs() < 1e-12);
+    }
+
+    #[test]
+    fn windowed_avg_hrv_means_per_bucket_rmssd() {
+        // Bucket A [100,400): clean [800,810,820,815,805] → sqrt(325/4). Bucket B [400,700): [700,720,710]
+        // → sqrt(500/2). avgHrv = mean of the two bucket RMSSDs.
+        let a = 9.013878188659973f64;
+        let b = 15.811388300841896f64;
+        let beats: Vec<(u32, u16)> = vec![
+            (100, 800), (100, 810), (100, 820), (100, 815), (100, 805),
+            (400, 700), (400, 720), (400, 710),
+        ];
+        let got = HrvReadiness::windowed_avg_hrv(100, 700, &beats).unwrap();
+        assert!((got - (a + b) / 2.0).abs() < 1e-12, "got {got}");
+    }
+
+    #[test]
+    fn windowed_avg_hrv_drops_buckets_without_a_contiguous_pair() {
+        // A single in-range beat per bucket yields no successive difference → no bucket contributes → None.
+        let beats: Vec<(u32, u16)> = vec![(100, 800), (400, 810)];
+        assert!(HrvReadiness::windowed_avg_hrv(100, 700, &beats).is_none());
+        // Beats outside [start, end] are filtered out before bucketing.
+        let outside: Vec<(u32, u16)> = vec![(50, 800), (50, 810)];
+        assert!(HrvReadiness::windowed_avg_hrv(100, 700, &outside).is_none());
+    }
+
+    #[test]
+    fn windowed_avg_hrv_single_bucket_equals_bucket_rmssd() {
+        // One bucket, one clean series → avgHrv equals that bucket's gap-aware RMSSD.
+        let beats: Vec<(u32, u16)> = vec![(100, 800), (100, 810), (100, 820), (100, 815), (100, 805)];
+        let got = HrvReadiness::windowed_avg_hrv(100, 400, &beats).unwrap();
+        assert!((got - 9.013878188659973).abs() < 1e-12, "got {got}");
     }
 
     #[test]

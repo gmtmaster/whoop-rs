@@ -669,6 +669,21 @@ pub fn hrv_rmssd_gap_aware(runs: Vec<RrRun>) -> Option<f64> {
     HrvReadiness::rmssd_gap_aware(&beats)
 }
 
+/// Windowed session avgHrv (ms): the mean of per-5-min-bucket gap-aware RMSSD over `[start, end]`, the
+/// app's stored `SleepSession.avgHrv`. `runs` are the session's per-record `(unix, rr)` in chronological
+/// order; buckets tumble from `start`. `None` when no bucket yields a value.
+#[uniffi::export]
+pub fn hrv_windowed_avg(start: u32, end: u32, runs: Vec<RrRun>) -> Option<f64> {
+    let beats: Vec<(u32, u16)> = runs
+        .into_iter()
+        .flat_map(|r| {
+            let unix = r.unix;
+            r.rr.into_iter().map(move |v| (unix, v))
+        })
+        .collect();
+    HrvReadiness::windowed_avg_hrv(start, end, &beats)
+}
+
 /// HRV-readiness over a nightly RMSSD series (oldest → newest; `None` slots = missing nights).
 #[uniffi::export]
 pub fn hrv_readiness(nightly_rmssd: Vec<Option<f64>>) -> Option<HrvReadinessInfo> {
@@ -1141,6 +1156,8 @@ mod tests {
         assert!(super::hrv_rmssd_gap_aware(runs).unwrap() < 20.0);
         assert!(super::hrv_readiness(vec![Some(50.0); 5]).is_some());
         assert!(super::ppg_hr(vec![]).is_empty());
+        let win = vec![super::RrRun { unix: 100, rr: vec![800, 810, 820, 815, 805] }];
+        assert!((super::hrv_windowed_avg(100, 400, win).unwrap() - 9.013878188659973).abs() < 1e-12);
     }
 
     #[test]
