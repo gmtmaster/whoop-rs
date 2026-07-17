@@ -858,6 +858,7 @@ name = "physio-algo"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "whoop-protocol",
 ]
 
 [[package]]
@@ -1555,8 +1556,7 @@ dependencies = [
 name = "whoop-metrics"
 version = "0.1.0"
 dependencies = [
- "serde_json",
- "whoop-protocol",
+ "physio-algo",
 ]
 
 [[package]]

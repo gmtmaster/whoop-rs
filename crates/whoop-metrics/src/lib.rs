@@ -1,16 +1,10 @@
-//! Derived wellness metrics over decoded records — the analytics layer above the codec. Pure,
-//! deterministic, no BLE, no IO. Every metric returns `None` rather than a fabricated number when the
-//! signal is absent. Outputs are wellness estimates, never medical.
+//! Thin compatibility shim. The derived-metric implementations now live in `physio-algo`; this crate
+//! re-exports them so existing `whoop_metrics::…` paths keep resolving. New code should depend on
+//! `physio-algo` directly.
 
-pub mod calibration;
-pub mod hr_anomaly;
-pub mod hrv_readiness;
-pub mod ppg_hr;
-pub mod spo2;
-pub mod stats;
+pub use physio_algo::{calibration, hr_anomaly, hrv as hrv_readiness, ppg as ppg_hr, spo2, stats};
 
-pub use calibration::Calibration;
-pub use hr_anomaly::{HrWatch, HrWatchState};
-pub use hrv_readiness::{HrvReadiness, HrvReadinessResult, ReadinessTier, SECS_PER_DAY};
-pub use spo2::{RollingReading, Spo2};
-pub use stats::{linear_fit, pearson, LinearFit};
+pub use physio_algo::{
+    linear_fit, pearson, Calibration, HrWatch, HrWatchState, HrvReadiness, HrvReadinessResult, LinearFit,
+    ReadinessTier, RollingReading, Spo2, SECS_PER_DAY,
+};

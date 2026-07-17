@@ -2,7 +2,7 @@
 //! concatenate their samples, and pin the derived HR against the recorded estimate.
 
 use serde_json::Value;
-use whoop_metrics::ppg_hr::{estimate, Sample};
+use physio_algo::ppg::{estimate, Sample};
 use whoop_protocol::bytes::from_hex;
 use whoop_protocol::family::Family;
 use whoop_protocol::framing;

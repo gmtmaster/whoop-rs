@@ -3,10 +3,7 @@ name = "whoop-metrics"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pure derived-metric layer over decoded WHOOP records: HRV-readiness, SpO2. No BLE, no IO."
+description = "Compatibility shim: re-exports the derived-metric layer, now implemented in physio-algo."
 
 [dependencies]
-whoop-protocol.workspace = true
-
-[dev-dependencies]
-serde_json = "1"
+physio-algo.workspace = true
