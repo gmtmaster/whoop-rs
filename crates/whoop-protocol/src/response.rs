@@ -71,6 +71,17 @@ pub fn data_range_scan_oldest(frame: &[u8]) -> Option<u32> {
     oldest
 }
 
+/// The command byte a COMMAND_RESPONSE replies to, plus its result/status code, for the live handshake
+/// (data-range-success gate, reboot/alarm readback). On 5/MG the status is payload byte 1; 4.0 exposes no
+/// fixed result offset, so `None`.
+pub fn resp_status(f: &Frame) -> (u8, Option<ResultCode>) {
+    let result = match f.family {
+        Family::Gen5 => u8_at(f.payload(), 1).map(ResultCode::from_u8),
+        Family::Gen4 => None,
+    };
+    (f.cmd(), result)
+}
+
 pub fn decode(f: &Frame) -> Option<CommandResponse> {
     let p = f.payload();
     let cmd = f.cmd();
@@ -155,6 +166,19 @@ fn ascii_z(p: &[u8], start: usize) -> String {
 mod tests {
     use super::*;
     use crate::framing;
+
+    #[test]
+    fn resp_status_surfaces_cmd_and_result() {
+        let mut p = vec![0u8; 20];
+        p[1] = 1; // result = SUCCESS (5/MG status byte @ payload 1)
+        let wire = framing::encode(Family::Gen5, 36, 0, command::GET_DATA_RANGE, &p);
+        let f = framing::decode(Family::Gen5, &wire).unwrap();
+        assert_eq!(resp_status(&f), (command::GET_DATA_RANGE, Some(ResultCode::Success)));
+        // 4.0 has no fixed result offset, so only the command byte surfaces.
+        let wire4 = framing::encode(Family::Gen4, 36, 0, command::GET_CLOCK_GEN4, &p);
+        let f4 = framing::decode(Family::Gen4, &wire4).unwrap();
+        assert_eq!(resp_status(&f4), (command::GET_CLOCK_GEN4, None));
+    }
 
     #[test]
     fn gen5_battery_is_direct_percent() {

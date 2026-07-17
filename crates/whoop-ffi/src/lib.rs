@@ -153,17 +153,19 @@ pub enum Live {
     Console { text: String },
 }
 
-/// A decoded command response (identity, battery, clock, data range, firmware).
+/// A decoded command response (identity, battery, clock, data range, firmware). Every variant carries
+/// `resp_cmd` (the command byte replied to) and `result` (the status code, `None` on 4.0) so the live
+/// COMMAND_RESPONSE handshake can gate on them.
 #[derive(uniffi::Enum)]
 pub enum Response {
-    Battery { percent: f64 },
-    Clock { unix: u32 },
-    Hello { device_name: String, fw_version: Option<Vec<u8>> },
-    DataRange { oldest: u32, newest: u32 },
-    Version { fw: Vec<u32> },
-    ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
-    BatteryPack { serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
-    Other { cmd: u8, result: Option<u8> },
+    Battery { resp_cmd: u8, result: Option<u8>, percent: f64 },
+    Clock { resp_cmd: u8, result: Option<u8>, unix: u32 },
+    Hello { resp_cmd: u8, result: Option<u8>, device_name: String, fw_version: Option<Vec<u8>> },
+    DataRange { resp_cmd: u8, result: Option<u8>, oldest: u32, newest: u32 },
+    Version { resp_cmd: u8, result: Option<u8>, fw: Vec<u32> },
+    ExtendedBattery { resp_cmd: u8, result: Option<u8>, millivolts: u16, remaining_mah: u16, current_ma: i16 },
+    BatteryPack { resp_cmd: u8, result: Option<u8>, serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
+    Other { resp_cmd: u8, result: Option<u8> },
 }
 
 /// METADATA offload-state fields: `meta_type` (1 start / 2 end / 3 complete) drives the drain, and for a
@@ -403,21 +405,23 @@ impl WhoopCodec {
     pub fn decode_response(&self, raw: Vec<u8>) -> Option<Response> {
         use response::CommandResponse as C;
         let f = framing::decode(self.family, &raw).ok()?;
+        let (resp_cmd, result) = response::resp_status(&f);
+        let result = result.map(result_to_u8);
         Some(match response::decode(&f)? {
-            C::Battery { percent } => Response::Battery { percent },
-            C::Clock { unix } => Response::Clock { unix },
+            C::Battery { percent } => Response::Battery { resp_cmd, result, percent },
+            C::Clock { unix } => Response::Clock { resp_cmd, result, unix },
             C::Hello { device_name, fw_version } => {
-                Response::Hello { device_name, fw_version: fw_version.map(|v| v.to_vec()) }
+                Response::Hello { resp_cmd, result, device_name, fw_version: fw_version.map(|v| v.to_vec()) }
             }
-            C::DataRange { oldest, newest } => Response::DataRange { oldest, newest },
-            C::VersionInfo { fw } => Response::Version { fw: fw.to_vec() },
+            C::DataRange { oldest, newest } => Response::DataRange { resp_cmd, result, oldest, newest },
+            C::VersionInfo { fw } => Response::Version { resp_cmd, result, fw: fw.to_vec() },
             C::ExtendedBattery { millivolts, remaining_mah, current_ma } => {
-                Response::ExtendedBattery { millivolts, remaining_mah, current_ma }
+                Response::ExtendedBattery { resp_cmd, result, millivolts, remaining_mah, current_ma }
             }
             C::BatteryPack { serial, soc_pct, millivolts, pack_id } => {
-                Response::BatteryPack { serial, soc_pct, millivolts, pack_id }
+                Response::BatteryPack { resp_cmd, result, serial, soc_pct, millivolts, pack_id }
             }
-            C::Other { cmd, result } => Response::Other { cmd, result: result.map(result_to_u8) },
+            C::Other { .. } => Response::Other { resp_cmd, result },
         })
     }
 
@@ -525,6 +529,12 @@ impl WhoopCodec {
     pub fn advertising_name_frame(&self, seq: u8, name: String) -> Vec<u8> {
         framing::command(self.family, seq, command::SET_ADVERTISING_NAME, &advertising::advertising_name_payload(&name))
     }
+
+    /// SET_ADVERTISING_NAME (5/MG) — rename the strap's puffin BLE advertising name (clamped to 24 UTF-8
+    /// bytes). The strap reboots to apply. Hardware-unverified (opcode/b3 inferred). Gated in the app.
+    pub fn advertising_name_frame_gen5(&self, seq: u8, name: String) -> Vec<u8> {
+        framing::command(self.family, seq, command::SET_ADVERTISING_NAME, &advertising::advertising_name_payload_gen5(&name))
+    }
 }
 
 /// The haptic pulses for a clock chime (write a buzz per pulse, spaced by its gap). Pure encoder.
@@ -588,7 +598,7 @@ pub fn spo2_from_paired(red: Vec<f64>, ir: Vec<f64>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Chan, Gen, Step, WhoopCodec};
+    use super::{Chan, Gen, Response, Step, WhoopCodec};
     use whoop_protocol::hello::GEN5_CLIENT_HELLO;
     use whoop_protocol::{command, framing, Family};
 
@@ -826,5 +836,45 @@ mod tests {
         // The 8-byte vs legacy 9-byte set-clock bodies differ in length only.
         assert_eq!(framing::decode(Family::Gen4, &c.set_clock_frame(0, 1)).unwrap().payload().len(), 8);
         assert_eq!(framing::decode(Family::Gen4, &c.set_clock_legacy_frame(0, 1)).unwrap().payload().len(), 9);
+    }
+
+    #[test]
+    fn decode_response_surfaces_cmd_and_result_on_every_variant() {
+        let codec = WhoopCodec::new(Gen::Gen5);
+        // A GET_DATA_RANGE reply: the success gate needs both the command byte and the status.
+        let mut p = vec![0u8; 12];
+        p[1] = 1; // result = SUCCESS
+        p[3..7].copy_from_slice(&1_784_000_000u32.to_le_bytes());
+        p[7..11].copy_from_slice(&1_784_200_000u32.to_le_bytes());
+        let wire = framing::encode(Family::Gen5, 36, 0, command::GET_DATA_RANGE, &p);
+        match codec.decode_response(wire).unwrap() {
+            Response::DataRange { resp_cmd, result, oldest, newest } => {
+                assert_eq!(resp_cmd, command::GET_DATA_RANGE);
+                assert_eq!(result, Some(1));
+                assert_eq!((oldest, newest), (1_784_000_000, 1_784_200_000));
+            }
+            _ => panic!("expected DataRange"),
+        }
+        // An unmodelled command still surfaces its cmd + status through Other.
+        let mut p = vec![0u8; 8];
+        p[1] = 2; // result = PENDING
+        let wire = framing::encode(Family::Gen5, 36, 0, command::REBOOT_STRAP, &p);
+        match codec.decode_response(wire).unwrap() {
+            Response::Other { resp_cmd, result } => {
+                assert_eq!(resp_cmd, command::REBOOT_STRAP);
+                assert_eq!(result, Some(2));
+            }
+            _ => panic!("expected Other"),
+        }
+    }
+
+    #[test]
+    fn gen5_advertising_name_frame_has_the_puffin_body() {
+        let c = WhoopCodec::new(Gen::Gen5);
+        let frame = c.advertising_name_frame_gen5(0, "band".into());
+        let f = framing::decode(Family::Gen5, &frame).unwrap();
+        assert_eq!(f.cmd(), command::SET_ADVERTISING_NAME);
+        // b3 selector 0x01, reserved 0x00, name, NUL terminator (GEN5 pads the inner to a 4-byte boundary).
+        assert_eq!(&f.payload()[..7], b"\x01\x00band\x00");
     }
 }
