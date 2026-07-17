@@ -315,9 +315,13 @@ impl WhoopCodec {
         out
     }
 
-    /// Decode a single complete history frame (for offline replay of a captured file).
+    /// Decode a single complete history frame (for offline replay of a captured file). A bad-CRC frame is
+    /// rejected here (None) — a forged/corrupt record must not be stored past the trim.
     pub fn decode_history(&self, raw: Vec<u8>) -> Option<HistorySummary> {
         let frame = framing::decode(self.family, &raw).ok()?;
+        if !frame.crc_ok {
+            return None;
+        }
         match records::decode(&frame)? {
             Record::History(h) => Some(h.into()),
             _ => None,
@@ -336,8 +340,12 @@ impl WhoopCodec {
     }
 
     /// Decode a single v26 PPG waveform frame (the 24 optical samples) for offline replay / the deep buffers.
+    /// Bad-CRC frames are rejected; `decode_ppg` version-gates, so a v18/v24 frame yields None (not 24 samples).
     pub fn decode_ppg_frame(&self, raw: Vec<u8>) -> Option<PpgFrame> {
         let f = framing::decode(self.family, &raw).ok()?;
+        if !f.crc_ok {
+            return None;
+        }
         let p = records::decode_ppg(&f)?;
         Some(PpgFrame { unix: p.unix, record_id: p.record_id, samples: p.samples })
     }
@@ -751,6 +759,26 @@ mod tests {
         assert_eq!(p.unix, 1_784_238_740);
         assert_eq!(p.samples.len(), 24);
         assert_eq!(p.samples[0], -661);
+    }
+
+    #[test]
+    fn decode_history_rejects_a_bad_crc_frame() {
+        // A real worn v18 frame from the protocol fixture; flipping one CRC byte must drop it (None), so a
+        // corrupt/forged record can never be stored past the trim.
+        let mut raw = whoop_protocol::bytes::from_hex(
+            "aa01740001003fb12f1280733d8401b69f266a66460066025a0265020000000000007b0a8d656463ff0012163cf6a439bf2924fd3ed763fe3e3200aa000000000000000000f7000901f10b0007010c020c00000000000000000000000000000000000000000000000100656f1e1e0000009d61a7c00000003e862817",
+        )
+        .unwrap();
+        let codec = WhoopCodec::new(Gen::Gen5);
+        assert!(codec.decode_history(raw.clone()).is_some()); // good CRC decodes
+        *raw.last_mut().unwrap() ^= 0xFF; // trash the CRC32 tail
+        assert!(codec.decode_history(raw).is_none());
+    }
+
+    #[test]
+    fn decode_ppg_frame_rejects_a_non_v26_frame() {
+        // A v18 history frame carries no PPG waveform: the version gate returns None, not 24 samples.
+        assert!(WhoopCodec::new(Gen::Gen5).decode_ppg_frame(v18_frame()).is_none());
     }
 
     #[test]

@@ -107,7 +107,7 @@ pub fn decode(frame: &Frame) -> Option<Record> {
 /// Single-frame v26 24 Hz PPG waveform decode (5.0/MG). `None` off-generation or on a non-v26 frame —
 /// the offload path yields these via `decode`, this is the single-frame door the FFI needs.
 pub fn decode_ppg(frame: &Frame) -> Option<PpgRecord> {
-    (frame.family == Family::Gen5).then(|| gen5::v26(frame)).flatten()
+    (frame.family == Family::Gen5 && frame.version() == 26).then(|| gen5::v26(frame)).flatten()
 }
 
 /// Single-frame v21 100 Hz 6-axis IMU decode (5.0/MG). `None` off-generation or if the sample-count gate
