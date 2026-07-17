@@ -7,12 +7,16 @@
 //!   - V1 (Cole-Kripke) — the 4.0 path and the session-detection source of truth.
 //!
 //! Inputs are protocol-free (see [`input`]): plain per-sample values plus the in-bed `[start, end]`.
-//! The stager engines land in a later batch; this module defines the input/output shapes and the stage
-//! vocabulary now.
+//! [`stage_v2`] is the default; [`stage_v1`] is the 4.0 recipe. Both are pure and deterministic.
 
+mod common;
 mod input;
+mod v1;
+mod v2;
 
 pub use input::{AccelSample, HrSample, RespSample, RrRun, SleepInput};
+pub use v1::stage as stage_v1;
+pub use v2::{stage as stage_v2, DEEP_GATE_THRESH};
 
 /// A sleep stage. String forms are `"wake" | "light" | "deep" | "rem"` for cross-platform parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,5 +47,5 @@ pub struct StageSegment {
     pub stage: SleepStage,
 }
 
-// TODO: port the V2 (cardiorespiratory, 5.0/MG default) and V1 (Cole-Kripke, 4.0) engines here, with the
-// tuned per-epoch constants, the family detection gate, and the median detection/smoothing fixes.
+#[cfg(test)]
+mod golden_tests;
