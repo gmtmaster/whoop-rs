@@ -225,8 +225,12 @@ median, RMSSD, HR range) and persists them to SQLite keyed on **(person, strap)*
 same person on a new strap, is a fresh key, so a shared or handed-off strap never calibrates against another
 wearer's data. A metric's baseline finalizes once its (person, strap) reaches the calibration milestone.
 `whoopctl --person <id>` picks the wearer; `ingest <capture>` backfills from a saved raw JSONL, no band.
-Nightly RMSSD is **gap-aware and artifact-corrected** (successive differences pool only within time-contiguous, plausible R-R runs, and any ectopic/missed-beat jump over 200 ms is dropped — validated on the 838 drain: 29-37 ms, vs 150-184 ms without it,
-shared with the CLI via `HrvReadiness::rmssd_gap_aware`). `calibrate_fit` wires `linear_fit` into the store:
+Nightly RMSSD is **gap-aware and artifact-corrected**: the beats flatten in time order, then range-filter
+([300,2000] ms) and Malik ectopic-clean (radius 2, reject over 20 % of the local median) tracking a
+contiguity mask, and only successive differences whose two beats were adjacent in the source pool, divided
+by the contiguous-pair count — on clean data this equals the plain Task-Force RMSSD (validated on the 838
+drain: 29-37 ms, vs 150-184 ms without it). This cleaning is the single shared path behind `rmssd_gap_aware`
+and the windowed `hrv_windowed_avg` (bit-for-bit with the Kotlin front-end's Malik path). `calibrate_fit` wires `linear_fit` into the store:
 a device-relative field is fitted against a reference over the accumulated nights and the `{scale, offset,
 r}` persisted to a `fit_baseline` table once the milestone is met. (Known limit: nights bucket by UTC
 calendar day, so a sleep straddling UTC midnight splits across two rows — a physiological-day cutover is a
@@ -245,8 +249,10 @@ decoder:
 - **command frames to write** (the FFI never writes) — `client_hello` / `offload_start` / `offload_abort` /
   `r22_frames` / `get_hello`/`get_battery`/`get_data_range` / `stop_raw_flood` / `toggle_realtime_hr` /
   `reboot` / `buzz` / `broadcast_hr` / `set_config` / `alarm_set`/`alarm_disable`.
-- **derived metrics** (free fns) — `ppg_hr`, `hrv_rmssd_gap_aware`, `hrv_readiness`, `spo2_from_paired`,
-  `haptic_clock_pulses`.
+- **derived metrics** (free fns) — `ppg_hr`, `hrv_rmssd_gap_aware`, `hrv_windowed_avg` (the app's stored
+  session `avgHrv` — the mean of per-5-min-bucket gap-aware RMSSD over a span), `hrv_readiness`,
+  `spo2_from_paired`, `nightly_spo2_raw_means` (integer-truncated 4.0 raw red/IR ADC means over the in-bed
+  spans — raw ADC, never a calibrated percent), `haptic_clock_pulses`.
 
 Each platform does its own BLE natively and feeds notification bytes in; the app loop is: map notify UUID →
 `Chan`, call `feed`, and for each `Step` persist a record / write an `Ack` frame confirmed / stop on
