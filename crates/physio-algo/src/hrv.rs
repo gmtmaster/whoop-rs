@@ -2,7 +2,7 @@
 //! series. Input = the nightly RMSSD (ms) derived from decoded R-R; output = a tier + the band in ms.
 //! Returns `None` (calibrating) below `MIN_NIGHTS` valid nights. Wellness only, never medical.
 
-use crate::stats::{least_squares_slope, mean, sample_sd};
+use crate::stats::{least_squares_slope, mean, median, sample_sd};
 use whoop_protocol::HistoryRecord;
 
 /// Seconds per calendar day, the bucket a nightly metric is keyed on.
@@ -19,14 +19,16 @@ const SWC_K: f64 = 0.5;
 const MIN_NIGHTS: usize = crate::calibration::RECOVERY_SCORE.unlock as usize;
 const CV_TREND_WINDOW: usize = 28;
 const LONG_SD_FLOOR: f64 = 1e-9;
-/// R-R records more than this many seconds apart start a new run (an offload gap breaks the beat chain).
-const MAX_GAP_S: u32 = 5;
-/// A physiologically plausible R-R interval (ms); values outside break the chain rather than inflate RMSSD.
+/// A physiologically plausible R-R interval (ms); values outside are dropped before cleaning.
 const RR_MIN_MS: u16 = 300;
 const RR_MAX_MS: u16 = 2000;
 /// A beat-to-beat R-R change beyond this (ms) is an artifact (ectopic/missed beat), not real variability,
 /// so its squared difference is dropped from RMSSD — the standard HRV artifact-correction step.
 const MAX_BEAT_DELTA_MS: f64 = 200.0;
+/// Malik ectopic rejection: a beat deviating over this fraction from its local median is dropped.
+const ECTOPIC_THRESHOLD: f64 = 0.20;
+/// Half-width (beats) of the centred median window; a 5-beat window at radius 2.
+const ECTOPIC_WINDOW_RADIUS: usize = 2;
 
 /// Where the short baseline sits vs the personal normal band.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,31 +76,26 @@ impl HrvReadiness {
         Self::rmssd_runs(std::iter::once(rr_ms))
     }
 
-    /// Gap-aware nightly RMSSD (ms) from one night's per-record `(unix, R-R)` beats. Splits them into
-    /// time-contiguous, physiologically-plausible runs (breaking on a gap over `MAX_GAP_S` or an interval
-    /// outside the plausible band) and pools only within-run successive differences, so an offload gap or
-    /// an artifact can't inflate it. Input need not be sorted. `None` if no run has two beats.
+    /// Gap-aware nightly RMSSD (ms) from one night's per-record `(unix, R-R)` beats, matching the app's
+    /// cleaned RMSSD. Flattens the beats in time order, range-filters and Malik-ectopic-cleans them, then
+    /// pools only successive differences whose two beats were adjacent in the source: a dropped range or
+    /// ectopic beat splices its neighbours apart and that difference is skipped. Divides by the
+    /// contiguous-pair count. Input need not be sorted. `None` if no contiguous pair survives.
     pub fn rmssd_gap_aware(beats: &[(u32, Vec<u16>)]) -> Option<f64> {
         let mut order: Vec<&(u32, Vec<u16>)> = beats.iter().collect();
         order.sort_by_key(|(t, _)| *t);
-        let mut runs: Vec<Vec<u16>> = Vec::new();
-        let mut cur: Vec<u16> = Vec::new();
-        let mut last: Option<u32> = None;
-        for (unix, rr) in order {
-            if last.is_some_and(|p| unix.saturating_sub(p) > MAX_GAP_S) {
-                runs.push(std::mem::take(&mut cur));
+        let flat: Vec<u16> = order.iter().flat_map(|(_, rr)| rr.iter().copied()).collect();
+        let (nn, contiguous) = clean_rr_gap_aware(&flat);
+        let (mut sumsq, mut count) = (0.0f64, 0usize);
+        for i in 1..nn.len() {
+            if !contiguous[i] {
+                continue;
             }
-            for &ms in rr {
-                if (RR_MIN_MS..=RR_MAX_MS).contains(&ms) {
-                    cur.push(ms);
-                } else {
-                    runs.push(std::mem::take(&mut cur));
-                }
-            }
-            last = Some(*unix);
+            let d = nn[i] as f64 - nn[i - 1] as f64;
+            sumsq += d * d;
+            count += 1;
         }
-        runs.push(cur);
-        Self::rmssd_runs(runs.iter().map(Vec::as_slice))
+        (count > 0).then(|| (sumsq / count as f64).sqrt())
     }
 
     /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
@@ -164,6 +161,50 @@ fn tail(xs: &[f64], n: usize) -> &[f64] {
     &xs[xs.len().saturating_sub(n)..]
 }
 
+/// Range-filter then Malik ectopic-reject an ordered R-R series (ms), returning the clean beats and a
+/// contiguity mask: `contiguous[i]` is true only when beats `i` and `i-1` were adjacent in the input
+/// (no beat dropped between them). A splice from a dropped beat is where a successive-difference metric
+/// must skip. Index 0 is always false.
+fn clean_rr_gap_aware(rr: &[u16]) -> (Vec<u16>, Vec<bool>) {
+    let mut ranged_idx: Vec<usize> = Vec::new();
+    let mut ranged_val: Vec<u16> = Vec::new();
+    for (i, &v) in rr.iter().enumerate() {
+        if (RR_MIN_MS..=RR_MAX_MS).contains(&v) {
+            ranged_idx.push(i);
+            ranged_val.push(v);
+        }
+    }
+    let (mut kept_orig, mut kept_val): (Vec<usize>, Vec<u16>) = (Vec::new(), Vec::new());
+    if ranged_val.len() <= ECTOPIC_WINDOW_RADIUS {
+        (kept_orig, kept_val) = (ranged_idx, ranged_val);
+    } else {
+        for i in 0..ranged_val.len() {
+            let lo = i.saturating_sub(ECTOPIC_WINDOW_RADIUS);
+            let hi = (i + ECTOPIC_WINDOW_RADIUS).min(ranged_val.len() - 1);
+            let mut neighbours: Vec<f64> = Vec::with_capacity(hi - lo);
+            for (j, &v) in ranged_val.iter().enumerate().take(hi + 1).skip(lo) {
+                if j != i {
+                    neighbours.push(v as f64);
+                }
+            }
+            let keep = if neighbours.len() < 2 {
+                true
+            } else {
+                let med = median(&neighbours);
+                med <= 0.0 || (ranged_val[i] as f64 - med).abs() / med <= ECTOPIC_THRESHOLD
+            };
+            if keep {
+                kept_orig.push(ranged_idx[i]);
+                kept_val.push(ranged_val[i]);
+            }
+        }
+    }
+    let contiguous: Vec<bool> = (0..kept_val.len())
+        .map(|i| i > 0 && kept_orig[i] == kept_orig[i - 1] + 1)
+        .collect();
+    (kept_val, contiguous)
+}
+
 /// OLS slope of the rolling 7-night coefficient-of-variation series over the trailing `CV_TREND_WINDOW`.
 fn cv_slope(ell: &[f64]) -> f64 {
     let start = (ROLL_WINDOW - 1).max(ell.len().saturating_sub(CV_TREND_WINDOW));
@@ -218,16 +259,25 @@ mod tests {
     }
 
     #[test]
-    fn rmssd_gap_aware_breaks_on_time_gaps_and_artifacts() {
-        // Steady contiguous beats, then a far-away single beat (unsorted input) and an artifact interval.
-        let beats = vec![
-            (10_000u32, vec![1400u16]), // far gap isolates it into a lone 1-beat run (1400 ms is plausible)
-            (0, vec![600, 610]),
-            (1, vec![605, 615]),
-            (2, vec![5, 620]), // the 5 ms artifact breaks the chain, the 620 survives
-        ];
-        let g = HrvReadiness::rmssd_gap_aware(&beats).unwrap();
-        assert!(g < 20.0, "gap-aware RMSSD should stay small, got {g}");
+    fn clean_rr_gap_aware_drops_ectopic_and_splices() {
+        // A Malik-ectopic spike (1300) is dropped; its removal splices 810→806 apart so that difference is
+        // not contiguous. Values hand-verified against the app's cleanRRGapAware.
+        let (nn, contig) = clean_rr_gap_aware(&[800, 805, 810, 1300, 806, 802, 808]);
+        assert_eq!(nn, vec![800, 805, 810, 806, 802, 808]);
+        assert_eq!(contig, vec![false, true, true, false, true, true]);
+    }
+
+    #[test]
+    fn rmssd_gap_aware_matches_cleaned_kotlin() {
+        // Malik-ectopic splice: the dropped 1300 removes the 810→806 difference. sqrt(102/4).
+        let malik = vec![(0u32, vec![800u16, 805, 810, 1300, 806, 802, 808])];
+        assert!((HrvReadiness::rmssd_gap_aware(&malik).unwrap() - 5.049752469181039).abs() < 1e-12);
+        // Out-of-range 5 ms beat is dropped and splices 605→620 apart. sqrt(100/2).
+        let range = vec![(0u32, vec![600u16, 610, 605, 5, 620, 615])];
+        assert!((HrvReadiness::rmssd_gap_aware(&range).unwrap() - 7.0710678118654755).abs() < 1e-12);
+        // A clean series has no splices, so it equals the plain Task-Force RMSSD (÷ n-1). sqrt(325/4).
+        let clean = vec![(0u32, vec![800u16, 810, 820, 815, 805])];
+        assert!((HrvReadiness::rmssd_gap_aware(&clean).unwrap() - 9.013878188659973).abs() < 1e-12);
     }
 
     #[test]
