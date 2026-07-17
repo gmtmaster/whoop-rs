@@ -7,8 +7,10 @@ uniffi::setup_scaffolding!();
 
 use std::sync::{Arc, Mutex};
 
-use physio_algo::sleep;
-use whoop_metrics::{ppg_hr, HrvReadiness, Spo2};
+use physio_algo::{
+    hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr, sleep, strain, stress, vo2max,
+    HrvReadiness, Spo2,
+};
 use whoop_protocol::deframe::DeframerMap;
 use whoop_protocol::hello::GEN5_CLIENT_HELLO;
 use whoop_protocol::{
@@ -234,12 +236,12 @@ pub enum ReadinessTier {
     Suppressed,
 }
 
-impl From<whoop_metrics::ReadinessTier> for ReadinessTier {
-    fn from(t: whoop_metrics::ReadinessTier) -> Self {
+impl From<physio_algo::ReadinessTier> for ReadinessTier {
+    fn from(t: physio_algo::ReadinessTier) -> Self {
         match t {
-            whoop_metrics::ReadinessTier::Primed => ReadinessTier::Primed,
-            whoop_metrics::ReadinessTier::Normal => ReadinessTier::Normal,
-            whoop_metrics::ReadinessTier::Suppressed => ReadinessTier::Suppressed,
+            physio_algo::ReadinessTier::Primed => ReadinessTier::Primed,
+            physio_algo::ReadinessTier::Normal => ReadinessTier::Normal,
+            physio_algo::ReadinessTier::Suppressed => ReadinessTier::Suppressed,
         }
     }
 }
@@ -696,6 +698,305 @@ pub fn stage_sleep_v2(input: SleepInput) -> Vec<SleepSegment> {
 #[uniffi::export]
 pub fn stage_sleep_v1(input: SleepInput) -> Vec<SleepSegment> {
     to_sleep_segments(sleep::stage_v1(&input.into()))
+}
+
+/// One heart-rate tick (unix seconds + bpm) shared by strain, recovery, resting-HR and zones.
+#[derive(uniffi::Record)]
+pub struct HrTick {
+    pub ts: i64,
+    pub bpm: i32,
+}
+
+/// A personal baseline driver (mean + spread) for recovery z-scoring.
+#[derive(uniffi::Record)]
+pub struct DriverBaselineInfo {
+    pub mean: f64,
+    pub spread: f64,
+}
+
+impl From<DriverBaselineInfo> for recovery::DriverBaseline {
+    fn from(b: DriverBaselineInfo) -> Self {
+        recovery::DriverBaseline { mean: b.mean, spread: b.spread }
+    }
+}
+
+/// Nightly recovery drivers. Optional terms drop and the weights renormalise.
+#[derive(uniffi::Record)]
+pub struct RecoveryDrivers {
+    pub hrv: f64,
+    pub rhr: f64,
+    pub resp: Option<f64>,
+    pub hrv_baseline: Option<DriverBaselineInfo>,
+    pub rhr_baseline: Option<DriverBaselineInfo>,
+    pub resp_baseline: Option<DriverBaselineInfo>,
+    pub sleep_perf: Option<f64>,
+    pub skin_temp_dev: Option<f64>,
+    pub hrv_baseline_usable: bool,
+    pub recovery_index_slope: Option<f64>,
+    pub effort_baseline: Option<DriverBaselineInfo>,
+    pub prior_day_effort: Option<f64>,
+}
+
+/// Recovery "Charge" score in [0, 100]. `None` at cold-start or when no driver is available.
+#[uniffi::export]
+pub fn recovery_score(d: RecoveryDrivers) -> Option<f64> {
+    recovery::recovery(&recovery::RecoveryInput {
+        hrv: d.hrv,
+        rhr: d.rhr,
+        resp: d.resp,
+        hrv_baseline: d.hrv_baseline.map(Into::into),
+        rhr_baseline: d.rhr_baseline.map(Into::into),
+        resp_baseline: d.resp_baseline.map(Into::into),
+        sleep_perf: d.sleep_perf,
+        skin_temp_dev: d.skin_temp_dev,
+        hrv_baseline_usable: d.hrv_baseline_usable,
+        recovery_index_slope: d.recovery_index_slope,
+        effort_baseline: d.effort_baseline.map(Into::into),
+        prior_day_effort: d.prior_day_effort,
+    })
+}
+
+/// Recovery colour band ("red" | "yellow" | "green") for a score.
+#[uniffi::export]
+pub fn recovery_band(score: f64) -> String {
+    recovery::band(score).to_string()
+}
+
+/// Overnight HR-decline slope (bpm/hour) — the recovery-index driver.
+#[uniffi::export]
+pub fn recovery_index_slope(hr: Vec<HrTick>, start: i64, end: i64) -> Option<f64> {
+    let s: Vec<recovery::HrSample> = hr.into_iter().map(|h| recovery::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    recovery::recovery_index_slope(&s, start, end)
+}
+
+/// Count of nights carrying a usable nightly HRV — the calibration-progress count.
+#[uniffi::export]
+pub fn recovery_banked_nights(nightly_hrv: Vec<Option<f64>>) -> u32 {
+    recovery::banked_nights(&nightly_hrv, recovery::HRV_MIN_MS, recovery::HRV_MAX_MS) as u32
+}
+
+/// TRIMP accumulation method for strain.
+#[derive(uniffi::Enum)]
+pub enum StrainMethod {
+    Edwards,
+    Banister,
+}
+
+impl From<StrainMethod> for strain::Method {
+    fn from(m: StrainMethod) -> Self {
+        match m {
+            StrainMethod::Edwards => strain::Method::Edwards,
+            StrainMethod::Banister => strain::Method::Banister,
+        }
+    }
+}
+
+/// Cardiovascular Effort (0–100) from an HR series. `None` without enough data or when HRR ≤ 0.
+#[uniffi::export]
+pub fn strain_score(
+    hr: Vec<HrTick>,
+    max_hr: Option<f64>,
+    resting_hr: f64,
+    method: StrainMethod,
+    sex: String,
+    denominator: f64,
+) -> Option<f64> {
+    let s: Vec<strain::HrSample> = hr.into_iter().map(|h| strain::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    strain::strain(&s, max_hr, resting_hr, method.into(), &sex, denominator)
+}
+
+/// The default strain denominator (log-map scale onto 0–100).
+#[uniffi::export]
+pub fn strain_default_denominator() -> f64 {
+    strain::STRAIN_DENOMINATOR
+}
+
+/// Baevsky Stress Index histogram terms behind an SI.
+#[derive(uniffi::Record)]
+pub struct StressComponentsInfo {
+    pub mo_sec: f64,
+    pub amo_percent: f64,
+    pub mxdmn_sec: f64,
+    pub si: f64,
+}
+
+/// Baevsky Stress Index from a raw R-R series (ms). `None` on too-few beats or a degenerate range.
+#[uniffi::export]
+pub fn stress_index(rr_ms: Vec<f64>) -> Option<f64> {
+    stress::stress_index_raw(&rr_ms)
+}
+
+/// Full SI components from a raw R-R series (ms).
+#[uniffi::export]
+pub fn stress_components(rr_ms: Vec<f64>) -> Option<StressComponentsInfo> {
+    stress::components_raw(&rr_ms).map(|c| StressComponentsInfo {
+        mo_sec: c.mo_sec,
+        amo_percent: c.amo_percent,
+        mxdmn_sec: c.mxdmn_sec,
+        si: c.si,
+    })
+}
+
+/// Lowest 5-min tumbling-window mean bpm floor over `[start, end]`. `None` with no samples.
+#[uniffi::export]
+pub fn session_resting_hr(start: i64, end: i64, hr: Vec<HrTick>) -> Option<i32> {
+    let s: Vec<resting_hr::HrSample> = hr.into_iter().map(|h| resting_hr::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    resting_hr::session_resting_hr(start, end, &s)
+}
+
+/// Daily resting HR = min of the per-session floors.
+#[uniffi::export]
+pub fn daily_resting_hr(session_floors: Vec<Option<i32>>) -> Option<i32> {
+    resting_hr::daily_resting_hr(&session_floors)
+}
+
+/// A single HR zone as a bpm interval `[lower, upper)` plus its %HRmax band.
+#[derive(uniffi::Record)]
+pub struct HrZoneInfo {
+    pub number: u8,
+    pub lower: f64,
+    pub upper: f64,
+    pub lower_pct: f64,
+    pub upper_pct: f64,
+}
+
+/// Five HR zones, the max HR they were built from, and its source ("tanaka" | "manual").
+#[derive(uniffi::Record)]
+pub struct HrZoneSetInfo {
+    pub zones: Vec<HrZoneInfo>,
+    pub max_hr: f64,
+    pub source: String,
+}
+
+/// Seconds in each of the five zones (index 0 == Zone 1) plus time below Zone 1.
+#[derive(uniffi::Record)]
+pub struct TimeInZoneInfo {
+    pub seconds: Vec<f64>,
+    pub below_zone1: f64,
+}
+
+fn zone_set_to_ffi(z: hr_zones::HrZoneSet) -> HrZoneSetInfo {
+    HrZoneSetInfo {
+        zones: z
+            .zones
+            .iter()
+            .map(|zn| HrZoneInfo {
+                number: zn.number,
+                lower: zn.lower,
+                upper: zn.upper,
+                lower_pct: zn.lower_pct,
+                upper_pct: zn.upper_pct,
+            })
+            .collect(),
+        max_hr: z.max_hr,
+        source: z.source,
+    }
+}
+
+/// Age-derived (Tanaka) HR zones, or a manual max-HR override.
+#[uniffi::export]
+pub fn hr_zones_for_age(age: f64, max_hr_override: Option<f64>) -> HrZoneSetInfo {
+    zone_set_to_ffi(hr_zones::zones_for_age(age, max_hr_override))
+}
+
+/// Seconds spent in each HR zone over an HR series, using age-derived (or override) zones.
+#[uniffi::export]
+pub fn hr_time_in_zone(hr: Vec<HrTick>, age: f64, max_hr_override: Option<f64>) -> TimeInZoneInfo {
+    let zs = hr_zones::zones_for_age(age, max_hr_override);
+    let s: Vec<hr_zones::HrSample> = hr.into_iter().map(|h| hr_zones::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let t = hr_zones::time_in_zone(&s, &zs);
+    TimeInZoneInfo { seconds: t.seconds.to_vec(), below_zone1: t.below_zone1 }
+}
+
+/// A computed Fitness Age with the inputs to present it. `vo2max` is filled only with a waist.
+#[derive(uniffi::Record)]
+pub struct FitnessAgeInfo {
+    pub vo2max: Option<f64>,
+    pub fitness_age: f64,
+    pub chrono_age: f64,
+    pub delta_years: f64,
+    pub band_years: f64,
+    pub lower_confidence: bool,
+}
+
+/// Non-exercise VO2max estimate (ml/kg/min) from the waist-circumference model. Wellness only.
+#[uniffi::export]
+pub fn vo2max_estimate(age: f64, sex: String, waist_cm: f64, resting_hr: f64, pa_index: f64) -> f64 {
+    vo2max::estimate_vo2max(age, &sex, waist_cm, resting_hr, pa_index)
+}
+
+/// Full Fitness Age. `None` only if RHR or age is missing.
+#[uniffi::export]
+pub fn fitness_age_compute(
+    age: f64,
+    sex: String,
+    resting_hr: f64,
+    pa_index: f64,
+    waist_cm: Option<f64>,
+    lower_confidence: bool,
+) -> Option<FitnessAgeInfo> {
+    vo2max::compute(age, &sex, resting_hr, pa_index, waist_cm, lower_confidence).map(|r| FitnessAgeInfo {
+        vo2max: r.vo2max,
+        fitness_age: r.fitness_age,
+        chrono_age: r.chrono_age,
+        delta_years: r.delta_years,
+        band_years: r.band_years,
+        lower_confidence: r.lower_confidence,
+    })
+}
+
+/// One R-R beat for respiratory-rate estimation (unix seconds + interval ms).
+#[derive(uniffi::Record)]
+pub struct RrBeat {
+    pub ts: i64,
+    pub rr_ms: u16,
+}
+
+/// Respiratory rate (breaths/min) from R-R via RSA. `None` when the signal is too thin.
+#[uniffi::export]
+pub fn resp_rate_from_rr(beats: Vec<RrBeat>, start: i64, end: i64) -> Option<f64> {
+    let b: Vec<(i64, u16)> = beats.into_iter().map(|x| (x.ts, x.rr_ms)).collect();
+    respiratory_rate::resp_rate_from_rr(&b, start, end)
+}
+
+/// One raw IMU sample: 3-axis accelerometer (g) + 3-axis gyroscope (deg/s).
+#[derive(uniffi::Record)]
+pub struct ImuSampleInfo {
+    pub ax: f64,
+    pub ay: f64,
+    pub az: f64,
+    pub gx: f64,
+    pub gy: f64,
+    pub gz: f64,
+}
+
+/// Compact activity features over a window of raw IMU samples.
+#[derive(uniffi::Record)]
+pub struct ImuFeaturesInfo {
+    pub accel_energy_g: f64,
+    pub gyro_energy_dps: f64,
+    pub jerk_rms: f64,
+    pub cadence_hz: Option<f64>,
+    pub cadence_strength: f64,
+    pub sample_count: u32,
+}
+
+/// Accel/gyro energy, jerk and gait-band cadence over IMU samples at `sample_rate_hz`.
+#[uniffi::export]
+pub fn imu_features(samples: Vec<ImuSampleInfo>, sample_rate_hz: i32) -> ImuFeaturesInfo {
+    let s: Vec<imu_features::ImuSample> = samples
+        .into_iter()
+        .map(|x| imu_features::ImuSample { ax: x.ax, ay: x.ay, az: x.az, gx: x.gx, gy: x.gy, gz: x.gz })
+        .collect();
+    let f = imu_features::extract(&s, sample_rate_hz);
+    ImuFeaturesInfo {
+        accel_energy_g: f.accel_energy_g,
+        gyro_energy_dps: f.gyro_energy_dps,
+        jerk_rms: f.jerk_rms,
+        cadence_hz: f.cadence_hz,
+        cadence_strength: f.cadence_strength,
+        sample_count: f.sample_count as u32,
+    }
 }
 
 #[cfg(test)]
