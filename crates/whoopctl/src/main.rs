@@ -189,6 +189,10 @@ async fn main() -> Result<()> {
                 hr_watch(&records);
             }
         }
+        Cmd::DecodeCapture { file } => {
+            let (strap, records) = decode_capture(file, fam)?;
+            report::decode_report(file, strap.as_deref(), &records);
+        }
     }
     Ok(())
 }

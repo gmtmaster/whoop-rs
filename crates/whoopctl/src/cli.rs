@@ -99,4 +99,10 @@ pub(crate) enum Cmd {
         /// A raw-capture file (from `sync --raw`).
         capture: PathBuf,
     },
+    /// Decode a deep-buffer capture (whoop-debug `deepcap` JSONL) and report the v20/v21 breakdown +
+    /// sanity checks. No band needed.
+    DecodeCapture {
+        /// The deep-capture JSON Lines file.
+        file: PathBuf,
+    },
 }

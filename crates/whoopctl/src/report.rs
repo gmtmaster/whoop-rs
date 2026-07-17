@@ -9,6 +9,81 @@ use whoop_protocol::{records, Family, Frame, HistoryRecord, PacketType, Record};
 
 use crate::cli::Cli;
 
+/// Report the v20/v21 breakdown + sanity of a deep-buffer capture. IMU sanity = the gravity shell
+/// (|accel| ≈ 4096 LSB = 1 g within ±15% across all samples); optical sanity = the green channel (0)
+/// carrying a varying waveform while the dark reference (2/3) stays flat.
+pub(crate) fn decode_report(path: &Path, strap: Option<&str>, records: &[Record]) {
+    let (mut hist, mut ppg, mut imu, mut optical) = (0u32, 0u32, 0u32, 0u32);
+    let (mut imu_shell, mut imu_dims) = (0u32, (0usize, 0usize));
+    let (mut opt_pulse, mut opt_flat, mut opt_dims) = (0u32, 0u32, (0usize, 0usize));
+
+    for r in records {
+        match r {
+            Record::History(_) => hist += 1,
+            Record::Ppg(_) => ppg += 1,
+            Record::Imu(m) => {
+                imu += 1;
+                imu_dims = (m.accel.len(), 6);
+                let ok = !m.accel.is_empty()
+                    && m.accel.iter().all(|a| {
+                        let mag = ((a[0] as f64).powi(2) + (a[1] as f64).powi(2) + (a[2] as f64).powi(2)).sqrt();
+                        (3482.0..4710.0).contains(&mag) // 4096 ± 15%
+                    });
+                if ok {
+                    imu_shell += 1;
+                }
+            }
+            Record::Optical(o) => {
+                optical += 1;
+                opt_dims = (o.channels.len(), o.channels.first().map_or(0, |c| c.len()));
+                if span(o.channels.first()) > 8 {
+                    opt_pulse += 1; // green varies = a real waveform
+                }
+                if o.channels.get(2).is_some_and(|c| span(Some(c)) <= 8) {
+                    opt_flat += 1; // dark/ambient reference is flat
+                }
+            }
+        }
+    }
+
+    println!("decode-capture: {}  strap={}", path.display(), strap.unwrap_or("?"));
+    println!("  {} frames decoded — history {hist}, ppg {ppg}, imu(v21) {imu}, optical(v20) {optical}", records.len());
+    if imu > 0 {
+        println!(
+            "  v21 IMU:     {imu} buffers × {}×{}-axis; gravity-shell OK {imu_shell}/{imu} ({}%)",
+            imu_dims.0, imu_dims.1, pct(imu_shell, imu),
+        );
+    }
+    if optical > 0 {
+        println!(
+            "  v20 optical: {optical} buffers × {}ch×{}; green varies {opt_pulse}/{optical} ({}%), dark flat {opt_flat}/{optical} ({}%)",
+            opt_dims.0, opt_dims.1, pct(opt_pulse, optical), pct(opt_flat, optical),
+        );
+    }
+    if imu == 0 && optical == 0 {
+        println!("  ⚠ NO v20/v21 deep buffers here — only per-second v18/v26. Band wasn't worn+asleep under R22, or the backlog was already drained.");
+    } else {
+        let imu_ok = imu == 0 || imu_shell * 2 >= imu;
+        let opt_ok = optical == 0 || opt_pulse * 2 >= optical;
+        println!("  => decoders {}", if imu_ok && opt_ok { "VALIDATED on real bytes ✅" } else { "decoded, but sanity WEAK — check the layout ⚠" });
+    }
+}
+
+/// Min→max span of a channel's samples (0 if empty/None).
+fn span(ch: Option<&Vec<i32>>) -> i32 {
+    match ch {
+        Some(c) if !c.is_empty() => {
+            let (mn, mx) = c.iter().fold((i32::MAX, i32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+            mx.saturating_sub(mn)
+        }
+        _ => 0,
+    }
+}
+
+fn pct(n: u32, d: u32) -> u32 {
+    (n * 100).checked_div(d).unwrap_or(0)
+}
+
 /// Frame-type / history-version tallies over an offload, tracking which history versions failed to decode.
 #[derive(Default)]
 pub(crate) struct FrameStats {
