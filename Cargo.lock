@@ -1545,6 +1545,7 @@ dependencies = [
 name = "whoop-ffi"
 version = "0.1.0"
 dependencies = [
+ "physio-algo",
  "uniffi",
  "whoop-metrics",
  "whoop-protocol",

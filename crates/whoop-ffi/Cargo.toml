@@ -22,4 +22,5 @@ cli = ["uniffi/cli"]
 [dependencies]
 whoop-protocol.workspace = true
 whoop-metrics.workspace = true
+physio-algo.workspace = true
 uniffi = "0.32"

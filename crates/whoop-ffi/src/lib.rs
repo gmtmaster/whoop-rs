@@ -7,6 +7,7 @@ uniffi::setup_scaffolding!();
 
 use std::sync::{Arc, Mutex};
 
+use physio_algo::sleep;
 use whoop_metrics::{ppg_hr, HrvReadiness, Spo2};
 use whoop_protocol::deframe::DeframerMap;
 use whoop_protocol::hello::GEN5_CLIENT_HELLO;
@@ -251,6 +252,94 @@ pub struct HrvReadinessInfo {
     pub normal_low_ms: f64,
     pub normal_high_ms: f64,
     pub overreaching_watch: bool,
+}
+
+/// A staged sleep stage. String forms are `"wake" | "light" | "deep" | "rem"` for cross-platform parity.
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum SleepStage {
+    Wake,
+    Light,
+    Deep,
+    Rem,
+}
+
+impl From<sleep::SleepStage> for SleepStage {
+    fn from(s: sleep::SleepStage) -> Self {
+        match s {
+            sleep::SleepStage::Wake => SleepStage::Wake,
+            sleep::SleepStage::Light => SleepStage::Light,
+            sleep::SleepStage::Deep => SleepStage::Deep,
+            sleep::SleepStage::Rem => SleepStage::Rem,
+        }
+    }
+}
+
+/// A contiguous run of one stage over `[start, end]` wall-clock unix seconds.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepSegment {
+    pub start: i64,
+    pub end: i64,
+    pub stage: SleepStage,
+}
+
+/// One HR sample for the stager (`bpm` at unix second `ts`).
+#[derive(uniffi::Record, Clone)]
+pub struct SleepHrSample {
+    pub ts: i64,
+    pub bpm: u16,
+}
+
+/// A run of consecutive R-R intervals (ms) sharing one unix-second anchor `ts`.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepRrRun {
+    pub ts: i64,
+    pub intervals: Vec<u16>,
+}
+
+/// One 3-axis accel / gravity sample (g) at unix second `ts`.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepAccelSample {
+    pub ts: i64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+/// One raw respiration-ADC sample at unix second `ts` (accepted for parity; V2 recovers RSA from R-R).
+#[derive(uniffi::Record, Clone)]
+pub struct SleepRespSample {
+    pub ts: i64,
+    pub raw: i32,
+}
+
+/// The protocol-free input bundle for one detected in-bed span (`[start, end]` unix seconds).
+#[derive(uniffi::Record, Clone)]
+pub struct SleepInput {
+    pub start: i64,
+    pub end: i64,
+    pub hr: Vec<SleepHrSample>,
+    pub rr: Vec<SleepRrRun>,
+    pub accel: Vec<SleepAccelSample>,
+    pub resp: Vec<SleepRespSample>,
+}
+
+impl From<SleepInput> for sleep::SleepInput {
+    fn from(i: SleepInput) -> Self {
+        sleep::SleepInput {
+            start: i.start,
+            end: i.end,
+            hr: i.hr.into_iter().map(|h| sleep::HrSample { ts: h.ts, bpm: h.bpm }).collect(),
+            rr: i.rr.into_iter().map(|r| sleep::RrRun { ts: r.ts, intervals: r.intervals }).collect(),
+            accel: i.accel.into_iter().map(|a| sleep::AccelSample { ts: a.ts, x: a.x, y: a.y, z: a.z }).collect(),
+            resp: i.resp.into_iter().map(|r| sleep::RespSample { ts: r.ts, raw: r.raw }).collect(),
+        }
+    }
+}
+
+fn to_sleep_segments(segs: Vec<sleep::StageSegment>) -> Vec<SleepSegment> {
+    segs.into_iter()
+        .map(|s| SleepSegment { start: s.start, end: s.end, stage: s.stage.into() })
+        .collect()
 }
 
 fn result_to_u8(r: whoop_protocol::event::ResultCode) -> u8 {
@@ -596,6 +685,19 @@ pub fn spo2_from_paired(red: Vec<f64>, ir: Vec<f64>) -> Option<f64> {
     Spo2::from_paired(&red, &ir)
 }
 
+/// Sleep hypnogram via V2 (cardiorespiratory) — the 5.0/MG default. Per-30 s-epoch stage segments over
+/// the detected in-bed span. Pure and deterministic.
+#[uniffi::export]
+pub fn stage_sleep_v2(input: SleepInput) -> Vec<SleepSegment> {
+    to_sleep_segments(sleep::stage_v2(&input.into()))
+}
+
+/// Sleep hypnogram via V1 (Cole-Kripke) — the 4.0 recipe and the session-detection source of truth.
+#[uniffi::export]
+pub fn stage_sleep_v1(input: SleepInput) -> Vec<SleepSegment> {
+    to_sleep_segments(sleep::stage_v1(&input.into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Chan, Gen, Response, Step, WhoopCodec};
@@ -866,6 +968,32 @@ mod tests {
             }
             _ => panic!("expected Other"),
         }
+    }
+
+    #[test]
+    fn stage_sleep_v2_tiles_a_synthetic_night() {
+        use super::{stage_sleep_v2, SleepAccelSample, SleepHrSample, SleepInput, SleepRrRun, SleepStage};
+        let start = 1_749_517_200i64;
+        let dur = 90 * 60 * 4;
+        let (mut hr, mut rr, mut accel) = (Vec::new(), Vec::new(), Vec::new());
+        for i in 0..dur {
+            let ts = start + i;
+            let ph = (i / (90 * 60)) as usize;
+            accel.push(SleepAccelSample { ts, x: 0.0, y: 0.0, z: 1.0 });
+            let bpm: i64 = [50, 55, 58, 68][ph];
+            hr.push(SleepHrSample { ts, bpm: bpm as u16 });
+            rr.push(SleepRrRun { ts, intervals: vec![(60_000 / bpm) as u16] });
+        }
+        let input = SleepInput { start, end: start + dur, hr, rr, accel, resp: Vec::new() };
+        let segs = stage_sleep_v2(input);
+        assert!(!segs.is_empty());
+        assert_eq!(segs.first().unwrap().start, start);
+        assert_eq!(segs.last().unwrap().end, start + dur);
+        // Contiguous tiling, each a valid stage.
+        for w in segs.windows(2) {
+            assert_eq!(w[0].end, w[1].start);
+        }
+        assert!(matches!(segs[0].stage, SleepStage::Wake | SleepStage::Light | SleepStage::Deep | SleepStage::Rem));
     }
 
     #[test]
