@@ -62,6 +62,30 @@ impl Spo2 {
         Self::from_paired(&red, &ir)
     }
 
+    /// Integer-truncated nightly means of the 4.0 raw red/IR PPG ADC over the detected in-bed `spans`
+    /// (`[start, end]` inclusive, unix seconds). A sample counts when its `ts` lies inside any span; the
+    /// means truncate toward zero (sum/kept). `None` when either input is empty or no sample landed in-span.
+    /// Raw ADC only, never a calibrated percent.
+    pub fn nightly_raw_means(spans: &[(i64, i64)], samples: &[(i64, i32, i32)]) -> Option<(i32, i32)> {
+        if spans.is_empty() || samples.is_empty() {
+            return None;
+        }
+        let (mut red_sum, mut ir_sum): (i64, i64) = (0, 0);
+        let mut kept: i64 = 0;
+        for &(ts, red, ir) in samples {
+            if !spans.iter().any(|&(start, end)| ts >= start && ts <= end) {
+                continue;
+            }
+            red_sum += red as i64;
+            ir_sum += ir as i64;
+            kept += 1;
+        }
+        if kept == 0 {
+            return None;
+        }
+        Some(((red_sum / kept) as i32, (ir_sum / kept) as i32))
+    }
+
     /// Smoothed multi-night readout: soft-anchor the 30-night median to a plausible baseline (removing an
     /// uncalibrated DC offset while preserving spread), then report the 7-night median at that offset.
     /// `pct` is `None` while calibrating (< `MIN_NIGHTS`). `recent_nightly` is oldest → newest.
@@ -138,6 +162,23 @@ mod tests {
         assert_eq!(Spo2::from_paired(&[], &[]), None);
         let flat = vec![100.0; 20];
         assert_eq!(Spo2::from_paired(&flat, &flat), None); // zero AC → no window survives
+    }
+
+    #[test]
+    fn nightly_raw_means_truncates_in_span() {
+        let spans = [(1000i64, 2000i64)];
+        // red mean 30000, ir mean 20000; one out-of-span sample is dropped.
+        let mut samples: Vec<(i64, i32, i32)> =
+            (0..20).map(|i| (1000 + i, if i % 2 == 0 { 29000 } else { 31000 }, if i % 2 == 0 { 19000 } else { 21000 })).collect();
+        samples.push((5000, 99999, 99999));
+        assert_eq!(Spo2::nightly_raw_means(&spans, &samples), Some((30000, 20000)));
+    }
+
+    #[test]
+    fn nightly_raw_means_empty_or_no_in_span_is_none() {
+        assert_eq!(Spo2::nightly_raw_means(&[], &[(1000, 1, 1)]), None);
+        assert_eq!(Spo2::nightly_raw_means(&[(1000, 2000)], &[]), None);
+        assert_eq!(Spo2::nightly_raw_means(&[(1000, 2000)], &[(5000, 1, 1)]), None);
     }
 
     #[test]

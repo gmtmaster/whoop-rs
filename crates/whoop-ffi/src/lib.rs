@@ -702,6 +702,38 @@ pub fn spo2_from_paired(red: Vec<f64>, ir: Vec<f64>) -> Option<f64> {
     Spo2::from_paired(&red, &ir)
 }
 
+/// One in-bed span (`[start, end]` unix seconds) for the nightly SpO2 raw-means gate.
+#[derive(uniffi::Record)]
+pub struct Spo2Span {
+    pub start: i64,
+    pub end: i64,
+}
+
+/// One 4.0 raw SpO2 sample: red/IR PPG ADC at unix second `ts`.
+#[derive(uniffi::Record)]
+pub struct Spo2RawSample {
+    pub ts: i64,
+    pub red: i32,
+    pub ir: i32,
+}
+
+/// Integer-truncated nightly means of the raw red/IR ADC (the app's `DailyMetric.spo2Red`/`spo2Ir`).
+#[derive(uniffi::Record)]
+pub struct Spo2RawMeans {
+    pub red: i32,
+    pub ir: i32,
+}
+
+/// Nightly integer-truncated means of the 4.0 raw red/IR PPG ADC over the detected in-bed `spans`, the
+/// app's stored `DailyMetric.spo2Red`/`spo2Ir`. A sample counts when its `ts` lies inside any span.
+/// `None` when either input is empty or no sample landed in-span. Raw ADC only, never a calibrated percent.
+#[uniffi::export]
+pub fn nightly_spo2_raw_means(spans: Vec<Spo2Span>, samples: Vec<Spo2RawSample>) -> Option<Spo2RawMeans> {
+    let spans: Vec<(i64, i64)> = spans.into_iter().map(|s| (s.start, s.end)).collect();
+    let samples: Vec<(i64, i32, i32)> = samples.into_iter().map(|s| (s.ts, s.red, s.ir)).collect();
+    Spo2::nightly_raw_means(&spans, &samples).map(|(red, ir)| Spo2RawMeans { red, ir })
+}
+
 /// Sleep hypnogram via V2 (cardiorespiratory) — the 5.0/MG default. Per-30 s-epoch stage segments over
 /// the detected in-bed span. Pure and deterministic.
 #[uniffi::export]
@@ -1158,6 +1190,20 @@ mod tests {
         assert!(super::ppg_hr(vec![]).is_empty());
         let win = vec![super::RrRun { unix: 100, rr: vec![800, 810, 820, 815, 805] }];
         assert!((super::hrv_windowed_avg(100, 400, win).unwrap() - 9.013878188659973).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nightly_spo2_raw_means_truncates_in_span() {
+        let spans = vec![super::Spo2Span { start: 1000, end: 2000 }];
+        let samples = (0..20)
+            .map(|i| super::Spo2RawSample {
+                ts: 1000 + i,
+                red: if i % 2 == 0 { 29000 } else { 31000 },
+                ir: if i % 2 == 0 { 19000 } else { 21000 },
+            })
+            .collect();
+        let m = super::nightly_spo2_raw_means(spans, samples).unwrap();
+        assert_eq!((m.red, m.ir), (30000, 20000));
     }
 
     #[test]
