@@ -12,6 +12,7 @@ members = [
     "crates/ble-btleplug",
     "crates/whoop-client",
     "crates/whoop-metrics",
+    "crates/physio-algo",
     "crates/whoop-store",
     "crates/whoopctl",
     "crates/whoop-ffi",
@@ -31,6 +32,7 @@ ble-core = { path = "crates/ble-core" }
 ble-btleplug = { path = "crates/ble-btleplug" }
 whoop-client = { path = "crates/whoop-client" }
 whoop-metrics = { path = "crates/whoop-metrics" }
+physio-algo = { path = "crates/physio-algo" }
 whoop-store = { path = "crates/whoop-store" }
 btleplug = "0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

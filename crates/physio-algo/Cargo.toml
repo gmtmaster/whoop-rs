@@ -1,0 +1,11 @@
+[package]
+name = "physio-algo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Brand-neutral physiological algorithms (sleep staging, HRV, PPG, SpO2, recovery, strain, calibration). Protocol-free: plain-value inputs, no wire codec, no BLE, no IO. Outputs are wellness estimates, never medical."
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = "1"
