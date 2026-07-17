@@ -88,6 +88,24 @@ pub fn event_payload_hex(f: &Frame) -> Option<String> {
     Some(s)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Metadata {
+    pub meta_type: u8, // inner cmd byte: 1 start / 2 end / 3 complete
+    pub unix: u32,     // record unix @ inner 3 (meaningful for HISTORY_END)
+    pub trim_cursor: u32, // trim cursor @ inner 13 (meaningful for HISTORY_END)
+}
+
+/// METADATA (type 49) offload-state fields. START/COMPLETE carry no meaningful unix/trim on the shorter
+/// body (they read 0); the consumer keys those off `meta_type`.
+pub fn metadata(f: &Frame) -> Option<Metadata> {
+    let b = f.inner();
+    Some(Metadata {
+        meta_type: *b.get(2)?,
+        unix: u32_at(b, 3).unwrap_or(0),
+        trim_cursor: u32_at(b, 13).unwrap_or(0),
+    })
+}
+
 /// METADATA HISTORY_END 8-byte end_data (trim u32 + next u32) @ inner 13..21 — echoed verbatim in the ACK.
 pub fn history_end_data(f: &Frame) -> Option<[u8; 8]> {
     let s = f.inner().get(13..21)?;
@@ -146,6 +164,30 @@ mod tests {
         let hex = event_payload_hex(&f).unwrap();
         assert_eq!(hex.len(), (f.inner().len() - 8) * 2);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn metadata_reads_meta_type_unix_trim_from_real_history_end() {
+        let wire = crate::bytes::from_hex(
+            "aa011c00010023d1319102b949596a705d3b000000fdba010010000000000000f269faec",
+        )
+        .unwrap();
+        let f = framing::decode(Family::Gen5, &wire).unwrap();
+        assert!(f.crc_ok);
+        let m = metadata(&f).unwrap();
+        assert_eq!(m.meta_type, 2); // HISTORY_END
+        assert_eq!(m.unix, 1_784_236_473);
+        assert_eq!(m.trim_cursor, 113_405);
+    }
+
+    #[test]
+    fn metadata_complete_has_meta_type_only() {
+        let wire = framing::encode(Family::Gen5, PacketType::Metadata.to_u8(), 0, 3, &[]);
+        let f = framing::decode(Family::Gen5, &wire).unwrap();
+        let m = metadata(&f).unwrap();
+        assert_eq!(m.meta_type, 3); // HISTORY_COMPLETE
+        assert_eq!(m.unix, 0);
+        assert_eq!(m.trim_cursor, 0);
     }
 
     #[test]

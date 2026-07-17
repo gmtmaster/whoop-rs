@@ -169,7 +169,7 @@ fn print_spo2_5(history: &[HistoryRecord]) {
 
 /// Print a one-look summary of a decode: counts by kind, HR range, R-R total, time span, and where saved.
 pub(crate) fn report_sync(records: &[Record], out: &Path, wiped: bool) {
-    let (mut hist, mut ppg, mut imu) = (0u32, 0u32, 0u32);
+    let (mut hist, mut ppg, mut imu, mut optical) = (0u32, 0u32, 0u32, 0u32);
     let (mut hr_lo, mut hr_hi) = (u8::MAX, 0u8);
     let mut rr = 0usize;
     let (mut t0, mut t1) = (u32::MAX, 0u32);
@@ -192,13 +192,17 @@ pub(crate) fn report_sync(records: &[Record], out: &Path, wiped: bool) {
                 imu += 1;
                 i.unix
             }
+            Record::Optical(o) => {
+                optical += 1;
+                o.unix
+            }
         };
         if unix > 0 {
             t0 = t0.min(unix);
             t1 = t1.max(unix);
         }
     }
-    println!("{} records  (history {hist}, ppg {ppg}, imu {imu})", records.len());
+    println!("{} records  (history {hist}, ppg {ppg}, imu {imu}, optical {optical})", records.len());
     if hr_hi > 0 {
         println!("heart rate {hr_lo}-{hr_hi} bpm, {rr} R-R intervals");
     }

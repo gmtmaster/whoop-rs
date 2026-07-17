@@ -24,6 +24,53 @@ pub enum CommandResponse {
     Other { cmd: u8, result: Option<ResultCode> },
 }
 
+/// The plausible unix window a banked-history word must fall in (≈2023-11 .. 2030-03).
+const PLAUSIBLE_LO: u32 = 1_700_000_000;
+const PLAUSIBLE_HI: u32 = 1_900_000_000;
+
+fn word_le(frame: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes([frame[i], frame[i + 1], frame[i + 2], frame[i + 3]])
+}
+
+/// Newest plausible unix banked by the strap, scanning EVERY byte offset of a GET_DATA_RANGE frame (the
+/// newest-record word isn't on a fixed grid). Prefers the newest word that is NOT implausibly future
+/// (> wall_now + skew) so a garbage future word can't latch and stall auto-sync, falling back to the
+/// newest-any word so a genuinely future-dated RTC still surfaces. `None` = too short / no plausible word.
+/// Replaces the fixed-offset `CommandResponse::DataRange` read for the sync gate.
+pub fn data_range_scan_newest(frame: &[u8], wall_now_unix: u64, future_skew_seconds: u64) -> Option<u32> {
+    let cutoff = wall_now_unix.saturating_add(future_skew_seconds);
+    let mut newest_not_future: Option<u32> = None;
+    let mut newest_any: Option<u32> = None;
+    let mut i = 0;
+    while i + 4 <= frame.len() {
+        let w = word_le(frame, i);
+        if (PLAUSIBLE_LO..=PLAUSIBLE_HI).contains(&w) {
+            newest_any = Some(newest_any.map_or(w, |m| m.max(w)));
+            if u64::from(w) <= cutoff {
+                newest_not_future = Some(newest_not_future.map_or(w, |m| m.max(w)));
+            }
+        }
+        i += 1;
+    }
+    newest_not_future.or(newest_any)
+}
+
+/// Oldest plausible unix banked (start of history), scanning ONLY the 4-byte grid aligned from offset 7 —
+/// deliberately asymmetric with the newest scan: the minimum is fragile (an any-offset scan surfaces a
+/// spurious WHOOP-4 straddle word that would hijack it), the maximum is not. `None` if no distinct word.
+pub fn data_range_scan_oldest(frame: &[u8]) -> Option<u32> {
+    let mut oldest: Option<u32> = None;
+    let mut i = 7;
+    while i + 4 <= frame.len() {
+        let w = word_le(frame, i);
+        if (PLAUSIBLE_LO..=PLAUSIBLE_HI).contains(&w) {
+            oldest = Some(oldest.map_or(w, |m| m.min(w)));
+        }
+        i += 4;
+    }
+    oldest
+}
+
 pub fn decode(f: &Frame) -> Option<CommandResponse> {
     let p = f.payload();
     let cmd = f.cmd();
@@ -205,6 +252,45 @@ mod tests {
             }
             other => panic!("expected Hello, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn data_range_scan_pins_newest_and_oldest_on_a_real_frame() {
+        let frame = crate::bytes::from_hex(
+            "aa014c00010032d124f22204010140bb0100f9ba010001bb0100f9ba010010000000000002006a00000088ff1d001432b869cc4c00004549596ab83e00004549596ab83e0000ae49596aeb1100000000d0da9256",
+        )
+        .unwrap();
+        // Wall well ahead of the banked newest so nothing is future-skewed.
+        assert_eq!(super::data_range_scan_newest(&frame, 1_784_236_480, 3600), Some(1_784_236_462));
+        // Oldest scans the aligned-from-7 grid; the newest word does not sit on it, so the min is the
+        // deep-backlog start, not the recent word.
+        assert_eq!(super::data_range_scan_oldest(&frame), Some(1_778_385_408));
+    }
+
+    #[test]
+    fn data_range_newest_prefers_not_future_but_falls_back() {
+        // Two plausible words: an in-window one and a future-skewed one.
+        let mut frame = vec![0u8; 12];
+        frame[0..4].copy_from_slice(&1_784_000_000u32.to_le_bytes());
+        frame[6..10].copy_from_slice(&1_850_000_000u32.to_le_bytes()); // implausibly future vs wall
+        // Prefer the non-future word so a garbage future word can't latch.
+        assert_eq!(super::data_range_scan_newest(&frame, 1_784_000_100, 3600), Some(1_784_000_000));
+        // With no non-future word, fall back to the newest-any (a genuine future-dated RTC surfaces).
+        let mut only_future = vec![0u8; 4];
+        only_future.copy_from_slice(&1_850_000_000u32.to_le_bytes());
+        assert_eq!(super::data_range_scan_newest(&only_future, 1_784_000_100, 3600), Some(1_850_000_000));
+    }
+
+    #[test]
+    fn data_range_oldest_skips_the_off_grid_straddle_word() {
+        // A plausible word only at an off-grid offset (not aligned from 7) must NOT hijack the minimum.
+        let mut frame = vec![0u8; 15];
+        frame[6..10].copy_from_slice(&1_750_000_000u32.to_le_bytes()); // straddle, off the from-7 grid
+        assert_eq!(super::data_range_scan_oldest(&frame), None);
+        // Same word on the grid (offset 7) is accepted.
+        let mut on_grid = vec![0u8; 15];
+        on_grid[7..11].copy_from_slice(&1_750_000_000u32.to_le_bytes());
+        assert_eq!(super::data_range_scan_oldest(&on_grid), Some(1_750_000_000));
     }
 
     #[test]

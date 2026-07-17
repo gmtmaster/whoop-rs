@@ -11,8 +11,8 @@ use whoop_metrics::{ppg_hr, HrvReadiness, Spo2};
 use whoop_protocol::deframe::DeframerMap;
 use whoop_protocol::hello::GEN5_CLIENT_HELLO;
 use whoop_protocol::{
-    alarm, command, config, console, framing, haptic, live, records, response, Channel, Family, Offload,
-    OffloadStep, PacketType, Record,
+    advertising, alarm, clock, command, config, console, framing, haptic, live, records, response, Channel,
+    Family, Offload, OffloadStep, PacketType, Record,
 };
 
 #[derive(uniffi::Enum, Clone, Copy)]
@@ -104,6 +104,10 @@ pub enum Step {
     /// A raw 6-axis IMU buffer (v21): 100 Hz accel + gyro, interleaved x,y,z per sample (raw i16 LSB —
     /// scale accel by 1/4096 for g, gyro by 2000/32768 for deg/s).
     Imu { unix: u32, sample_rate_hz: u16, accel: Vec<i16>, gyro: Vec<i16> },
+    /// A raw multi-wavelength optical buffer (v20): ~25 Hz × 6 channels, raw 20-bit signed ADC counts,
+    /// flattened channel-major (25 samples of ch0, then ch1, …). Channels [0,1] green, [2,3] ambient,
+    /// [4,5] red/IR (inferred). SpO2 % is not here — it rides the v18 summary.
+    Optical { unix: u32, sample_rate_hz: u16, channels: u8, samples: Vec<i32> },
     /// Write these bytes (confirmed) to the command characteristic — the mandatory HISTORY_END ACK.
     Ack { frame: Vec<u8> },
     /// The drain finished.
@@ -119,6 +123,12 @@ fn to_step(s: OffloadStep) -> Step {
             sample_rate_hz: m.sample_rate_hz,
             accel: m.accel.into_iter().flatten().collect(),
             gyro: m.gyro.into_iter().flatten().collect(),
+        },
+        OffloadStep::Record(Record::Optical(o)) => Step::Optical {
+            unix: o.unix,
+            sample_rate_hz: o.sample_rate_hz,
+            channels: o.channels.len() as u8,
+            samples: o.channels.into_iter().flatten().collect(),
         },
         OffloadStep::Ack(frame) => Step::Ack { frame },
         OffloadStep::Complete => Step::Complete,
@@ -154,6 +164,35 @@ pub enum Response {
     ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
     BatteryPack { serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
     Other { cmd: u8, result: Option<u8> },
+}
+
+/// METADATA offload-state fields: `meta_type` (1 start / 2 end / 3 complete) drives the drain, and for a
+/// HISTORY_END `unix` + `trim_cursor` are the ack/advance cursor. `crc_ok` lets the app gate on a
+/// checksum-valid frame (a forged HISTORY_END must not advance the trim over unstored data).
+#[derive(uniffi::Record)]
+pub struct MetadataInfo {
+    pub meta_type: u8,
+    pub unix: u32,
+    pub trim_cursor: u32,
+    pub crc_ok: bool,
+}
+
+/// A single-frame v26 24 Hz PPG waveform (24 i16 samples, single wavelength).
+#[derive(uniffi::Record)]
+pub struct PpgFrame {
+    pub unix: u32,
+    pub record_id: Option<u16>,
+    pub samples: Vec<i16>,
+}
+
+/// A single-frame v21 100 Hz 6-axis IMU buffer: accel + gyro interleaved x,y,z per sample (raw i16 LSB —
+/// scale accel by 1/4096 for g, gyro by 2000/32768 for deg/s).
+#[derive(uniffi::Record)]
+pub struct ImuFrame {
+    pub unix: u32,
+    pub sample_rate_hz: u16,
+    pub accel: Vec<i16>,
+    pub gyro: Vec<i16>,
 }
 
 /// One haptic buzz pulse; a clock chime is a sequence of these (write a buzz per pulse).
@@ -285,6 +324,36 @@ impl WhoopCodec {
         }
     }
 
+    /// Decode a single METADATA frame's offload-state fields (meta_type + unix + trim_cursor + crc_ok), so
+    /// the app's offload state machine can recognise HISTORY_END/COMPLETE. `None` off a non-metadata frame.
+    pub fn decode_metadata(&self, raw: Vec<u8>) -> Option<MetadataInfo> {
+        let f = framing::decode(self.family, &raw).ok()?;
+        if !matches!(f.packet().canonical(), PacketType::Metadata) {
+            return None;
+        }
+        let m = live::metadata(&f)?;
+        Some(MetadataInfo { meta_type: m.meta_type, unix: m.unix, trim_cursor: m.trim_cursor, crc_ok: f.crc_ok })
+    }
+
+    /// Decode a single v26 PPG waveform frame (the 24 optical samples) for offline replay / the deep buffers.
+    pub fn decode_ppg_frame(&self, raw: Vec<u8>) -> Option<PpgFrame> {
+        let f = framing::decode(self.family, &raw).ok()?;
+        let p = records::decode_ppg(&f)?;
+        Some(PpgFrame { unix: p.unix, record_id: p.record_id, samples: p.samples })
+    }
+
+    /// Decode a single v21 6-axis IMU buffer frame (accel/gyro columns) for the deep-buffer diagnostics.
+    pub fn decode_imu_frame(&self, raw: Vec<u8>) -> Option<ImuFrame> {
+        let f = framing::decode(self.family, &raw).ok()?;
+        let m = records::decode_imu(&f)?;
+        Some(ImuFrame {
+            unix: m.unix,
+            sample_rate_hz: m.sample_rate_hz,
+            accel: m.accel.into_iter().flatten().collect(),
+            gyro: m.gyro.into_iter().flatten().collect(),
+        })
+    }
+
     /// Drop any buffered partial frames — call on (re)connect.
     pub fn reset(&self) {
         self.inner.lock().unwrap().deframers.reset();
@@ -409,6 +478,45 @@ impl WhoopCodec {
     pub fn alarm_disable_frame(&self, seq: u8) -> Vec<u8> {
         framing::command(self.family, seq, command::DISABLE_ALARM, &alarm::disable_rev2())
     }
+
+    /// Generic outbound COMMAND builder for opcodes without a dedicated method (get-clock/version,
+    /// alarm-readback, run-alarm, stop-haptics, historical-data-result, plus the gated set-clock/adv-name
+    /// the app allow-lists). Refuses the genuinely-destructive set (trim/DFU) so it can't be built here.
+    pub fn command_frame(&self, seq: u8, cmd: u8, payload: Vec<u8>) -> Option<Vec<u8>> {
+        if command::is_destructive(cmd) {
+            return None;
+        }
+        Some(framing::command(self.family, seq, cmd, &payload))
+    }
+
+    /// SET_CLOCK — the 8-byte form newer firmware latches. Gated in the app.
+    pub fn set_clock_frame(&self, seq: u8, now_unix: u32) -> Vec<u8> {
+        framing::command(self.family, seq, command::SET_CLOCK, &clock::set_clock_payload(now_unix))
+    }
+
+    /// SET_CLOCK — the legacy 9-byte form older 4.0 firmware needs (a no-op on newer). Sent alongside the
+    /// 8-byte form so either firmware latches.
+    pub fn set_clock_legacy_frame(&self, seq: u8, now_unix: u32) -> Vec<u8> {
+        framing::command(self.family, seq, command::SET_CLOCK, &clock::set_clock_payload_legacy(now_unix))
+    }
+
+    /// SET_ALARM_TIME — the WHOOP 4.0 9-byte body (minute-precision). `wake_epoch_secs` is resolved
+    /// app-side. Experimental, UI-gated.
+    pub fn alarm_set_frame_gen4(&self, seq: u8, wake_epoch_secs: u32) -> Vec<u8> {
+        framing::command(self.family, seq, command::SET_ALARM_TIME, &alarm::whoop4_build(wake_epoch_secs))
+    }
+
+    /// RUN_HAPTICS_PATTERN — the 4.0 preset buzz `[pattern_id][loops][0][0][0]` (pattern 2 = graduated
+    /// alarm buzz). On 5/MG the app remaps to the maverick buzz instead.
+    pub fn run_haptics_frame(&self, seq: u8, pattern_id: u8, loops: u8) -> Vec<u8> {
+        framing::command(self.family, seq, command::RUN_HAPTICS_PATTERN, &haptic::run_haptics_pattern(pattern_id, loops))
+    }
+
+    /// SET_ADVERTISING_NAME — rename the 4.0 strap's BLE advertising name (clamped to 24 UTF-8 bytes). The
+    /// strap reboots to apply. Gated in the app.
+    pub fn advertising_name_frame(&self, seq: u8, name: String) -> Vec<u8> {
+        framing::command(self.family, seq, command::SET_ADVERTISING_NAME, &advertising::advertising_name_payload(&name))
+    }
 }
 
 /// The haptic pulses for a clock chime (write a buzz per pulse, spaced by its gap). Pure encoder.
@@ -418,6 +526,21 @@ pub fn haptic_clock_pulses(hour: u32, minute: u32, is_24h: bool) -> Vec<Pulse> {
         .into_iter()
         .map(|p| Pulse { duration_ms: p.duration_ms, gap_ms: p.gap_ms })
         .collect()
+}
+
+/// Newest plausible unix banked, scanning EVERY byte offset of a GET_DATA_RANGE frame and preferring the
+/// newest non-future word (falls back to newest-any). This is the sync gate — it REPLACES the fixed-offset
+/// `Response::DataRange` newest read.
+#[uniffi::export]
+pub fn data_range_newest(frame: Vec<u8>, wall_now_unix: u64, future_skew_seconds: u64) -> Option<u32> {
+    response::data_range_scan_newest(&frame, wall_now_unix, future_skew_seconds)
+}
+
+/// Oldest plausible unix banked (backlog depth), scanning only the aligned-from-7 grid (asymmetric with
+/// the newest scan by design, to dodge a WHOOP-4 straddle word).
+#[uniffi::export]
+pub fn data_range_oldest(frame: Vec<u8>) -> Option<u32> {
+    response::data_range_scan_oldest(&frame)
 }
 
 /// HR from a v26 optical PPG buffer (24 Hz autocorrelation).
@@ -597,5 +720,83 @@ mod tests {
         assert!(super::hrv_rmssd_gap_aware(runs).unwrap() < 20.0);
         assert!(super::hrv_readiness(vec![Some(50.0); 5]).is_some());
         assert!(super::ppg_hr(vec![]).is_empty());
+    }
+
+    #[test]
+    fn decode_metadata_reads_a_real_history_end() {
+        let raw = whoop_protocol::bytes::from_hex(
+            "aa011c00010023d1319102b949596a705d3b000000fdba010010000000000000f269faec",
+        )
+        .unwrap();
+        let m = WhoopCodec::new(Gen::Gen5).decode_metadata(raw).unwrap();
+        assert_eq!(m.meta_type, 2);
+        assert_eq!(m.unix, 1_784_236_473);
+        assert_eq!(m.trim_cursor, 113_405);
+        assert!(m.crc_ok);
+    }
+
+    #[test]
+    fn decode_metadata_rejects_a_non_metadata_frame() {
+        assert!(WhoopCodec::new(Gen::Gen5).decode_metadata(v18_frame()).is_none());
+    }
+
+    #[test]
+    fn decode_ppg_frame_reads_a_real_v26() {
+        let raw = whoop_protocol::bytes::from_hex(
+            "aa015000010035412f1a804b047b019452596aae0701004b8503006bfdcffd36fe50fe12ff73ff6dff42ffa7ffc9fff9ffe5ff5c005a007a00f20089003000dbfd2efd0bfe3ffeaefe3affc06c213c50070001001ddc65fe",
+        )
+        .unwrap();
+        let p = WhoopCodec::new(Gen::Gen5).decode_ppg_frame(raw).unwrap();
+        assert_eq!(p.record_id, Some(1099));
+        assert_eq!(p.unix, 1_784_238_740);
+        assert_eq!(p.samples.len(), 24);
+        assert_eq!(p.samples[0], -661);
+    }
+
+    #[test]
+    fn decode_imu_frame_reads_a_synthetic_v21() {
+        let f = WhoopCodec::new(Gen::Gen5).decode_imu_frame(v21_imu_frame()).unwrap();
+        assert_eq!(f.sample_rate_hz, 100);
+        assert_eq!(f.accel.len(), 300);
+        assert_eq!(f.gyro.len(), 300);
+        assert_eq!(f.accel[0], 4096);
+    }
+
+    #[test]
+    fn data_range_scan_free_fns_pin_a_real_frame() {
+        let frame = whoop_protocol::bytes::from_hex(
+            "aa014c00010032d124f22204010140bb0100f9ba010001bb0100f9ba010010000000000002006a00000088ff1d001432b869cc4c00004549596ab83e00004549596ab83e0000ae49596aeb1100000000d0da9256",
+        )
+        .unwrap();
+        assert_eq!(super::data_range_newest(frame.clone(), 1_784_236_480, 3600), Some(1_784_236_462));
+        assert_eq!(super::data_range_oldest(frame), Some(1_778_385_408));
+    }
+
+    #[test]
+    fn generic_command_frame_builds_and_refuses_destructive() {
+        let c = WhoopCodec::new(Gen::Gen5);
+        let f = c.command_frame(3, command::GET_ALARM_TIME, vec![0x00]).unwrap();
+        assert_eq!(framing::decode(Family::Gen5, &f).unwrap().cmd(), command::GET_ALARM_TIME);
+        // The genuinely-destructive set can't be built even through the generic door.
+        assert!(c.command_frame(0, command::FORCE_TRIM, vec![]).is_none());
+        assert!(c.command_frame(0, command::ENTER_BLE_DFU, vec![]).is_none());
+    }
+
+    #[test]
+    fn gen4_encoder_frames_carry_the_right_opcodes_and_bodies() {
+        let c = WhoopCodec::new(Gen::Gen4);
+        let checks: [(Vec<u8>, u8); 5] = [
+            (c.set_clock_frame(0, 1_784_000_000), command::SET_CLOCK),
+            (c.set_clock_legacy_frame(0, 1_784_000_000), command::SET_CLOCK),
+            (c.alarm_set_frame_gen4(0, 1_784_000_000), command::SET_ALARM_TIME),
+            (c.run_haptics_frame(0, 2, 3), command::RUN_HAPTICS_PATTERN),
+            (c.advertising_name_frame(0, "noop".into()), command::SET_ADVERTISING_NAME),
+        ];
+        for (frame, op) in checks {
+            assert_eq!(framing::decode(Family::Gen4, &frame).unwrap().cmd(), op);
+        }
+        // The 8-byte vs legacy 9-byte set-clock bodies differ in length only.
+        assert_eq!(framing::decode(Family::Gen4, &c.set_clock_frame(0, 1)).unwrap().payload().len(), 8);
+        assert_eq!(framing::decode(Family::Gen4, &c.set_clock_legacy_frame(0, 1)).unwrap().payload().len(), 9);
     }
 }

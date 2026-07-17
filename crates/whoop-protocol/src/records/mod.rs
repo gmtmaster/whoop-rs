@@ -57,6 +57,20 @@ pub struct ImuRecord {
 pub const IMU_ACCEL_SCALE_G: f32 = 1.0 / 4096.0;
 pub const IMU_GYRO_SCALE_DPS: f32 = 2000.0 / 32768.0;
 
+/// A raw multi-wavelength optical offload buffer (v20 on 5.0/MG): ~25 Hz across 6 photodiode
+/// channels, shipped in the R22 deep buffers. `channels` is 6 × 25 raw 20-bit signed ADC counts.
+/// Channel roles (upstream RE, partly inferred): [0,1] green (carry the rest cardiac pulse),
+/// [2,3] ambient/dark reference, [4,5] further optical (red/IR inferred, unproven). SpO2 % is NOT
+/// derived here — the strap's own computed value rides v18 (`HistoryRecord.spo2_pct`).
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct OpticalRecord {
+    pub version: u8,
+    pub unix: u32,
+    pub sample_rate_hz: u16,
+    pub channels: Vec<Vec<i32>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(tag = "kind"))]
@@ -64,6 +78,7 @@ pub enum Record {
     History(HistoryRecord),
     Ppg(PpgRecord),
     Imu(ImuRecord),
+    Optical(OpticalRecord),
 }
 
 /// Decode a CRC-checked type-47 frame. Version-keyed, except the IMU deep buffer is identified by its
@@ -77,6 +92,7 @@ pub fn decode(frame: &Frame) -> Option<Record> {
     }
     match (frame.family, frame.version()) {
         (Family::Gen5, 18) => gen5::v18(frame).map(Record::History),
+        (Family::Gen5, 20) => gen5::v20_optical(frame).map(Record::Optical),
         (Family::Gen5, 26) => gen5::v26(frame).map(Record::Ppg),
         (Family::Gen4, 12) | (Family::Gen4, 24) => gen4::v24(frame).map(Record::History),
         (Family::Gen4, 5) | (Family::Gen4, 7) | (Family::Gen4, 9) => gen4::v5(frame).map(Record::History),
@@ -86,6 +102,18 @@ pub fn decode(frame: &Frame) -> Option<Record> {
         // Unmapped 5.0/MG version → skip (the IMU deep buffer was already tried above).
         (Family::Gen5, _) => None,
     }
+}
+
+/// Single-frame v26 24 Hz PPG waveform decode (5.0/MG). `None` off-generation or on a non-v26 frame —
+/// the offload path yields these via `decode`, this is the single-frame door the FFI needs.
+pub fn decode_ppg(frame: &Frame) -> Option<PpgRecord> {
+    (frame.family == Family::Gen5).then(|| gen5::v26(frame)).flatten()
+}
+
+/// Single-frame v21 100 Hz 6-axis IMU decode (5.0/MG). `None` off-generation or if the sample-count gate
+/// fails. Version-independent (gated on the in-packet counts), matching `decode`'s IMU-first dispatch.
+pub fn decode_imu(frame: &Frame) -> Option<ImuRecord> {
+    (frame.family == Family::Gen5).then(|| gen5::v21_imu(frame)).flatten()
 }
 
 /// The strict gate for accepting an unmapped 4.0 version via the v24 fallback: HR 25..230 AND |g| ≈ 1.

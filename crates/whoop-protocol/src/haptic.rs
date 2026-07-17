@@ -11,6 +11,12 @@ pub fn maverick_buzz_frame(seq: u8) -> Vec<u8> {
     framing::command(Family::Gen5, seq, command::RUN_HAPTIC_PATTERN_MAVERICK, &body)
 }
 
+/// RUN_HAPTICS_PATTERN body (5 bytes): `[pattern_id][loops][0][0][0]`. The 4.0 preset buzz (pattern 2 =
+/// the graduated alarm buzz); on 5/MG the client remaps cmd 79 to the maverick opcode instead.
+pub fn run_haptics_pattern(pattern_id: u8, loops: u8) -> [u8; 5] {
+    [pattern_id, loops, 0, 0, 0]
+}
+
 // Haptic-Clock pulse/gap timing (ms). Long = a "tens" pulse, short = a "units" pulse.
 const LONG_MS: u32 = 550;
 const SHORT_MS: u32 = 200;
@@ -85,5 +91,10 @@ mod tests {
     #[test]
     fn midnight_24h_is_silent() {
         assert!(pulses(0, 0, true).is_empty());
+    }
+
+    #[test]
+    fn run_haptics_pattern_body() {
+        assert_eq!(run_haptics_pattern(2, 3), [2, 3, 0, 0, 0]);
     }
 }

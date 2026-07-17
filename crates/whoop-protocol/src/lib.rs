@@ -5,6 +5,7 @@
 //! historical drain. `framing::encode` builds outbound command frames. `family::Family` dispatches the
 //! per-generation header/CRC shape in exactly one place.
 
+pub mod advertising;
 pub mod alarm;
 pub mod bytes;
 pub mod clock;

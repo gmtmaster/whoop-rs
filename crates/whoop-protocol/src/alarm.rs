@@ -28,3 +28,38 @@ pub fn build(wake_epoch_ms: u64, alarm_id: u8) -> [u8; 20] {
 pub fn disable_rev2() -> [u8; 2] {
     [0x02, 0xFF]
 }
+
+/// WHOOP 4.0 SET_ALARM_TIME body (9 bytes): `[0x01][u32 LE epoch s][2 zero subsec][2 zero haptic-mode]`.
+/// EXPERIMENTAL. Minute-precision, so subseconds are always zero; the trailing pair is the haptic-mode
+/// field the strap needs to actually buzz.
+pub fn whoop4_build(epoch_secs: u32) -> [u8; 9] {
+    let mut out = [0u8; 9];
+    out[0] = 0x01;
+    out[1..5].copy_from_slice(&epoch_secs.to_le_bytes());
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rev4_body_layout() {
+        // 1s past the epoch, alarm 1, subseconds = 0.
+        let b = build(1_784_000_000_000, 1);
+        assert_eq!(b[0], 4);
+        assert_eq!(b[1], 1);
+        assert_eq!(&b[2..6], &1_784_000_000u32.to_le_bytes());
+        assert_eq!(&b[8..16], &WAVEFORM_EFFECTS);
+        assert_eq!(b[18], OVERALL_LOOP);
+        assert_eq!(b[19], DURATION_SECONDS);
+    }
+
+    #[test]
+    fn whoop4_body_layout() {
+        let b = whoop4_build(1_784_000_000);
+        assert_eq!(b[0], 0x01);
+        assert_eq!(&b[1..5], &1_784_000_000u32.to_le_bytes());
+        assert_eq!(&b[5..], &[0, 0, 0, 0]);
+    }
+}

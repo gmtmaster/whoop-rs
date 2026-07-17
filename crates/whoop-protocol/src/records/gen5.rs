@@ -1,13 +1,17 @@
 //! WHOOP 5.0/MG historical records, decoded inner-relative (frame-absolute − 8). v18 carries a sleep-only
 //! SpO2 % byte at inner 74 (tri-mode: %-range kept, sentinels/codes dropped).
 
-use super::{gravity3, HistoryRecord, ImuRecord, PpgRecord};
-use crate::bytes::{i16_at, nonzero_u8_at, rr_intervals, u16_at, u8_at, unix_at};
+use super::{gravity3, HistoryRecord, ImuRecord, OpticalRecord, PpgRecord};
+use crate::bytes::{i16_at, nonzero_u8_at, rr_intervals, u16_at, u32_at, u8_at, unix_at};
 use crate::packet::Frame;
 
 /// Samples per axis in a v21 IMU buffer (both the accel and gyro count fields carry this). Reused as
 /// `sample_rate_hz`: the buffer's time span is unconfirmed, so 100 Hz is inferred from the count, not measured.
 const IMU_SAMPLES: usize = 100;
+
+/// v20 optical buffer: 25 samples per channel, 6 channels, at these inner offsets (frame − 8).
+const OPTICAL_SAMPLES: usize = 25;
+const OPTICAL_CHANNELS: [usize; 6] = [39, 239, 1305, 1505, 1727, 1927];
 
 pub fn v18(f: &Frame) -> Option<HistoryRecord> {
     let b = f.inner();
@@ -63,6 +67,32 @@ pub fn v21_imu(f: &Frame) -> Option<ImuRecord> {
         gyro.push([i16_at(b, 632 + o)?, i16_at(b, 832 + o)?, i16_at(b, 1032 + o)?]);
     }
     Some(ImuRecord { version: f.version(), unix, sample_rate_hz: IMU_SAMPLES as u16, accel, gyro })
+}
+
+/// v20 — the ~25 Hz raw 6-channel optical offload buffer. Each channel is 25 samples × 4-byte LE,
+/// 20-bit signed. Gated on the config anchor that holds for every real buffer: the 2×-green-LED echo
+/// (inner 23 == 2 × inner 20, green nonzero), so a wrong-length or misrouted frame drops.
+pub fn v20_optical(f: &Frame) -> Option<OpticalRecord> {
+    let b = f.inner();
+    let unix = unix_at(b)?;
+    let green = u16_at(b, 20)?;
+    if green == 0 || u16_at(b, 23)? != green.wrapping_mul(2) {
+        return None;
+    }
+    let mut channels = Vec::with_capacity(OPTICAL_CHANNELS.len());
+    for &off in &OPTICAL_CHANNELS {
+        let mut ch = Vec::with_capacity(OPTICAL_SAMPLES);
+        for s in 0..OPTICAL_SAMPLES {
+            ch.push(sign_extend_20(u32_at(b, off + s * 4)?));
+        }
+        channels.push(ch);
+    }
+    Some(OpticalRecord { version: 20, unix, sample_rate_hz: OPTICAL_SAMPLES as u16, channels })
+}
+
+/// Sign-extend a 20-bit ADC sample carried in a 4-byte LE word.
+fn sign_extend_20(v: u32) -> i32 {
+    ((v << 12) as i32) >> 12
 }
 
 #[cfg(test)]
@@ -193,5 +223,38 @@ mod tests {
         let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload); // version byte = 18
         let frame = framing::decode(Family::Gen5, &wire).unwrap();
         assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Imu(_))));
+    }
+
+    #[test]
+    fn v20_optical_decodes_6_channels_25_samples() {
+        // payload index = inner offset − 3; inner = 2128 (frame 2140 − 8 header − 4 CRC).
+        let mut payload = vec![0u8; 2125];
+        payload[4..8].copy_from_slice(&1_784_000_000u32.to_le_bytes()); // unix @ inner 7
+        payload[17..19].copy_from_slice(&1400u16.to_le_bytes()); // green LED @ inner 20
+        payload[20..22].copy_from_slice(&2800u16.to_le_bytes()); // 2×green echo @ inner 23
+        payload[36..40].copy_from_slice(&12345u32.to_le_bytes()); // ch0[0] @ inner 39
+        payload[40..44].copy_from_slice(&0x000F_FFFBu32.to_le_bytes()); // ch0[1] = −5 (20-bit signed)
+
+        let wire = framing::encode(Family::Gen5, 47, 20, 0, &payload);
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+        let r = v20_optical(&frame).unwrap();
+        assert_eq!(r.unix, 1_784_000_000);
+        assert_eq!(r.sample_rate_hz, 25);
+        assert_eq!(r.channels.len(), 6);
+        assert!(r.channels.iter().all(|c| c.len() == 25));
+        assert_eq!(r.channels[0][0], 12345);
+        assert_eq!(r.channels[0][1], -5);
+        assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Optical(_))));
+    }
+
+    #[test]
+    fn v20_optical_rejects_without_led_anchor() {
+        let mut payload = vec![0u8; 2125];
+        payload[4..8].copy_from_slice(&1_784_000_000u32.to_le_bytes());
+        payload[17..19].copy_from_slice(&1400u16.to_le_bytes()); // green
+        payload[20..22].copy_from_slice(&999u16.to_le_bytes()); // != 2×green → reject
+        let wire = framing::encode(Family::Gen5, 47, 20, 0, &payload);
+        let frame = framing::decode(Family::Gen5, &wire).unwrap();
+        assert!(v20_optical(&frame).is_none());
     }
 }
