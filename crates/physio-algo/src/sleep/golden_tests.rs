@@ -4,7 +4,7 @@
 
 use super::input::{AccelSample, HrSample, RrRun, SleepInput};
 use super::v2::TRANSITION;
-use super::{stage_v1, stage_v2, SleepStage, DEEP_GATE_THRESH};
+use super::{analyze, stage_v2, SleepStage, SleepStreams, DEEP_GATE_THRESH};
 
 const REF_MIDNIGHT: i64 = 1_749_513_600;
 
@@ -107,36 +107,38 @@ fn v2_degenerate_input_falls_back_to_single_light_block() {
 }
 
 #[test]
-fn v1_stages_a_still_night_and_tiles_the_span() {
+fn analyze_still_night_stages_and_tiles_the_span() {
     let input = golden_input();
-    let segs = stage_v1(&input);
-    assert!(!segs.is_empty());
-    assert_eq!(input.start, segs.first().unwrap().start);
-    assert_eq!(input.end, segs.last().unwrap().end);
+    let streams =
+        SleepStreams { hr: input.hr.clone(), rr: input.rr.clone(), accel: input.accel.clone(), tz_offset_s: 0, ..Default::default() };
+    let sessions = analyze(&streams);
+    assert_eq!(1, sessions.len());
+    let segs = &sessions[0].segments;
+    assert_eq!(sessions[0].start, segs.first().unwrap().start);
+    assert_eq!(sessions[0].end, segs.last().unwrap().end);
     for w in segs.windows(2) {
         assert_eq!(w[0].end, w[1].start);
-    }
-    for s in &segs {
-        assert!(matches!(
-            s.stage,
-            SleepStage::Wake | SleepStage::Light | SleepStage::Deep | SleepStage::Rem
-        ));
     }
 }
 
 #[test]
-fn v1_degenerate_input_falls_back_to_single_light_block() {
+fn analyze_detects_a_simple_still_night() {
     let start = REF_MIDNIGHT;
-    let end = start + 3_600;
-    let input = SleepInput {
-        start,
-        end,
-        hr: Vec::new(),
-        rr: Vec::new(),
-        accel: vec![AccelSample { ts: start, x: 0.0, y: 0.0, z: 1.0 }],
-        resp: Vec::new(),
-    };
-    let segs = stage_v1(&input);
-    assert_eq!(1, segs.len());
-    assert_eq!(SleepStage::Light, segs[0].stage);
+    let dur = 2 * 3600;
+    let mut hr = Vec::new();
+    let mut accel = Vec::new();
+    for i in 0..dur {
+        let ts = start + i;
+        hr.push(HrSample { ts, bpm: 50 });
+        accel.push(AccelSample { ts, x: 0.0, y: 0.0, z: 1.0 });
+    }
+    let streams = SleepStreams { hr, accel, tz_offset_s: 0, ..Default::default() };
+    let sessions = analyze(&streams);
+    assert_eq!(1, sessions.len());
+    let s = &sessions[0];
+    assert_eq!(start, s.start);
+    assert!(s.end - s.start >= 3600);
+    assert!((0.0..=1.0).contains(&s.efficiency));
+    assert_eq!(s.start, s.segments.first().unwrap().start);
+    assert_eq!(s.end, s.segments.last().unwrap().end);
 }

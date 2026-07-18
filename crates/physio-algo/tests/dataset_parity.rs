@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
-    stage_v1, stage_v2, AccelSample, HrSample, RrRun, SleepInput, SleepStage, StageSegment,
+    stage_v2, AccelSample, HrSample, RrRun, SleepInput, SleepStage, StageSegment,
 };
 
 fn fixtures_root() -> PathBuf {
@@ -120,7 +120,7 @@ fn cohen_kappa(cm: &[[i64; 4]; 4]) -> f64 {
     }
 }
 
-fn run_dataset(ds: &str, use_v2: bool) -> (f64, usize) {
+fn run_dataset(ds: &str) -> (f64, usize) {
     let root = fixtures_root().join(ds);
     let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
         .unwrap_or_else(|_| panic!("dataset dir missing: {}", root.display()))
@@ -136,7 +136,7 @@ fn run_dataset(ds: &str, use_v2: bool) -> (f64, usize) {
             continue;
         }
         let fx = load_fixture(dir);
-        let segs = if use_v2 { stage_v2(&fx.input) } else { stage_v1(&fx.input) };
+        let segs = stage_v2(&fx.input);
         let pred = predict_epochs(&segs, fx.w0, fx.n_epochs);
         for (k, &t) in &fx.truth {
             if *k < pred.len() && (0..4).contains(&t) {
@@ -151,7 +151,7 @@ fn run_dataset(ds: &str, use_v2: bool) -> (f64, usize) {
 #[test]
 #[ignore = "reads external fixtures; run with --ignored for the parity gate"]
 fn v2_dreamt_kappa_matches_shipped() {
-    let (kappa, n) = run_dataset("dreamt", true);
+    let (kappa, n) = run_dataset("dreamt");
     println!("V2 DREAMT: kappa={kappa:.3} over {n} subjects (target ~0.311)");
     assert!((kappa - 0.311).abs() < 0.008, "V2 DREAMT kappa {kappa:.3} off target 0.311");
 }
@@ -159,23 +159,7 @@ fn v2_dreamt_kappa_matches_shipped() {
 #[test]
 #[ignore = "reads external fixtures; run with --ignored for the parity gate"]
 fn v2_aauwss_kappa_matches_shipped() {
-    let (kappa, n) = run_dataset("aauwss", true);
+    let (kappa, n) = run_dataset("aauwss");
     println!("V2 AAUWSS: kappa={kappa:.3} over {n} subjects (target ~0.412)");
     assert!((kappa - 0.412).abs() < 0.008, "V2 AAUWSS kappa {kappa:.3} off target 0.412");
-}
-
-#[test]
-#[ignore = "reads external fixtures; run with --ignored for the parity gate"]
-fn v1_dreamt_kappa_matches_shipped() {
-    let (kappa, n) = run_dataset("dreamt", false);
-    println!("V1 DREAMT: kappa={kappa:.3} over {n} subjects (target ~0.150)");
-    assert!((kappa - 0.150).abs() < 0.010, "V1 DREAMT kappa {kappa:.3} off target 0.150");
-}
-
-#[test]
-#[ignore = "reads external fixtures; run with --ignored for the parity gate"]
-fn v1_aauwss_kappa_matches_shipped() {
-    let (kappa, n) = run_dataset("aauwss", false);
-    println!("V1 AAUWSS: kappa={kappa:.3} over {n} subjects (target ~0.041)");
-    assert!((kappa - 0.041).abs() < 0.010, "V1 AAUWSS kappa {kappa:.3} off target 0.041");
 }
