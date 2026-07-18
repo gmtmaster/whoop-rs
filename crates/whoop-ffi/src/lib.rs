@@ -344,6 +344,205 @@ fn to_sleep_segments(segs: Vec<sleep::StageSegment>) -> Vec<SleepSegment> {
         .collect()
 }
 
+/// One step-counter sample: wrap-aware u16 `counter` + optional activity class (1=walk, 2=run) at `ts`.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepStepSample {
+    pub ts: i64,
+    pub counter: u16,
+    pub activity_class: Option<u8>,
+}
+
+/// An off-wrist `[start, end)` interval (unix seconds).
+#[derive(uniffi::Record, Clone)]
+pub struct WristOffInterval {
+    pub start: i64,
+    pub end: i64,
+}
+
+/// One band sleep-state sample: the strap's own `state` (0 wake/1 still/2 asleep/3 up) at `ts`.
+#[derive(uniffi::Record, Clone)]
+pub struct BandStateSample {
+    pub ts: i64,
+    pub state: i32,
+}
+
+/// The full night-window stream bundle for detection + staging (raw signals + off-wrist / band-state /
+/// tz-offset). `analyze_sleep` carves the in-bed spans and stages each behind this one border call.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepStreams {
+    pub hr: Vec<SleepHrSample>,
+    pub rr: Vec<SleepRrRun>,
+    pub accel: Vec<SleepAccelSample>,
+    pub resp: Vec<SleepRespSample>,
+    pub steps: Vec<SleepStepSample>,
+    pub tz_offset_s: i64,
+    pub wrist_off: Vec<WristOffInterval>,
+    pub band_sleep_state: Vec<BandStateSample>,
+}
+
+impl From<SleepStreams> for sleep::SleepStreams {
+    fn from(s: SleepStreams) -> Self {
+        sleep::SleepStreams {
+            hr: s.hr.into_iter().map(|h| sleep::HrSample { ts: h.ts, bpm: h.bpm }).collect(),
+            rr: s.rr.into_iter().map(|r| sleep::RrRun { ts: r.ts, intervals: r.intervals }).collect(),
+            accel: s.accel.into_iter().map(|a| sleep::AccelSample { ts: a.ts, x: a.x, y: a.y, z: a.z }).collect(),
+            resp: s.resp.into_iter().map(|r| sleep::RespSample { ts: r.ts, raw: r.raw }).collect(),
+            steps: s
+                .steps
+                .into_iter()
+                .map(|st| sleep::StepSample { ts: st.ts, counter: st.counter, activity_class: st.activity_class })
+                .collect(),
+            tz_offset_s: s.tz_offset_s,
+            wrist_off: s.wrist_off.into_iter().map(|w| (w.start, w.end)).collect(),
+            band_sleep_state: s.band_sleep_state.into_iter().map(|b| (b.ts, b.state)).collect(),
+        }
+    }
+}
+
+/// One detected sleep session: span, motion-refined hypnogram, derived scalars, and the per-30 s-epoch
+/// motion + band sleep-state grids the caller persists.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepSession {
+    pub start: i64,
+    pub end: i64,
+    pub efficiency: f64,
+    pub resting_hr: Option<i32>,
+    pub avg_hrv: Option<f64>,
+    pub segments: Vec<SleepSegment>,
+    pub motion_grid: Vec<f64>,
+    pub sleep_state_grid: Vec<i32>,
+}
+
+impl From<sleep::Session> for SleepSession {
+    fn from(s: sleep::Session) -> Self {
+        SleepSession {
+            start: s.start,
+            end: s.end,
+            efficiency: s.efficiency,
+            resting_hr: s.resting_hr,
+            avg_hrv: s.avg_hrv,
+            segments: to_sleep_segments(s.segments),
+            motion_grid: s.motion_grid,
+            sleep_state_grid: s.sleep_state_grid,
+        }
+    }
+}
+
+/// One candidate block for main-night selection: `[start, end]` unix seconds.
+#[derive(uniffi::Record, Clone)]
+pub struct MainNightBlock {
+    pub start: i64,
+    pub end: i64,
+}
+
+/// Why the main-night selector chose the block it chose (for UI explainability).
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum MainNightReason {
+    OnlyBlock,
+    Longest,
+    LongestNearUsual,
+    AlignedToUsual,
+}
+
+impl From<sleep::MainNightReason> for MainNightReason {
+    fn from(r: sleep::MainNightReason) -> Self {
+        match r {
+            sleep::MainNightReason::OnlyBlock => MainNightReason::OnlyBlock,
+            sleep::MainNightReason::Longest => MainNightReason::Longest,
+            sleep::MainNightReason::LongestNearUsual => MainNightReason::LongestNearUsual,
+            sleep::MainNightReason::AlignedToUsual => MainNightReason::AlignedToUsual,
+        }
+    }
+}
+
+/// The resolved main-night pick plus why it won and the chosen block's asleep span (seconds).
+#[derive(uniffi::Record, Clone)]
+pub struct MainNightSel {
+    pub index: u32,
+    pub reason: MainNightReason,
+    pub asleep_sec: i64,
+}
+
+/// One trailing-history block for learning habitual timing (`day_key` groups by local calendar day).
+#[derive(uniffi::Record, Clone)]
+pub struct SleepHistoryBlock {
+    pub start: i64,
+    pub end: i64,
+    pub day_key: String,
+}
+
+/// One inter-fragment wake seam `[start, end)` inside a bridged night group.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepGap {
+    pub start: i64,
+    pub end: i64,
+}
+
+/// One bridged night group: the composing original indices (ascending) + its inter-fragment wake seams.
+#[derive(uniffi::Record, Clone)]
+pub struct SleepBridgedGroup {
+    pub indices: Vec<u32>,
+    pub gaps: Vec<SleepGap>,
+}
+
+fn to_night_blocks(blocks: &[MainNightBlock]) -> Vec<sleep::NightBlock> {
+    blocks.iter().map(|b| sleep::NightBlock { start: b.start, end: b.end }).collect()
+}
+
+/// Detect + stage a night's streams: one call carves the in-bed spans and returns one session each.
+#[uniffi::export]
+pub fn analyze_sleep(streams: SleepStreams) -> Vec<SleepSession> {
+    sleep::analyze(&streams.into()).into_iter().map(SleepSession::from).collect()
+}
+
+#[uniffi::export]
+pub fn main_night_index(blocks: Vec<MainNightBlock>, offset_s: i64, habitual_midsleep_sec: Option<i64>) -> Option<u32> {
+    sleep::main_night_index(&to_night_blocks(&blocks), offset_s, habitual_midsleep_sec).map(|i| i as u32)
+}
+
+#[uniffi::export]
+pub fn main_night_group_indices(
+    blocks: Vec<MainNightBlock>,
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<Vec<u32>> {
+    sleep::main_night_group_indices(&to_night_blocks(&blocks), offset_s, habitual_midsleep_sec)
+        .map(|v| v.into_iter().map(|i| i as u32).collect())
+}
+
+#[uniffi::export]
+pub fn main_night_selection(
+    blocks: Vec<MainNightBlock>,
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<MainNightSel> {
+    sleep::main_night_selection(&to_night_blocks(&blocks), offset_s, habitual_midsleep_sec).map(|s| MainNightSel {
+        index: s.index as u32,
+        reason: s.reason.into(),
+        asleep_sec: s.asleep_sec,
+    })
+}
+
+#[uniffi::export]
+pub fn bridged_night_groups(blocks: Vec<MainNightBlock>, offset_s: i64) -> Vec<SleepBridgedGroup> {
+    sleep::bridged_night_groups(&to_night_blocks(&blocks), offset_s)
+        .into_iter()
+        .map(|g| SleepBridgedGroup {
+            indices: g.indices.into_iter().map(|i| i as u32).collect(),
+            gaps: g.gaps.into_iter().map(|(s, e)| SleepGap { start: s, end: e }).collect(),
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn habitual_midsleep_sec(history: Vec<SleepHistoryBlock>, offset_s: i64, min_days: u32) -> Option<i64> {
+    let h: Vec<sleep::HistoryBlock> = history
+        .into_iter()
+        .map(|b| sleep::HistoryBlock { start: b.start, end: b.end, day_key: b.day_key })
+        .collect();
+    sleep::habitual_midsleep_sec(&h, offset_s, min_days as usize)
+}
+
 fn result_to_u8(r: whoop_protocol::event::ResultCode) -> u8 {
     use whoop_protocol::event::ResultCode::*;
     match r {
@@ -734,17 +933,15 @@ pub fn nightly_spo2_raw_means(spans: Vec<Spo2Span>, samples: Vec<Spo2RawSample>)
     Spo2::nightly_raw_means(&spans, &samples).map(|(red, ir)| Spo2RawMeans { red, ir })
 }
 
-/// Sleep hypnogram via V2 (cardiorespiratory) — the 5.0/MG default. Per-30 s-epoch stage segments over
-/// the detected in-bed span. Pure and deterministic.
+/// Stage one already-detected in-bed span with the V2 recipe + motion-aware wake refinement (the app's
+/// single-span edit self-heal path). Per-30 s-epoch stage segments over `[start, end]`.
 #[uniffi::export]
-pub fn stage_sleep_v2(input: SleepInput) -> Vec<SleepSegment> {
-    to_sleep_segments(sleep::stage_v2(&input.into()))
-}
-
-/// Sleep hypnogram via V1 (Cole-Kripke) — the 4.0 recipe and the session-detection source of truth.
-#[uniffi::export]
-pub fn stage_sleep_v1(input: SleepInput) -> Vec<SleepSegment> {
-    to_sleep_segments(sleep::stage_v1(&input.into()))
+pub fn stage_sleep_refined(input: SleepInput, steps: Vec<SleepStepSample>) -> Vec<SleepSegment> {
+    let steps: Vec<sleep::StepSample> = steps
+        .into_iter()
+        .map(|s| sleep::StepSample { ts: s.ts, counter: s.counter, activity_class: s.activity_class })
+        .collect();
+    to_sleep_segments(sleep::stage_refined(&input.into(), &steps))
 }
 
 /// One heart-rate tick (unix seconds + bpm) shared by strain, recovery, resting-HR and zones.
@@ -1335,8 +1532,8 @@ mod tests {
     }
 
     #[test]
-    fn stage_sleep_v2_tiles_a_synthetic_night() {
-        use super::{stage_sleep_v2, SleepAccelSample, SleepHrSample, SleepInput, SleepRrRun, SleepStage};
+    fn stage_sleep_refined_tiles_a_synthetic_night() {
+        use super::{stage_sleep_refined, SleepAccelSample, SleepHrSample, SleepInput, SleepRrRun, SleepStage};
         let start = 1_749_517_200i64;
         let dur = 90 * 60 * 4;
         let (mut hr, mut rr, mut accel) = (Vec::new(), Vec::new(), Vec::new());
@@ -1349,7 +1546,7 @@ mod tests {
             rr.push(SleepRrRun { ts, intervals: vec![(60_000 / bpm) as u16] });
         }
         let input = SleepInput { start, end: start + dur, hr, rr, accel, resp: Vec::new() };
-        let segs = stage_sleep_v2(input);
+        let segs = stage_sleep_refined(input, Vec::new());
         assert!(!segs.is_empty());
         assert_eq!(segs.first().unwrap().start, start);
         assert_eq!(segs.last().unwrap().end, start + dur);

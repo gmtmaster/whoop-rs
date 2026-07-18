@@ -37,6 +37,15 @@ pub struct RespSample {
     pub raw: i32,
 }
 
+/// One step-counter sample: a wrap-aware u16 `counter` and an optional activity class (1=walk, 2=run) at
+/// second `ts`. Motion-aware wake refinement reads the per-minute walk-class tick cadence from these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepSample {
+    pub ts: i64,
+    pub counter: u16,
+    pub activity_class: Option<u8>,
+}
+
 /// The full input bundle for one detected in-bed span. `[start, end]` are wall-clock unix seconds; the
 /// stager tiles that span with 30 s epochs and reads only samples inside it (plus a small feature pad).
 #[derive(Debug, Clone, Default, PartialEq)]

@@ -1,22 +1,110 @@
 //! Sleep staging — per-30 s-epoch hypnogram over a detected in-bed span.
 //!
-//! Two recipes:
-//!   - V2 (cardiorespiratory) — the 5.0/MG default; z-scored HR / HR-variability / motion emissions, a
-//!     deep gate on HR-flatness, a soft sleep-cycle prior, a self-calibrating jerk wake gate, an R-R RSA
-//!     respiration term, and Viterbi transition smoothing.
-//!   - V1 (Cole-Kripke) — the 4.0 path and the session-detection source of truth.
+//! The V2 (cardiorespiratory) recipe stages every strap: z-scored HR / HR-variability / motion emissions, a
+//! deep gate on HR-flatness, a soft sleep-cycle prior, a self-calibrating jerk wake gate, an R-R RSA
+//! respiration term, and Viterbi transition smoothing.
 //!
-//! Inputs are protocol-free (see [`input`]): plain per-sample values plus the in-bed `[start, end]`.
-//! [`stage_v2`] is the default; [`stage_v1`] is the 4.0 recipe. Both are pure and deterministic.
+//! Inputs are protocol-free (see [`input`]). [`analyze`] runs the whole pipeline (detect → stage → refine)
+//! over a night's streams; [`stage_v2`] stages one already-detected `[start, end]` span. Pure + deterministic.
 
 mod common;
+mod detect;
 mod input;
-mod v1;
+mod mainnight;
+mod refine;
 mod v2;
 
-pub use input::{AccelSample, HrSample, RespSample, RrRun, SleepInput};
-pub use v1::stage as stage_v1;
+use crate::hrv::HrvReadiness;
+
+pub use input::{AccelSample, HrSample, RespSample, RrRun, SleepInput, StepSample};
 pub use v2::{stage as stage_v2, DEEP_GATE_THRESH};
+pub use mainnight::{
+    bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices, main_night_index,
+    main_night_selection, BridgedNightGroup, HistoryBlock, MainNightReason, MainNightSelection, NightBlock,
+    HABITUAL_MIN_DAYS,
+};
+
+/// The stream bundle for one detection window: raw per-sample signals plus the wrist-off intervals, band
+/// sleep-state `(ts, state)`, and the local UTC offset the daytime guard needs.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SleepStreams {
+    pub hr: Vec<HrSample>,
+    pub rr: Vec<RrRun>,
+    pub accel: Vec<AccelSample>,
+    pub resp: Vec<RespSample>,
+    pub steps: Vec<StepSample>,
+    pub tz_offset_s: i64,
+    pub wrist_off: Vec<(i64, i64)>,
+    pub band_sleep_state: Vec<(i64, i32)>,
+}
+
+/// One detected sleep session: its span, the motion-refined V2 hypnogram, the derived scalars, and the
+/// per-30 s-epoch motion + band sleep-state grids the caller persists beside the hypnogram.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Session {
+    pub start: i64,
+    pub end: i64,
+    pub efficiency: f64,
+    pub resting_hr: Option<i32>,
+    pub avg_hrv: Option<f64>,
+    pub segments: Vec<StageSegment>,
+    pub motion_grid: Vec<f64>,
+    pub sleep_state_grid: Vec<i32>,
+}
+
+/// Detect in-bed spans from a window's streams and stage each with the V2 recipe + motion-aware wake
+/// refinement, returning one [`Session`] per accepted span with its resting HR and windowed average HRV.
+pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
+    let spans = detect::detect_sessions(
+        &streams.hr,
+        &streams.accel,
+        streams.tz_offset_s,
+        &streams.wrist_off,
+        &streams.band_sleep_state,
+        None,
+    );
+    let mut beats: Vec<(u32, u16)> = Vec::new();
+    for run in &streams.rr {
+        for &ms in &run.intervals {
+            beats.push((run.ts as u32, ms));
+        }
+    }
+    beats.sort_by_key(|b| b.0);
+
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        let input = SleepInput {
+            start: span.start,
+            end: span.end,
+            hr: streams.hr.clone(),
+            rr: streams.rr.clone(),
+            accel: streams.accel.clone(),
+            resp: streams.resp.clone(),
+        };
+        let segments = refine::refine(&v2::stage(&input), &streams.accel, &streams.steps);
+        let efficiency = detect::efficiency(span.start, span.end, &segments);
+        let avg_hrv = HrvReadiness::windowed_avg_hrv(span.start as u32, span.end as u32, &beats);
+        let motion_grid = detect::session_epoch_motion(span.start, span.end, &streams.accel);
+        let sleep_state_grid = detect::session_epoch_sleep_state(span.start, span.end, &streams.band_sleep_state);
+        out.push(Session {
+            start: span.start,
+            end: span.end,
+            efficiency,
+            resting_hr: span.resting_hr,
+            avg_hrv,
+            segments,
+            motion_grid,
+            sleep_state_grid,
+        });
+    }
+    out
+}
+
+/// Stage a single detected span with the V2 recipe + the motion-aware wake refinement (single-span
+/// re-stage for the app's edit self-heal path).
+pub fn stage_refined(input: &SleepInput, steps: &[StepSample]) -> Vec<StageSegment> {
+    refine::refine(&v2::stage(input), &input.accel, steps)
+}
 
 /// A sleep stage. String forms are `"wake" | "light" | "deep" | "rem"` for cross-platform parity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

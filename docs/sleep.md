@@ -1,0 +1,68 @@
+# Sleep pipeline (`physio-algo::sleep`)
+
+The whole WHOOP sleep pipeline lives here: detect the in-bed spans of a night, stage each into a
+per-30 s-epoch hypnogram, refine wake, and derive the day's main night. Pure and deterministic — no BLE,
+no IO, no async. The app (`noop-tan`) is a thin frontend over the single `analyzeSleep` FFI; see
+`noop-tan/android/SLEEP-BORDER.md` for what stays app-side.
+
+## One entry: `analyze`
+
+```rust
+pub fn analyze(streams: &SleepStreams) -> Vec<Session>
+```
+
+`SleepStreams` is a night's raw signals (`hr`, `rr` runs, `accel`/gravity, `resp`, `steps`) plus
+`tz_offset_s`, `wrist_off` intervals, and the strap's `band_sleep_state`. `analyze` runs, per accepted span:
+
+```
+detect_sessions  → v2::stage → refine::refine → efficiency + session_resting_hr + windowed avg_hrv + grids
+```
+
+and returns one `Session { start, end, efficiency, resting_hr, avg_hrv, segments, motion_grid, sleep_state_grid }`
+per in-bed span. Also public: `stage_refined(input, steps)` (stage + refine one already-detected span, for
+the app's edit self-heal) and the main-night functions (`main_night_index/_group_indices/_selection`,
+`bridged_night_groups`, `habitual_midsleep_sec`).
+
+## Modules
+
+| file | role |
+|---|---|
+| `detect.rs` | the gravity-stillness detection spine (`gravity_deltas`→`classify_still`→`build_runs`→`merge_periods`→`bridge_sparse_sleep`) + the `detect_sessions` gate loop, and the per-epoch `session_epoch_motion`/`session_epoch_sleep_state` grids |
+| `v2.rs` | the V2 (cardiorespiratory) staging recipe — the DREAMT-tuned emissions + Viterbi; stages **every** strap |
+| `refine.rs` | motion-aware wake post-pass (hot-but-still WAKE → light; density self-gated on the observed streams) |
+| `mainnight.rs` | main-night selection by a learned-timing score, the two-tier gap bridge, and the circular-mean habitual midsleep |
+| `common.rs` | shared numerics (`population_std`, `median`, `ZScore`, `flatten_rr`) |
+| `input.rs` | the protocol-free sample types (`HrSample`/`RrRun`/`AccelSample`/`RespSample`/`StepSample`) |
+
+## The detection gate loop (order is load-bearing)
+
+`detect_sessions` builds the stillness spine, then for each candidate sleep run applies, in order:
+`minSleep(60 min)` → `maxSpan(16 h)` → `confirm_sleep_with_hr` (median HR in the sleep band, widened on a
+deeply-motion-quiescent run) → `off_wrist_fraction` (< 0.5) → the daytime false-sleep / morning-stillness
+guards. A **cross-night continuation chain** lets an overnight night's post-11:00 tail skip the daytime
+guard; a dropped run never re-anchors the chain. Sparse gravity (a 5.0 backfill) enables an HR-vouched
+gap bridge so a clumped night is not shredded — a dense 4.0 night is byte-identical to the ungated path.
+
+## Recipe
+
+V2 is universal — no per-strap gate. It was tuned on DREAMT PSG gold (n=100 wrist-optical + AASM); on real
+4.0 (unconstrained) it produces the same operating point it does on gold, so no separate 4.0 profile is
+needed. V1 (Cole-Kripke) is retired. Detection is a **gravity-stillness** spine, not Cole-Kripke.
+
+## Tests
+
+`detect.rs` / `refine.rs` / `mainnight.rs` carry unit tests plus ~30 cases ported byte-identical from the
+app's Kotlin gate/main-night suites (off-wrist, daytime guard, sparse-gravity, night-continuation,
+HR-confirm median, span-cap, morning-stillness, motion-corroborated wake, the realistic-nap sweep,
+selection reasons, habitual learning). `golden_tests.rs` pins the V2 hypnogram frozen-golden.
+`tests/dataset_parity.rs` (`--ignored`) scores V2 against the DREAMT/AAUWSS fixtures. **146 `physio-algo`
+tests + 23 `whoop-ffi` tests, 0 clippy.**
+
+## Follow-ups (app-side, optional, behavior-identical)
+
+Two purity cleanups remain on the `noop-tan` side — see `noop-tan/android/SLEEP-BORDER.md`:
+
+1. Route `AnalyticsEngine`'s main-night selection through the Rust `mainNight*` / `habitualMidsleepSec`
+   FFI (currently a byte-identical Kotlin twin, `SleepStageTotals`).
+2. Delete the Kotlin `remFunnelDiagnostic` + its Test-Centre caller to retire the last Kotlin epoch
+   classifier (whoop-rs already stages everything on the live path).
