@@ -30,7 +30,7 @@ pub const R22_SEQUENCE: [Flag; 16] = [
     Flag { name: "enable_passive_strap_fit_gen5", value: b'1' },
     Flag { name: "enable_sig11_during_sleep", value: b'2' },
     Flag { name: "dorset_inhibit_wpt", value: b'2' },
-    Flag { name: "enable_sig12", value: b'2' },
+    Flag { name: "enable_sig12", value: b'1' },
 ];
 
 /// Config flags present in firmware but not sent by the R22 sequence (untried).
