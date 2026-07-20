@@ -213,7 +213,7 @@ Gap-aware: gaps > 3×median-RR split the run, RMSSD computed per gap-free segmen
 | Location | Status |
 |---|---|
 | `whoop-rs/crates/physio-algo/src/hrv.rs` | ✅ parity tests · real-data agreement fixtures |
-| `noop-tan/…/analytics/HrvAnalyzer.kt` | 🔧 **12 callers still use Kotlin mirror** |
+| `noop-tan/…/analytics/HrvAnalyzer.kt` | ⚡ rmssdRaw + rangeFilter delegated to whoop-rs 2026-07-20 · sdnnRaw kept Kotlin (f64 summation order) |
 
 ---
 
@@ -314,16 +314,15 @@ Zones: each 10 %-HRR band from 50 % up.
 | # | Formula | Status |
 |---|---|---|
 | ✅ | Sleep detection → `analyzeSleep` FFI | Routed 2026-07-20 |
-| ✅ | Effort per-interval integration | Fixed 2026-07-20 (whoop-rs) |
+| ✅ | Effort per-interval integration | Fixed 2026-07-20 (whoop-rs) + StrainScorer delegates |
 | ✅ | Charge skin temp ordering | Fixed 2026-07-20 (Kotlin) |
-| 🔧 | Effort call sites → Rust FFI | 16 Kotlin callers on old StrainScorer |
-| 🔧 | HRV → Rust FFI | 12 Kotlin callers on old HrvAnalyzer |
 | ✅ | Charge chronological baselines | Incremental fold in pass-2 2026-07-20 |
-| 🔧 | R-R beat order | `ORDER BY ts, seq` in Room query 2026-07-20 |
-| 🔧 | Baselines → whoop-rs | 400 lines Kotlin |
-| ❌ | Daily Stress → whoop-rs | No baseline gate, not in Rust |
-| ❌ | Daytime Stress → whoop-rs | No exercise gate, not in Rust |
-| ❌ | Rest formula → whoop-rs | Not extracted, no parity test |
-| ❌ | Sleep debt → whoop-rs | Kotlin-only |
-| ❌ | Onset detector → whoop-rs | Kotlin-only |
-| ❌ | Daytime Stress reads source | Hardcoded `my-whoop`, no active-device union |
+| ✅ | R-R beat order | `ORDER BY ts, seq` in Room query 2026-07-20 |
+| ✅ | HRV rmssdRaw + rangeFilter → Rust | Delegated 2026-07-20 (sdnnRaw kept Kotlin) |
+| ✅ | Daily Stress → whoop-rs | stress.rs 2026-07-20 (14-day baseline gate) |
+| ✅ | Daytime Stress → whoop-rs | stress.rs 2026-07-20 (calm-hour quartiles) |
+| ✅ | Rest formula → whoop-rs | rest.rs 2026-07-20 |
+| ✅ | Sleep debt → whoop-rs | sleep_debt.rs 2026-07-20 |
+| ✅ | Daytime Stress source | activeStrapId 2026-07-20 |
+| 🔧 | Baselines → whoop-rs | 400 lines Kotlin (persistence contract) |
+| ❌ | Onset detector → whoop-rs | Stateful, live-data FFI needed |
