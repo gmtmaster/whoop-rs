@@ -197,7 +197,7 @@ No exercise gate.
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/DaytimeStress.kt` | ❌ Kotlin-only · no exercise gate · reads only `my-whoop` source |
+| `whoop-rs/crates/physio-algo/src/stress.rs` | ✅ Rust 2026-07-20 (4 tests) · calm-hour quartile reference · Kotlin DaytimeStress.kt still called |
 
 ---
 
@@ -266,7 +266,7 @@ Suppressed by: HR zone (exercise), recent motion, low R-R count.
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/StressOnsetDetector.kt` | ❌ Kotlin-only |
+| `noop-tan/…/analytics/StressOnsetDetector.kt` | ❌ Kotlin-only · opt-in · live-data FFI needed |
 
 ---
 
