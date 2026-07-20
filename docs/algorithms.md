@@ -325,4 +325,4 @@ Zones: each 10 %-HRR band from 50 % up.
 | ✅ | Sleep debt → whoop-rs | sleep_debt.rs 2026-07-20 |
 | ✅ | Daytime Stress source | activeStrapId 2026-07-20 |
 | 🔧 | Baselines → whoop-rs | 400 lines Kotlin (persistence contract) |
-| ❌ | Onset detector → whoop-rs | Stateful, live-data FFI needed |
+| ✅ | Onset detector → whoop-rs | stress_onset.rs 2026-07-20 (stateful FFI via Record) |
