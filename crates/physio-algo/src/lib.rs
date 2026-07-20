@@ -16,6 +16,7 @@ pub mod imu_features;
 pub mod ppg;
 pub mod recovery;
 pub mod respiratory_rate;
+pub mod rest;
 pub mod resting_hr;
 pub mod sleep;
 pub mod spo2;
