@@ -1508,6 +1508,25 @@ pub fn workout_detect(
     }).collect()
 }
 
+/// Deep-sleep-windowed session avgHrv (ms): per-5min-bucket RMSSD like [hrv_windowed_avg], keeping only
+/// buckets whose center falls inside a deep-sleep (SWS/N3) span. Takes the full segment list; filters for
+/// `SleepStage::Deep` internally. `None` when no deep bucket yields a value.
+#[uniffi::export]
+pub fn hrv_windowed_avg_deep(
+    start: u32,
+    end: u32,
+    runs: Vec<RrRun>,
+    segments: Vec<SleepSegment>,
+) -> Option<f64> {
+    let beats: Vec<(u32, u16)> = runs.iter().flat_map(|r| r.rr.iter().map(|b| (r.unix, *b))).collect();
+    let deep_spans: Vec<(u32, u32)> = segments
+        .iter()
+        .filter(|s| matches!(s.stage, SleepStage::Deep))
+        .map(|s| (s.start as u32, s.end as u32))
+        .collect();
+    HrvReadiness::windowed_avg_hrv_deep(start, end, &beats, &deep_spans)
+}
+
 
 #[cfg(test)]
 mod tests {
