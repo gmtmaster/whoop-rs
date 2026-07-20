@@ -15,6 +15,7 @@ pub const HRMAX_PERCENTILE: f64 = 99.5;
 pub const BANISTER_SCALE: f64 = 0.64;
 pub const BANISTER_B_MEN: f64 = 1.92;
 pub const BANISTER_B_WOMEN: f64 = 1.67;
+pub const DROPOUT_CAP_SECONDS: i64 = 1200;
 
 /// Edwards cut-offs as (%HRR threshold, weight), highest-first.
 const EDWARDS_ZONES: [(f64, i64); 5] = [(90.0, 5), (80.0, 4), (70.0, 3), (60.0, 2), (50.0, 1)];
@@ -130,6 +131,33 @@ pub fn banister_trimp(hr: &[HrSample], resting_hr: f64, hr_reserve: f64, sample_
     acc
 }
 
+/// Per-interval Edwards TRIMP: each sample's zone weight times its own interval-derived duration
+/// (minutes). Uses the gap to the nearest neighbour(s), capped at `dropout_cap_s` so a data
+/// dropout cannot inflate one sample's contribution.
+pub fn edwards_trimp_interval(hr: &[HrSample], resting_hr: f64, hr_reserve: f64, dropout_cap_s: i64) -> f64 {
+    let n = hr.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let mut total = 0.0;
+    for i in 0..n {
+        let w = zone_weight(hr[i].bpm as f64, resting_hr, hr_reserve) as f64;
+        let gap_s = if n == 1 {
+            60.0
+        } else if i == 0 {
+            ((hr[1].ts - hr[0].ts).unsigned_abs() as i64).min(dropout_cap_s) as f64
+        } else if i == n - 1 {
+            ((hr[i].ts - hr[i - 1].ts).unsigned_abs() as i64).min(dropout_cap_s) as f64
+        } else {
+            let fwd = ((hr[i + 1].ts - hr[i].ts).unsigned_abs() as i64).min(dropout_cap_s) as f64;
+            let bwd = ((hr[i].ts - hr[i - 1].ts).unsigned_abs() as i64).min(dropout_cap_s) as f64;
+            (fwd + bwd) / 2.0
+        };
+        total += w * gap_s / 60.0;
+    }
+    total
+}
+
 /// Map accumulated TRIMP onto [0, 100] via 100 × ln(TRIMP+1) / ln(D), 2 dp. TRIMP ≤ 0 → 0.
 pub fn trimp_to_strain(trimp: f64, denominator: f64) -> f64 {
     if trimp <= 0.0 {
@@ -183,14 +211,14 @@ pub fn strain(
         return None;
     }
 
-    let sample_dur = sample_duration_minutes(hr);
     let hr_reserve = eff_max - resting_hr;
     let trimp = match method {
         Method::Banister => {
+            let sample_dur = sample_duration_minutes(hr);
             let b = if sex.to_lowercase().starts_with('f') { BANISTER_B_WOMEN } else { BANISTER_B_MEN };
             banister_trimp(hr, resting_hr, hr_reserve, sample_dur, b)
         }
-        Method::Edwards => edwards_trimp(hr, resting_hr, hr_reserve, sample_dur),
+        Method::Edwards => edwards_trimp_interval(hr, resting_hr, hr_reserve, DROPOUT_CAP_SECONDS),
     };
     Some(trimp_to_strain(trimp, denominator))
 }
@@ -226,10 +254,58 @@ mod tests {
 
     #[test]
     fn edwards_zone_goldens() {
-        // rest 60, max 160 → HRR 100 → %HRR = bpm − 60; 600 samples at 1 Hz → TRIMP = 10·weight.
-        assert!((eff(&hr_constant(115, 600), 160.0, 60.0).unwrap() - 27.0).abs() < EPS);
-        assert!((eff(&hr_constant(135, 600), 160.0, 60.0).unwrap() - 38.66).abs() < EPS);
-        assert!((eff(&hr_constant(155, 600), 160.0, 60.0).unwrap() - 44.27).abs() < EPS);
+        // rest 60, max 160 → HRR 100 → %HRR = bpm − 60; 600 samples at 1 Hz, per-interval gaps=1s each.
+        // Each sample: gap=1s/60=1/60 min. total = 600 × weight × 1/60 = 10 × weight.
+        let v115 = eff(&hr_constant(115, 600), 160.0, 60.0).unwrap(); // zone 1 (50-59%): weight=1
+        assert!((v115 - 27.0).abs() < EPS, "115bpm got {v115}");
+        let v135 = eff(&hr_constant(135, 600), 160.0, 60.0).unwrap(); // zone 3 (70-79%): weight=3
+        assert!((v135 - 38.66).abs() < EPS, "135bpm got {v135}");
+        let v155 = eff(&hr_constant(155, 600), 160.0, 60.0).unwrap(); // zone 5 (90-100%): weight=5
+        assert!((v155 - 44.27).abs() < EPS, "155bpm got {v155}");
+    }
+
+    #[test]
+    fn interval_method_handles_cadence_transition() {
+        // First gap 30s, remaining 599 samples at 1s — old method inflated, new method correct.
+        let mut hr = Vec::new();
+        hr.push(HrSample { ts: 0, bpm: 135 });
+        for i in 1..600 {
+            hr.push(HrSample { ts: 30 + i as i64 - 1, bpm: 135 });
+        }
+        let v = eff(&hr, 160.0, 60.0).unwrap();
+        // Each sample gets its own interval (1s for most, 30s for first). Sum of gaps ≈ 30+599*1=629s.
+        // weight=3, total = 3 × 629/60 = 31.45 min. TRIMP = 31.45, strain ≈ ...
+        assert!(v < 40.0, "cadence transition should not inflate, got {v}");
+        assert!(v > 20.0, "cadence transition should score, got {v}");
+    }
+
+    #[test]
+    fn interval_method_caps_dropout() {
+        // Two clusters with a 1-hour gap — gap capped at 20 min dropout.
+        let mut hr = Vec::new();
+        for i in 0..600 { hr.push(HrSample { ts: i as i64, bpm: 135 }); }
+        let gap_start = 3600i64;
+        for i in 0..600 { hr.push(HrSample { ts: gap_start + i as i64, bpm: 135 }); }
+        let v = eff(&hr, 160.0, 60.0).unwrap();
+        assert!(v > 0.0, "gapped day still scores");
+    }
+
+    #[test]
+    fn single_interval_sample_does_not_crash() {
+        let hr = vec![HrSample { ts: 0, bpm: 120 }];
+        assert!(eff(&hr, 160.0, 60.0).is_none()); // <600 samples
+        // but the function itself shouldn't crash on 1 sample
+        let trimp = edwards_trimp_interval(&hr, 60.0, 100.0, 1200);
+        assert!(trimp > 0.0);
+    }
+
+    #[test]
+    fn interval_and_uniform_stream_agree() {
+        // On perfectly uniform 1s data, per-interval ≈ old first-gap (both use 1s gaps).
+        let uniform = hr_constant(135, 600);
+        let old = edwards_trimp(&uniform, 60.0, 100.0, sample_duration_minutes(&uniform));
+        let new = edwards_trimp_interval(&uniform, 60.0, 100.0, 1200);
+        assert!((old - new).abs() < 5.0, "uniform stream: old={old} new={new}");
     }
 
     #[test]
