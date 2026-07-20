@@ -78,6 +78,31 @@ impl HrvReadiness {
         Self::rmssd_runs(std::iter::once(rr_ms))
     }
 
+    /// Range-filter R-R intervals (keep 300–2000 ms).
+    pub fn range_filter(rr_ms: &[u16]) -> Vec<u16> {
+        rr_ms.iter().copied().filter(|&v| (RR_MIN_MS..=RR_MAX_MS).contains(&v)).collect()
+    }
+
+    /// Standard deviation of NN intervals (ms). `None` for < 2 values.
+    pub fn sdnn(rr_ms: &[u16]) -> Option<f64> {
+        if rr_ms.len() < 2 { return None; }
+        let mean = rr_ms.iter().sum::<u16>() as f64 / rr_ms.len() as f64;
+        let var = rr_ms.iter().map(|&v| {
+            let d = v as f64 - mean;
+            d * d
+        }).sum::<f64>() / (rr_ms.len() - 1) as f64;
+        Some(var.sqrt())
+    }
+
+    /// Median of a slice of f64 values. Empty → 0.
+    pub fn median_f64(values: &[f64]) -> f64 {
+        if values.is_empty() { return 0.0; }
+        let mut s = values.to_vec();
+        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let n = s.len();
+        if n % 2 == 1 { s[n / 2] } else { 0.5 * (s[n / 2 - 1] + s[n / 2]) }
+    }
+
     /// Gap-aware nightly RMSSD (ms) from one night's per-record `(unix, R-R)` beats, matching the app's
     /// cleaned RMSSD. Flattens the beats in time order, range-filters and Malik-ectopic-cleans them, then
     /// pools only successive differences whose two beats were adjacent in the source: a dropped range or

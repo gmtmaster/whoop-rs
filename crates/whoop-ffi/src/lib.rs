@@ -1088,6 +1088,24 @@ pub fn session_resting_hr(start: i64, end: i64, hr: Vec<HrTick>) -> Option<i32> 
     resting_hr::session_resting_hr(start, end, &s)
 }
 
+/// RMSSD (ms) of raw R-R values. `None` for <2 beats.
+#[uniffi::export]
+pub fn hrv_rmssd(rr_ms: Vec<u16>) -> Option<f64> {
+    HrvReadiness::rmssd(&rr_ms)
+}
+
+/// Range-filter R-R values, keeping only 300–2000 ms.
+#[uniffi::export]
+pub fn hrv_range_filter(rr_ms: Vec<u16>) -> Vec<u16> {
+    HrvReadiness::range_filter(&rr_ms)
+}
+
+/// Standard deviation of NN intervals (ms), sample std (ddof=1). `None` for <2 values.
+#[uniffi::export]
+pub fn hrv_sdnn(rr_ms: Vec<u16>) -> Option<f64> {
+    HrvReadiness::sdnn(&rr_ms)
+}
+
 /// Daily resting HR = min of the per-session floors.
 #[uniffi::export]
 pub fn daily_resting_hr(session_floors: Vec<Option<i32>>) -> Option<i32> {
