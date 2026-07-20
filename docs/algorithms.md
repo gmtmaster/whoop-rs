@@ -179,7 +179,7 @@ Bands: low [0,1) · medium [1,2) · high [2,3]
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/StressModel.kt` | ❌ Kotlin-only · no baseline gate (scores with 0 days) · demo seeder uses different formula |
+| `whoop-rs/crates/physio-algo/src/stress.rs` | ✅ Rust 2026-07-20 (5 tests) · 14-day baseline gate · Kotlin StressModel still called from UI |
 | `whoop-rs/crates/physio-algo/src/stress.rs` | Baevsky SI only, not daily Stress |
 
 ---
