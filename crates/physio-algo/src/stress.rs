@@ -218,6 +218,119 @@ pub fn daily_stress(today: StressDay, baseline: &[StressDay]) -> Option<f64> {
     Some((STRESS_MAX / (1.0 + (-raw).exp())).clamp(0.0, STRESS_MAX))
 }
 
+// ── Daytime Stress (intraday autonomic activation) ─────────────────────────────
+
+const WAKING_START_HOUR: i64 = 6;
+const WAKING_END_HOUR: i64 = 22;
+const HIGH_BAND_FLOOR: f64 = 2.0;
+const SUSTAINED_HOURS: usize = 3;
+const CALM_QUARTILE_MIN_COUNT: usize = 4;
+const DAYTIME_SD_FLOOR: f64 = 0.0001;
+
+/// One hour's data for daytime stress scoring.
+#[derive(Clone, Copy, Debug)]
+pub struct HourPoint {
+    /// Local hour (0-23).
+    pub hour: i32,
+    /// Mean HR for the hour, or None if below the sample gate.
+    pub mean_hr: Option<f64>,
+    /// RMSSD for the hour, or None if insufficient clean R-R.
+    pub rmssd: Option<f64>,
+}
+
+/// Daytime stress result.
+#[derive(Clone, Debug)]
+pub struct DaytimeStressResult {
+    /// Per-hour scores (only waking hours with HR above gate).
+    pub hours: Vec<ScoredHour>,
+    /// Mean across all scored hours.
+    pub day_mean: Option<f64>,
+    /// Hour with the highest score.
+    pub peak_hour: Option<i32>,
+    /// True when the last 3+ scored hours are all >= 2.
+    pub sustained_high: bool,
+    /// Length of the trailing high run.
+    pub sustained_run: usize,
+}
+
+/// One scored waking hour.
+#[derive(Clone, Copy, Debug)]
+pub struct ScoredHour {
+    pub hour: i32,
+    pub mean_hr: f64,
+    pub rmssd: Option<f64>,
+    pub stress: f64,
+}
+
+/// Score daytime hours for autonomic activation. Each hour needs ≥300 HR samples to score;
+/// RMSSD enriches the score when present. Reference values are the day's own calm-hour
+/// quartiles (Q25 for HR, Q75 for RMSSD) — no cross-day history needed.
+pub fn daytime_stress(hours: &[HourPoint]) -> DaytimeStressResult {
+    let waking: Vec<&HourPoint> = hours.iter().filter(|h| is_waking(h.hour)).collect();
+    if waking.is_empty() {
+        return DaytimeStressResult {
+            hours: Vec::new(), day_mean: None, peak_hour: None,
+            sustained_high: false, sustained_run: 0,
+        };
+    }
+    let hr_vals: Vec<f64> = waking.iter().filter_map(|h| h.mean_hr).collect();
+    let rmssd_vals: Vec<f64> = waking.iter().filter_map(|h| h.rmssd).collect();
+
+    let calm_hr = calm_reference(&hr_vals, true);
+    let calm_rmssd = calm_reference(&rmssd_vals, false);
+    let hr_mean = mean(&hr_vals);
+    let sd_hr = population_std(&hr_vals, hr_mean);
+    let rmssd_mean = mean(&rmssd_vals);
+    let sd_rmssd = population_std(&rmssd_vals, rmssd_mean);
+
+    let mut scored: Vec<(ScoredHour, f64)> = Vec::new();
+    for h in &waking {
+        let Some(mean_hr) = h.mean_hr else { continue };
+        let mut raw = 0.0;
+        if let Some(ref_hr) = calm_hr {
+            if sd_hr > DAYTIME_SD_FLOOR {
+                raw += (mean_hr - ref_hr) / sd_hr;
+            }
+        }
+        if let (Some(r), Some(ref_r)) = (h.rmssd, calm_rmssd) {
+            if sd_rmssd > DAYTIME_SD_FLOOR {
+                raw += (ref_r - r) / sd_rmssd;
+            }
+        }
+        let stress = (3.0 / (1.0 + (-raw).exp())).clamp(0.0, 3.0);
+        scored.push((ScoredHour { hour: h.hour, mean_hr, rmssd: h.rmssd, stress }, stress));
+    }
+    let mut run = 0;
+    for (_, s) in scored.iter().rev() {
+        if *s >= HIGH_BAND_FLOOR { run += 1 } else { break; }
+    }
+    let sustained = run >= SUSTAINED_HOURS;
+    let day_mean = if scored.is_empty() { None } else { Some(scored.iter().map(|(_, s)| s).sum::<f64>() / scored.len() as f64) };
+    let peak_hour = scored.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|(s, _)| s.hour);
+
+    DaytimeStressResult {
+        hours: scored.into_iter().map(|(s, _)| s).collect(),
+        day_mean, peak_hour, sustained_high: sustained, sustained_run: run,
+    }
+}
+
+fn is_waking(hour: i32) -> bool {
+    (WAKING_START_HOUR..WAKING_END_HOUR).contains(&(hour as i64))
+}
+
+fn calm_reference(xs: &[f64], calm_is_low: bool) -> Option<f64> {
+    if xs.is_empty() { return None; }
+    if xs.len() < CALM_QUARTILE_MIN_COUNT { return mean(xs); }
+    let mut s = xs.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let q = if calm_is_low { 0.25 } else { 0.75 };
+    let pos = q * (s.len() - 1) as f64;
+    let lo = pos as usize;
+    let hi = (lo + 1).min(s.len() - 1);
+    let frac = pos - lo as f64;
+    Some(s[lo] + frac * (s[hi] - s[lo]))
+}
+
 fn mean(xs: &[f64]) -> Option<f64> {
     if xs.is_empty() { None } else { Some(xs.iter().sum::<f64>() / xs.len() as f64) }
 }
@@ -273,5 +386,43 @@ mod stress_tests {
         let today = day(Some(65.0), Some(60.0));
         let s = daily_stress(today, &baseline).unwrap();
         assert!((s - 1.5).abs() < 0.1, "zero-spread baseline → always neutral, got {s}");
+    }
+
+    // ── daytime stress ──
+
+    #[test]
+    fn flat_day_scores_neutral() {
+        // All hours identical → zero spread → all z-scores zero → neutral 1.5
+        let hours: Vec<HourPoint> = (6..22).map(|h| HourPoint { hour: h, mean_hr: Some(70.0), rmssd: Some(40.0) }).collect();
+        let r = daytime_stress(&hours);
+        assert!((r.day_mean.unwrap() - 1.5).abs() < 0.1, "flat day → neutral, got {}", r.day_mean.unwrap());
+        assert!(!r.sustained_high);
+    }
+
+    #[test]
+    fn spiky_afternoon_scores_high_and_sustained() {
+        let mut hours: Vec<HourPoint> = (6..14).map(|h| HourPoint { hour: h, mean_hr: Some(70.0), rmssd: Some(40.0) }).collect();
+        // Afternoon spike: HR up, RMSSD down for 3+ hours
+        for h in 14..18 {
+            hours.push(HourPoint { hour: h, mean_hr: Some(90.0), rmssd: Some(25.0) });
+        }
+        let r = daytime_stress(&hours);
+        assert!(r.sustained_high, "3+ spiky hours should trigger sustained high");
+        assert!(r.peak_hour.is_some());
+    }
+
+    #[test]
+    fn below_hr_gate_excluded() {
+        let hours = vec![HourPoint { hour: 10, mean_hr: None, rmssd: Some(40.0) }];
+        let r = daytime_stress(&hours);
+        assert!(r.hours.is_empty());
+        assert!(r.day_mean.is_none());
+    }
+
+    #[test]
+    fn sleep_hours_excluded() {
+        let hours = vec![HourPoint { hour: 2, mean_hr: Some(60.0), rmssd: Some(50.0) }];
+        let r = daytime_stress(&hours);
+        assert!(r.hours.is_empty(), "2am should be excluded from waking window");
     }
 }
