@@ -279,7 +279,7 @@ Exact formula embedded in AnalyticsEngine.computeRest.
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/AnalyticsEngine.kt` (computeRest) | ❌ Kotlin-only · formula not extracted · no parity test |
+| `whoop-rs/crates/physio-algo/src/rest.rs` | ✅ Rust 2026-07-20 (5 tests) · Kotlin RestScorer still called, FFI not yet wired |
 
 ---
 
@@ -291,7 +291,7 @@ Rolling 14-night window total sleep vs 8 h fixed need.
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/SleepDebt.kt` | ❌ Kotlin-only |
+| `whoop-rs/crates/physio-algo/src/sleep_debt.rs` | ✅ Rust 2026-07-20 (5 tests) · Kotlin SleepDebt.kt still called |
 
 ---
 
