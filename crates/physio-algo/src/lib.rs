@@ -19,6 +19,7 @@ pub mod respiratory_rate;
 pub mod rest;
 pub mod resting_hr;
 pub mod sleep;
+pub mod sleep_debt;
 pub mod spo2;
 pub mod stats;
 pub mod strain;
