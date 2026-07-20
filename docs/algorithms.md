@@ -140,7 +140,7 @@ Charge = clamp(100 / (1 + exp(−1.6·(composite_z + 0.20))), 0, 100)
 | Location | Status |
 |---|---|
 | `whoop-rs/crates/physio-algo/src/recovery.rs` | ✅ parity tests |
-| `noop-tan/…/analytics/IntelligenceEngine.kt` | ⚡ skin temp ordering fixed 2026-07-20 · chronological baselines still shared |
+| `noop-tan/…/analytics/IntelligenceEngine.kt` | ✅ skin temp ordering + chronological baselines fixed 2026-07-20 |
 
 ---
 
@@ -318,8 +318,8 @@ Zones: each 10 %-HRR band from 50 % up.
 | ✅ | Charge skin temp ordering | Fixed 2026-07-20 (Kotlin) |
 | 🔧 | Effort call sites → Rust FFI | 16 Kotlin callers on old StrainScorer |
 | 🔧 | HRV → Rust FFI | 12 Kotlin callers on old HrvAnalyzer |
-| 🔧 | Charge chronological baselines | Pass-2 uses shared baseline |
-| 🔧 | R-R beat order | Room query sorts by magnitude |
+| ✅ | Charge chronological baselines | Incremental fold in pass-2 2026-07-20 |
+| 🔧 | R-R beat order | `ORDER BY ts, seq` in Room query 2026-07-20 |
 | 🔧 | Baselines → whoop-rs | 400 lines Kotlin |
 | ❌ | Daily Stress → whoop-rs | No baseline gate, not in Rust |
 | ❌ | Daytime Stress → whoop-rs | No exercise gate, not in Rust |
