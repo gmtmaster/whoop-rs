@@ -8,8 +8,8 @@ uniffi::setup_scaffolding!();
 use std::sync::{Arc, Mutex};
 
 use physio_algo::{
-    hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr, sleep, strain,
-    stress, stress_onset, vo2max,
+    baselines, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr,
+    sleep, strain, stress, stress_onset, vo2max,
     HrvReadiness, Spo2,
 };
 use whoop_protocol::deframe::DeframerMap;
@@ -1334,6 +1334,53 @@ pub fn stress_onset_evaluate(
             last_fire_at: d.next_state.last_fire_at,
         },
     }
+}
+
+// ── Personal baselines ───────────────────────────────────────────────────────
+
+#[derive(uniffi::Record)]
+pub struct MetricCfgInfo {
+    pub min_val: f64, pub max_val: f64, pub floor_spread: f64,
+    pub half_life_b: f64, pub half_life_s: f64,
+}
+
+#[derive(uniffi::Record)]
+pub struct BaselineStateInfo {
+    pub baseline: f64,
+    pub spread: f64,
+    pub n_valid: i32,
+    pub nights_since_update: i32,
+    pub status: String,
+}
+
+#[uniffi::export]
+pub fn baseline_metric_cfg_hrv() -> MetricCfgInfo {
+    let c = baselines::MetricCfg::hrv();
+    MetricCfgInfo { min_val: c.min_val, max_val: c.max_val, floor_spread: c.floor_spread,
+        half_life_b: c.half_life_b, half_life_s: c.half_life_s }
+}
+
+#[uniffi::export]
+pub fn baseline_update(state: Option<BaselineStateInfo>, value: Option<f64>, cfg: MetricCfgInfo) -> BaselineStateInfo {
+    let s = state.map(|s| baselines::BaselineState {
+        baseline: s.baseline, spread: s.spread, n_valid: s.n_valid,
+        nights_since_update: s.nights_since_update,
+        status: baselines::BaselineStatus::parse(&s.status),
+    });
+    let c = baselines::MetricCfg { min_val: cfg.min_val, max_val: cfg.max_val,
+        floor_spread: cfg.floor_spread, half_life_b: cfg.half_life_b, half_life_s: cfg.half_life_s };
+    let r = baselines::update(s, value, &c);
+    BaselineStateInfo { baseline: r.baseline, spread: r.spread, n_valid: r.n_valid,
+        nights_since_update: r.nights_since_update, status: r.status.as_str().to_string() }
+}
+
+#[uniffi::export]
+pub fn baseline_fold_history(values: Vec<Option<f64>>, cfg: MetricCfgInfo) -> BaselineStateInfo {
+    let c = baselines::MetricCfg { min_val: cfg.min_val, max_val: cfg.max_val,
+        floor_spread: cfg.floor_spread, half_life_b: cfg.half_life_b, half_life_s: cfg.half_life_s };
+    let r = baselines::fold_history(&values, &c);
+    BaselineStateInfo { baseline: r.baseline, spread: r.spread, n_valid: r.n_valid,
+        nights_since_update: r.nights_since_update, status: r.status.as_str().to_string() }
 }
 
 #[cfg(test)]
