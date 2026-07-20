@@ -1,0 +1,76 @@
+//! Wrap-aware step-derivation from the strap's cumulative u16 `step_motion_counter`. Returns raw
+//! motion-tick totals before the caller's per-user tick-per-step calibration. Daily total and
+//! per-workout window share this kernel so they never disagree on the counter math.
+
+use crate::sleep::StepSample;
+
+/// Largest wrap-aware delta treated as real motion between two adjacent 1 Hz records.
+/// A delta at/above this is a sync-gap or reboot boundary, not real steps.
+const MAX_STEP_DELTA: u16 = 512;
+
+/// Raw wrap-aware motion-tick total across `samples`. Sorts by `ts`. Returns `None` for
+/// fewer than two samples or no positive forward movement (so "no data" stays distinct from zero).
+/// The caller applies its `stepTicksPerStep` calibration to the returned ticks.
+pub fn steps_in_window(samples: &[StepSample]) -> Option<u32> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let mut sorted: Vec<&StepSample> = samples.iter().collect();
+    sorted.sort_by_key(|s| s.ts);
+
+    let mut total: u32 = 0;
+    for pair in sorted.windows(2) {
+        let delta = pair[1].counter.wrapping_sub(pair[0].counter);
+        if delta > 0 && delta < MAX_STEP_DELTA {
+            total += delta as u32;
+        }
+    }
+    if total > 0 { Some(total) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(ts: i64, counter: u16) -> StepSample {
+        StepSample { ts, counter, activity_class: None }
+    }
+
+    #[test]
+    fn sums_positive_consecutive_deltas() {
+        assert_eq!(steps_in_window(&[step(0, 100), step(60, 150), step(120, 220)]), Some(120));
+    }
+
+    #[test]
+    fn sorts_unordered_input() {
+        assert_eq!(steps_in_window(&[step(120, 220), step(0, 100), step(60, 150)]), Some(120));
+    }
+
+    #[test]
+    fn handles_u16_wraparound() {
+        // 65500 -> 20 wraps: wrapping_sub = 56; then 20 -> 80 => 60. Total 116.
+        assert_eq!(steps_in_window(&[step(0, 65500), step(60, 20), step(120, 80)]), Some(116));
+    }
+
+    #[test]
+    fn fewer_than_two_samples_is_null() {
+        assert_eq!(steps_in_window(&[]), None);
+        assert_eq!(steps_in_window(&[step(0, 100)]), None);
+    }
+
+    #[test]
+    fn no_forward_movement_is_null() {
+        assert_eq!(steps_in_window(&[step(0, 500), step(60, 500), step(120, 500)]), None);
+    }
+
+    #[test]
+    fn drops_big_gap_delta_as_boundary() {
+        assert_eq!(steps_in_window(&[step(0, 100), step(60, 140), step(120, 5000), step(180, 5030)]), Some(70));
+    }
+
+    #[test]
+    fn max_step_delta_boundary_is_exclusive() {
+        assert_eq!(steps_in_window(&[step(0, 0), step(60, 512)]), None);
+        assert_eq!(steps_in_window(&[step(0, 0), step(60, 511)]), Some(511));
+    }
+}

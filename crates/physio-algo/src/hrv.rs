@@ -157,6 +157,34 @@ impl HrvReadiness {
         (n > 0).then(|| sum / n as f64)
     }
 
+    /// Deep-sleep-windowed session avgHrv (ms): per-bucket RMSSD like [windowed_avg_hrv], keeping only
+    /// buckets whose center falls inside a `deep_spans` span. `None` when no deep bucket yields a value.
+    pub fn windowed_avg_hrv_deep(start: u32, end: u32, beats: &[(u32, u16)], deep_spans: &[(u32, u32)]) -> Option<f64> {
+        let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
+        if seg.is_empty() {
+            return None;
+        }
+        let (start, end) = (start as u64, end as u64);
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        let mut t = start;
+        while t < end {
+            let hi = t + HRV_WINDOW_SECS;
+            let center = t + HRV_WINDOW_SECS / 2;
+            if deep_spans.iter().any(|&(ds, de)| center >= ds as u64 && center < de as u64) {
+                let bucket: Vec<u16> =
+                    seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi).map(|&(_, rr)| rr).collect();
+                let (nn, contiguous) = clean_rr_gap_aware(&bucket);
+                let val = if nn.len() >= 2 { rmssd_from_clean(&nn, &contiguous) } else { None };
+                if let Some(v) = val {
+                    sum += v;
+                    n += 1;
+                }
+            }
+            t = hi;
+        }
+        (n > 0).then(|| sum / n as f64)
+    }
+
     /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
     /// Groups records into UTC days, then applies `rmssd_gap_aware` per day. A sleep that straddles UTC
     /// midnight is split across the two days.
@@ -384,6 +412,26 @@ mod tests {
         let beats: Vec<(u32, u16)> = vec![(100, 800), (100, 810), (100, 820), (100, 815), (100, 805)];
         let got = HrvReadiness::windowed_avg_hrv(100, 400, &beats).unwrap();
         assert!((got - 9.013878188659973).abs() < 1e-12, "got {got}");
+    }
+
+    #[test]
+    fn deep_windowed_avg_hrv_keeps_buckets_in_deep_spans() {
+        // Two buckets: [100,400) and [400,700). Only [400,700) is deep → result = bucket B RMSSD.
+        let beats: Vec<(u32, u16)> = vec![
+            (100, 800), (100, 810), (100, 820), (100, 815), (100, 805),
+            (400, 700), (400, 720), (400, 710),
+        ];
+        let deep = vec![(400u32, 700u32)];
+        let got = HrvReadiness::windowed_avg_hrv_deep(100, 700, &beats, &deep).unwrap();
+        let b = 15.811388300841896f64; // sqrt(500/2) from [700,720,710]
+        assert!((got - b).abs() < 1e-12, "got {got}");
+    }
+
+    #[test]
+    fn deep_windowed_avg_hrv_returns_none_without_deep_spans() {
+        let beats: Vec<(u32, u16)> = vec![(100, 800), (100, 810)];
+        let got = HrvReadiness::windowed_avg_hrv_deep(100, 400, &beats, &[]);
+        assert!(got.is_none());
     }
 
     #[test]

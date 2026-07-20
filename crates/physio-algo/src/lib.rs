@@ -9,6 +9,7 @@
 //! `respiratory_rate`, `imu_features` and the shared `stats`.
 
 pub mod baselines;
+pub mod calories;
 pub mod calibration;
 pub mod hr_anomaly;
 pub mod hr_zones;
@@ -23,10 +24,12 @@ pub mod sleep;
 pub mod sleep_debt;
 pub mod spo2;
 pub mod stats;
+pub mod steps;
 pub mod strain;
 pub mod stress;
 pub mod stress_onset;
 pub mod vo2max;
+pub mod workout;
 
 pub use calibration::Calibration;
 pub use hr_anomaly::{HrWatch, HrWatchState};

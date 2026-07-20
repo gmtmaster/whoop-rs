@@ -8,8 +8,8 @@ uniffi::setup_scaffolding!();
 use std::sync::{Arc, Mutex};
 
 use physio_algo::{
-    baselines, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr,
-    sleep, strain, stress, stress_onset, vo2max,
+    baselines, calories, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr,
+    sleep, steps, strain, stress, stress_onset, vo2max, workout,
     HrvReadiness, Spo2,
 };
 use whoop_protocol::deframe::DeframerMap;
@@ -1382,6 +1382,132 @@ pub fn baseline_fold_history(values: Vec<Option<f64>>, cfg: MetricCfgInfo) -> Ba
     BaselineStateInfo { baseline: r.baseline, spread: r.spread, n_valid: r.n_valid,
         nights_since_update: r.nights_since_update, status: r.status.as_str().to_string() }
 }
+
+// -- Steps counter (FFI bridge) --
+
+/// Raw wrap-aware motion-tick total from step counter samples. None with fewer than 2 samples
+/// or no forward movement. The caller applies its stepTicksPerStep calibration.
+#[uniffi::export]
+pub fn steps_counter(samples: Vec<SleepStepSample>) -> Option<u64> {
+    let s: Vec<sleep::StepSample> = samples
+        .into_iter()
+        .map(|st| sleep::StepSample { ts: st.ts, counter: st.counter, activity_class: st.activity_class })
+        .collect();
+    steps::steps_in_window(&s).map(|v| v as u64)
+}
+
+// -- Calories (Keytel + Harris-Benedict) --
+
+/// Whole-day energy estimate (kcal) from HR samples. Each sample = one second.
+#[uniffi::export]
+pub fn calories_estimate_day(
+    hr: Vec<HrTick>,
+    weight_kg: f64,
+    height_cm: f64,
+    age: f64,
+    sex: String,
+    hrmax: f64,
+    resting_hr: f64,
+) -> f64 {
+    let samples: Vec<calories::HrSample> = hr
+        .into_iter()
+        .map(|h| calories::HrSample { ts: h.ts, bpm: h.bpm })
+        .collect();
+    calories::estimate_day_calories(&samples, weight_kg, height_cm, age, &sex, hrmax, resting_hr)
+}
+
+/// Bout energy estimate (kcal, kJ) from HR samples. Each sample weighted by elapsed time to next.
+#[uniffi::export]
+pub fn calories_estimate_bout(
+    hr: Vec<HrTick>,
+    weight_kg: f64,
+    height_cm: f64,
+    age: f64,
+    sex: String,
+    hrmax: f64,
+    resting_hr: f64,
+) -> Vec<f64> {
+    let samples: Vec<calories::HrSample> = hr
+        .into_iter()
+        .map(|h| calories::HrSample { ts: h.ts, bpm: h.bpm })
+        .collect();
+    let (kcal, kj) = calories::estimate_bout_calories(&samples, weight_kg, height_cm, age, &sex, hrmax, resting_hr);
+    vec![kcal, kj]
+}
+
+// -- Workout detection --
+
+/// A gravity/accel sample for workout detection.
+#[derive(uniffi::Record)]
+pub struct WorkoutGravitySample {
+    pub ts: i64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+/// One detected workout session.
+#[derive(uniffi::Record)]
+pub struct ZoneTimeEntry {
+    pub zone: i32,
+    pub pct: f64,
+}
+
+/// One detected workout session.
+#[derive(uniffi::Record)]
+pub struct WorkoutSession {
+    pub start: i64,
+    pub end: i64,
+    pub avg_hr: f64,
+    pub peak_hr: i32,
+    pub strain: Option<f64>,
+    pub duration_s: f64,
+    pub zone_time: Vec<ZoneTimeEntry>,
+    pub avg_hrr_pct: Option<f64>,
+    pub calories_kcal: Option<f64>,
+    pub calories_kj: Option<f64>,
+}
+
+/// Detect workout sessions from HR + gravity streams. Returns one session per detected bout.
+#[allow(clippy::too_many_arguments)]
+#[uniffi::export]
+pub fn workout_detect(
+    hr: Vec<HrTick>,
+    gravity: Vec<WorkoutGravitySample>,
+    resting_hr: Option<f64>,
+    max_hr: Option<f64>,
+    age: Option<f64>,
+    weight_kg: f64,
+    height_cm: f64,
+    sex: String,
+) -> Vec<WorkoutSession> {
+    let hr_samples: Vec<workout::HrSample> = hr
+        .into_iter()
+        .map(|h| workout::HrSample { ts: h.ts, bpm: h.bpm })
+        .collect();
+    let grav_samples: Vec<workout::GravitySample> = gravity
+        .into_iter()
+        .map(|g| workout::GravitySample { ts: g.ts, x: g.x, y: g.y, z: g.z })
+        .collect();
+    let sessions = workout::detect(
+        &hr_samples, &grav_samples,
+        resting_hr, max_hr, age,
+        weight_kg, height_cm, &sex,
+    );
+    sessions.into_iter().map(|s| WorkoutSession {
+        start: s.start,
+        end: s.end,
+        avg_hr: s.avg_hr,
+        peak_hr: s.peak_hr,
+        strain: s.strain,
+        duration_s: s.duration_s,
+        zone_time: s.zone_time_pct.into_iter().map(|(z, p)| ZoneTimeEntry { zone: z, pct: p }).collect(),
+        avg_hrr_pct: s.avg_hrr_pct,
+        calories_kcal: s.calories_kcal,
+        calories_kj: s.calories_kj,
+    }).collect()
+}
+
 
 #[cfg(test)]
 mod tests {
