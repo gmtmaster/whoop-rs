@@ -134,31 +134,25 @@ impl HrvReadiness {
     /// gap-aware-RMSSD'd (kept only with >= 2 clean beats and a surviving contiguous pair). No whole-night
     /// beat-count gate. `None` when no bucket yields a value.
     pub fn windowed_avg_hrv(start: u32, end: u32, beats: &[(u32, u16)]) -> Option<f64> {
-        let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
-        if seg.is_empty() {
-            return None;
-        }
-        let (start, end) = (start as u64, end as u64);
-        let (mut sum, mut n) = (0.0f64, 0usize);
-        let mut t = start;
-        while t < end {
-            let hi = t + HRV_WINDOW_SECS;
-            let bucket: Vec<u16> =
-                seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi).map(|&(_, rr)| rr).collect();
-            let (nn, contiguous) = clean_rr_gap_aware(&bucket);
-            let val = if nn.len() >= 2 { rmssd_from_clean(&nn, &contiguous) } else { None };
-            if let Some(v) = val {
-                sum += v;
-                n += 1;
-            }
-            t = hi;
-        }
-        (n > 0).then(|| sum / n as f64)
+        Self::windowed_avg_hrv_inner(start, end, beats, |_| true)
     }
 
     /// Deep-sleep-windowed session avgHrv (ms): per-bucket RMSSD like [windowed_avg_hrv], keeping only
     /// buckets whose center falls inside a `deep_spans` span. `None` when no deep bucket yields a value.
     pub fn windowed_avg_hrv_deep(start: u32, end: u32, beats: &[(u32, u16)], deep_spans: &[(u32, u32)]) -> Option<f64> {
+        // Boxing so the closure outlives this call while the inner function borrows the spans.
+        let spans: Vec<(u64, u64)> = deep_spans.iter().map(|&(s, e)| (s as u64, e as u64)).collect();
+        Self::windowed_avg_hrv_inner(start, end, beats, move |t| {
+            let center = t + HRV_WINDOW_SECS / 2;
+            spans.iter().any(|&(ds, de)| center >= ds && center < de)
+        })
+    }
+
+    /// Common bucket-loop body shared by [windowed_avg_hrv] and [windowed_avg_hrv_deep].
+    /// The `bucket_filter` predicate gates each bucket's centre; it is called once per bucket.
+    fn windowed_avg_hrv_inner<F: Fn(u64) -> bool>(
+        start: u32, end: u32, beats: &[(u32, u16)], bucket_filter: F,
+    ) -> Option<f64> {
         let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
         if seg.is_empty() {
             return None;
@@ -168,8 +162,7 @@ impl HrvReadiness {
         let mut t = start;
         while t < end {
             let hi = t + HRV_WINDOW_SECS;
-            let center = t + HRV_WINDOW_SECS / 2;
-            if deep_spans.iter().any(|&(ds, de)| center >= ds as u64 && center < de as u64) {
+            if bucket_filter(t) {
                 let bucket: Vec<u16> =
                     seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi).map(|&(_, rr)| rr).collect();
                 let (nn, contiguous) = clean_rr_gap_aware(&bucket);
