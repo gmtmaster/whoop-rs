@@ -162,7 +162,7 @@ Per metric (HRV, RHR, respiration, skin temp, Effort):
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/Baselines.kt` | 🔧 **Kotlin-only, not in whoop-rs** |
+| `whoop-rs/crates/physio-algo/src/baselines.rs` | ✅ Rust 2026-07-20 (4 tests) · Kotlin delegates via FFI |
 
 ---
 
@@ -266,7 +266,7 @@ Suppressed by: HR zone (exercise), recent motion, low R-R count.
 
 | Location | Status |
 |---|---|
-| `noop-tan/…/analytics/StressOnsetDetector.kt` | ❌ Kotlin-only · opt-in · live-data FFI needed |
+| `whoop-rs/crates/physio-algo/src/stress_onset.rs` | ✅ Rust 2026-07-20 (5 tests) · stateful FFI via Record |
 
 ---
 
@@ -324,5 +324,5 @@ Zones: each 10 %-HRR band from 50 % up.
 | ✅ | Rest formula → whoop-rs | rest.rs 2026-07-20 |
 | ✅ | Sleep debt → whoop-rs | sleep_debt.rs 2026-07-20 |
 | ✅ | Daytime Stress source | activeStrapId 2026-07-20 |
-| 🔧 | Baselines → whoop-rs | 400 lines Kotlin (persistence contract) |
+| ✅ | Baselines → whoop-rs | baselines.rs 2026-07-20 (EWMA update via FFI) |
 | ✅ | Onset detector → whoop-rs | stress_onset.rs 2026-07-20 (stateful FFI via Record) |
