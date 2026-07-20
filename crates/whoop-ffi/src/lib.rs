@@ -586,7 +586,7 @@ impl WhoopCodec {
 
     /// The SEND_HISTORICAL_DATA frame that starts a drain.
     pub fn offload_start(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().offload.start_frame()
+        self.inner.lock().expect("Mutex poisoned — a prior codec panic left the inner state corrupted").offload.start_frame()
     }
 
     /// The 16 R22 deep-data enable frames (write each confirmed, ~80 ms apart). Reversible.
@@ -657,7 +657,7 @@ impl WhoopCodec {
 
     /// Drop any buffered partial frames — call on (re)connect.
     pub fn reset(&self) {
-        self.inner.lock().unwrap().deframers.reset();
+        self.inner.lock().expect("Mutex poisoned — a prior codec panic left the inner state corrupted").deframers.reset();
     }
 
     /// Decode a single live-notify frame (realtime HR/R-R, on-wrist r22 biometric, event/battery, or
@@ -720,7 +720,7 @@ impl WhoopCodec {
 
     /// Cleanly abort an in-flight history drain.
     pub fn offload_abort(&self) -> Vec<u8> {
-        self.inner.lock().unwrap().offload.abort_frame()
+        self.inner.lock().expect("Mutex poisoned — a prior codec panic left the inner state corrupted").offload.abort_frame()
     }
 
     /// GET_HELLO (identity + firmware), family-forked. The `[0x00]` payload matches the client's default

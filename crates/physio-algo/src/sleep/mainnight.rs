@@ -109,10 +109,10 @@ pub fn bridge_adjacent(blocks: &[NightBlock]) -> Vec<NightBlock> {
     let bridge_s = GAP_BRIDGE_MAX_MIN * 60;
     let mut out = vec![sorted[0]];
     for b in &sorted[1..] {
-        let last = *out.last().unwrap();
+        let last = *out.last().expect("out is seeded from sorted[0]; never empty");
         let gap = b.start - last.end;
         if (0..bridge_s).contains(&gap) {
-            *out.last_mut().unwrap() = NightBlock { start: last.start, end: last.end.max(b.end) };
+            *out.last_mut().expect("out non-empty: seeded + only grows") = NightBlock { start: last.start, end: last.end.max(b.end) };
         } else {
             out.push(*b);
         }
@@ -141,10 +141,10 @@ pub fn bridged_night_groups(blocks: &[NightBlock], offset_s: i64) -> Vec<Bridged
                 && (gap < bridge_s || (gap < night_tail_bridge_s && is_overnight_onset(b.start, offset_s)));
             if bridges {
                 if gap > 0 {
-                    gaps.last_mut().unwrap().push((last.end, b.start));
+                    gaps.last_mut().expect("gaps non-empty: built from |indices|-1 merge steps").push((last.end, b.start));
                 }
-                *bridged.last_mut().unwrap() = NightBlock { start: last.start, end: last.end.max(b.end) };
-                groups.last_mut().unwrap().push(idx);
+                *bridged.last_mut().expect("bridged non-empty: seeded before merge loop") = NightBlock { start: last.start, end: last.end.max(b.end) };
+                groups.last_mut().expect("groups non-empty: seeded before merge loop").push(idx);
                 continue;
             }
         }
@@ -197,8 +197,8 @@ pub fn main_night_group_indices(
     let bridged_spans: Vec<NightBlock> = all
         .iter()
         .map(|g| NightBlock {
-            start: g.indices.iter().map(|&i| blocks[i].start).min().unwrap(),
-            end: g.indices.iter().map(|&i| blocks[i].end).max().unwrap(),
+            start: g.indices.iter().map(|&i| blocks[i].start).min().expect("group indices non-empty: built from block groups"),
+            end: g.indices.iter().map(|&i| blocks[i].end).max().expect("group indices non-empty: built from block groups"),
         })
         .collect();
     let winner = main_night_index(&bridged_spans, offset_s, habitual_midsleep_sec)?;
