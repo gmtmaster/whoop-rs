@@ -246,7 +246,7 @@ pub fn backdated_start(core_start: i64, motion_ts: &[i64], smooth: &[f64]) -> i6
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-/// Detect workouts from HR + gravity streams. Mirrors Kotlin `WorkoutDetector.detect`.
+/// Detect workouts from HR + gravity streams.
 ///
 /// Returns `Vec<ExerciseSession>` — one per detected bout. Empty when no workout found.
 ///

@@ -79,8 +79,7 @@ impl HrvReadiness {
         Self::rmssd_runs(std::iter::once(rr_ms))
     }
 
-    /// Plain RMSSD without filtering. Accepts u16 or f64-converted values; same formula as
-    /// Kotlin `HrvAnalyzer.rmssdRaw`.
+    /// Plain RMSSD without artifact filtering. Accepts u16 values.
     pub fn rmssd_plain(rr_ms: &[u16]) -> Option<f64> {
         if rr_ms.len() < 2 { return None; }
         let mut sum_sq = 0.0;

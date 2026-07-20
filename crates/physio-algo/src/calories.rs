@@ -2,7 +2,7 @@
 //! Per-bout and whole-day paths share the same per-second model but differ in how they weight
 //! inter-sample gaps (elapsed-time vs flat one-second). APPROXIMATE, not laboratory calorimetry.
 
-/// Sex-specific BMR + active-EE coefficients. Mirrors the Kotlin `Calories.Coeffs`.
+/// Sex-specific BMR + active-EE coefficients.
 #[derive(Clone, Copy, Debug)]
 pub struct Coeffs {
     pub resting_alpha: f64,
@@ -76,7 +76,6 @@ pub struct HrSample {
 
 /// Estimate (kcal, kJ) for a workout bout. Each sample is weighted by the elapsed time to the next
 /// sample (capped at [MERGE_GAP_S]), so sparse streams are counted over real seconds.
-/// Mirrors Kotlin `Calories.estimateBoutCalories`.
 pub fn estimate_bout_calories(
     hr_samples: &[HrSample],
     weight_kg: f64,
@@ -118,7 +117,6 @@ pub fn estimate_bout_calories(
 
 /// Whole-day energy estimate (kcal) from HR samples. Each sample counts as exactly one second
 /// (flat per-sample, no elapsed-time weighting). Uses [DAY_ACTIVE_HRR_FRACTION] gate.
-/// Mirrors Kotlin `Calories.estimateDayCalories`.
 pub fn estimate_day_calories(
     hr_samples: &[HrSample],
     weight_kg: f64,
