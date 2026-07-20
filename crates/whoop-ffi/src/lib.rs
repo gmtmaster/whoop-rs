@@ -8,7 +8,8 @@ uniffi::setup_scaffolding!();
 use std::sync::{Arc, Mutex};
 
 use physio_algo::{
-    hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr, sleep, strain, stress, vo2max,
+    hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr, sleep, strain,
+    stress, stress_onset, vo2max,
     HrvReadiness, Spo2,
 };
 use whoop_protocol::deframe::DeframerMap;
@@ -1264,6 +1265,74 @@ pub fn imu_features(samples: Vec<ImuSampleInfo>, sample_rate_hz: i32) -> ImuFeat
         cadence_hz: f.cadence_hz,
         cadence_strength: f.cadence_strength,
         sample_count: f.sample_count as u32,
+    }
+}
+
+// ── Stress onset detector ────────────────────────────────────────────────────
+
+/// Persisted state for the onset detector, serializable across FFI.
+#[derive(uniffi::Record)]
+pub struct OnsetStateInfo {
+    pub baseline_rmssd: f64,
+    pub was_below: bool,
+    pub last_fire_at: i64,
+}
+
+/// Stress-onset evaluation result.
+#[derive(uniffi::Record)]
+pub struct OnsetDecisionInfo {
+    pub should_nudge: bool,
+    pub reason: String,
+    pub fast_rmssd: Option<f64>,
+    pub baseline_rmssd: Option<f64>,
+    pub next_state: OnsetStateInfo,
+}
+
+fn reason_str(r: stress_onset::OnsetReason) -> String {
+    match r {
+        stress_onset::OnsetReason::Onset => "onset",
+        stress_onset::OnsetReason::Disabled => "disabled",
+        stress_onset::OnsetReason::InsufficientData => "insufficient_data",
+        stress_onset::OnsetReason::NoDip => "no_dip",
+        stress_onset::OnsetReason::NotAnEdge => "not_an_edge",
+        stress_onset::OnsetReason::ExerciseGated => "exercise_gated",
+        stress_onset::OnsetReason::Suppressed => "suppressed",
+    }.to_string()
+}
+
+#[allow(clippy::too_many_arguments)]
+#[uniffi::export]
+pub fn stress_onset_evaluate(
+    rr_buffer: Vec<u16>,
+    current_hr: Option<f64>,
+    recent_motion_g: Option<f64>,
+    session_active: bool,
+    state: OnsetStateInfo,
+    enabled: bool,
+    auto_nudge: bool,
+    quiet_hours_enabled: bool,
+    quiet_start_min: i32,
+    quiet_end_min: i32,
+    now_sec: i64,
+    tz_offset_sec: i64,
+) -> OnsetDecisionInfo {
+    let s = stress_onset::OnsetState {
+        baseline_rmssd: state.baseline_rmssd,
+        was_below: state.was_below,
+        last_fire_at: state.last_fire_at,
+    };
+    let d = stress_onset::evaluate(&rr_buffer, current_hr, recent_motion_g, session_active, s,
+        enabled, auto_nudge, quiet_hours_enabled, quiet_start_min, quiet_end_min, now_sec, tz_offset_sec);
+    OnsetDecisionInfo {
+        should_nudge: d.should_nudge,
+        reason: reason_str(d.reason),
+        fast_rmssd: d.fast_rmssd,
+        baseline_rmssd: d.baseline_rmssd,
+        next_state: OnsetStateInfo {
+            baseline_rmssd: d.next_state.baseline_rmssd,
+            was_below: d.next_state.was_below,
+            last_fire_at: d.next_state.last_fire_at,
+        },
     }
 }
 

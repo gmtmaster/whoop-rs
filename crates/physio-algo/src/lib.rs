@@ -24,6 +24,7 @@ pub mod spo2;
 pub mod stats;
 pub mod strain;
 pub mod stress;
+pub mod stress_onset;
 pub mod vo2max;
 
 pub use calibration::Calibration;
