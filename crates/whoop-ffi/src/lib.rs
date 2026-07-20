@@ -1088,10 +1088,16 @@ pub fn session_resting_hr(start: i64, end: i64, hr: Vec<HrTick>) -> Option<i32> 
     resting_hr::session_resting_hr(start, end, &s)
 }
 
-/// RMSSD (ms) of raw R-R values. `None` for <2 beats.
+/// RMSSD (ms) of raw R-R values. `None` for <2 beats (filtered, drops deltas >200ms).
 #[uniffi::export]
 pub fn hrv_rmssd(rr_ms: Vec<u16>) -> Option<f64> {
     HrvReadiness::rmssd(&rr_ms)
+}
+
+/// Plain unfiltered RMSSD, matching Kotlin HrvAnalyzer.rmssdRaw exactly.
+#[uniffi::export]
+pub fn hrv_rmssd_plain(rr_ms: Vec<u16>) -> Option<f64> {
+    HrvReadiness::rmssd_plain(&rr_ms)
 }
 
 /// Range-filter R-R values, keeping only 300–2000 ms.

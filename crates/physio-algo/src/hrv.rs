@@ -73,9 +73,22 @@ impl HrvReadiness {
         (pairs > 0).then(|| (sumsq / pairs as f64).sqrt())
     }
 
-    /// RMSSD (ms) of one run of consecutive R-R beats. `None` for < 2 beats.
+    /// RMSSD (ms) of one run of consecutive R-R beats. `None` for < 2 beats. Uses the run-based
+    /// path which drops individual beat deltas > `MAX_BEAT_DELTA_MS`.
     pub fn rmssd(rr_ms: &[u16]) -> Option<f64> {
         Self::rmssd_runs(std::iter::once(rr_ms))
+    }
+
+    /// Plain RMSSD without filtering. Accepts u16 or f64-converted values; same formula as
+    /// Kotlin `HrvAnalyzer.rmssdRaw`.
+    pub fn rmssd_plain(rr_ms: &[u16]) -> Option<f64> {
+        if rr_ms.len() < 2 { return None; }
+        let mut sum_sq = 0.0;
+        for i in 1..rr_ms.len() {
+            let d = rr_ms[i] as f64 - rr_ms[i - 1] as f64;
+            sum_sq += d * d;
+        }
+        Some((sum_sq / (rr_ms.len() - 1) as f64).sqrt())
     }
 
     /// Range-filter R-R intervals (keep 300–2000 ms).
