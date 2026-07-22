@@ -8,8 +8,8 @@ uniffi::setup_scaffolding!();
 use std::sync::{Arc, Mutex};
 
 use physio_algo::{
-    baselines, calories, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, resting_hr,
-    sleep, steps, strain, stress, stress_onset, vo2max, workout,
+    baselines, calories, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, rest, resting_hr,
+    sleep, sleep_debt, steps, strain, stress, stress_onset, vo2max, workout,
     HrvReadiness, Spo2,
 };
 use whoop_protocol::deframe::DeframerMap;
@@ -1525,6 +1525,133 @@ pub fn hrv_windowed_avg_deep(
         .map(|s| (s.start as u32, s.end as u32))
         .collect();
     HrvReadiness::windowed_avg_hrv_deep(start, end, &beats, &deep_spans)
+}
+
+// ── Rest (sleep performance composite) ───────────────────────────────────────
+
+/// Rest (sleep performance) composite [0, 100] from a night's aggregates. `None` when there is no asleep
+/// time. Absent `sleep_need_hours` defaults to 8 h; absent `consistency` defaults to a neutral 0.5.
+#[uniffi::export]
+pub fn rest_score(
+    asleep_seconds: f64,
+    efficiency: f64,
+    deep_seconds: f64,
+    rem_seconds: f64,
+    sleep_need_hours: Option<f64>,
+    consistency: Option<f64>,
+) -> Option<f64> {
+    rest::rest(asleep_seconds, efficiency, deep_seconds, rem_seconds, sleep_need_hours, consistency)
+}
+
+// ── Sleep debt ledger ────────────────────────────────────────────────────────
+
+/// One night fed into the debt ledger: local `day` key + `slept_min` (None = no data, skipped not zeroed).
+#[derive(uniffi::Record)]
+pub struct DebtNightInput {
+    pub day: String,
+    pub slept_min: Option<f64>,
+}
+
+/// One night's contribution to the ledger.
+#[derive(uniffi::Record)]
+pub struct DebtNightInfo {
+    pub day: String,
+    pub slept_min: f64,
+    pub delta_min: f64,
+}
+
+/// The rolling debt ledger over the capped trailing window of nights with data.
+#[derive(uniffi::Record)]
+pub struct DebtLedgerInfo {
+    pub balance_min: f64,
+    pub nights: Vec<DebtNightInfo>,
+    pub need_min: f64,
+}
+
+/// Rolling sleep-debt ledger: Σ(slept − need) over the last `window` (default 14) nights with data.
+/// `need_hours` defaults to 8 h. Nights with no sleep are skipped, never zero-filled.
+#[uniffi::export]
+pub fn sleep_debt_ledger(series: Vec<DebtNightInput>, need_hours: Option<f64>, window: Option<u32>) -> DebtLedgerInfo {
+    let s: Vec<(String, Option<f64>)> = series.into_iter().map(|n| (n.day, n.slept_min)).collect();
+    let l = sleep_debt::ledger(&s, need_hours, window.map(|w| w as usize));
+    DebtLedgerInfo {
+        balance_min: l.balance_min,
+        nights: l
+            .nights
+            .into_iter()
+            .map(|n| DebtNightInfo { day: n.day, slept_min: n.slept_min, delta_min: n.delta_min })
+            .collect(),
+        need_min: l.need_min,
+    }
+}
+
+// ── Daily stress (autonomic, RHR + HRV vs baseline) ──────────────────────────
+
+/// One day's RHR + HRV for daily-stress scoring (either may be absent).
+#[derive(uniffi::Record)]
+pub struct StressDayInfo {
+    pub rhr: Option<f64>,
+    pub hrv: Option<f64>,
+}
+
+/// Daily autonomic stress (0–3) from today's RHR + HRV against the prior-days baseline. `None` on too few
+/// baseline days or no signal today.
+#[uniffi::export]
+pub fn daily_stress(today: StressDayInfo, baseline: Vec<StressDayInfo>) -> Option<f64> {
+    let b: Vec<stress::StressDay> = baseline.into_iter().map(|d| stress::StressDay { rhr: d.rhr, hrv: d.hrv }).collect();
+    stress::daily_stress(stress::StressDay { rhr: today.rhr, hrv: today.hrv }, &b)
+}
+
+// ── Daytime stress (intraday autonomic activation) ───────────────────────────
+
+/// One hour's aggregates: local `hour` (0–23), mean HR (None below the sample gate) and RMSSD (None on
+/// insufficient clean R-R).
+#[derive(uniffi::Record)]
+pub struct HourPointInfo {
+    pub hour: i32,
+    pub mean_hr: Option<f64>,
+    pub rmssd: Option<f64>,
+}
+
+/// One scored waking hour.
+#[derive(uniffi::Record)]
+pub struct ScoredHourInfo {
+    pub hour: i32,
+    pub mean_hr: f64,
+    pub rmssd: Option<f64>,
+    pub stress: f64,
+}
+
+/// Daytime-stress result: the per-hour scores plus the day mean, peak hour, and the trailing high run.
+#[derive(uniffi::Record)]
+pub struct DaytimeStressInfo {
+    pub hours: Vec<ScoredHourInfo>,
+    pub day_mean: Option<f64>,
+    pub peak_hour: Option<i32>,
+    pub sustained_high: bool,
+    pub sustained_run: u32,
+}
+
+/// Score waking hours for autonomic activation against the day's own calm-hour quartiles (Q25 HR, Q75
+/// RMSSD). Each hour needs its own HR gate applied by the caller (a `None` mean_hr hour is skipped).
+#[uniffi::export]
+pub fn daytime_stress(hours: Vec<HourPointInfo>) -> DaytimeStressInfo {
+    let h: Vec<stress::HourPoint> = hours
+        .into_iter()
+        .map(|p| stress::HourPoint { hour: p.hour, mean_hr: p.mean_hr, rmssd: p.rmssd })
+        .collect();
+    let r = stress::daytime_stress(&h);
+    DaytimeStressInfo {
+        hours: r
+            .hours
+            .into_iter()
+            .map(|s| ScoredHourInfo { hour: s.hour, mean_hr: s.mean_hr, rmssd: s.rmssd, stress: s.stress })
+            .collect(),
+        day_mean: r.day_mean,
+        peak_hour: r.peak_hour,
+        sustained_high: r.sustained_high,
+        sustained_run: r.sustained_run as u32,
+    }
 }
 
 
