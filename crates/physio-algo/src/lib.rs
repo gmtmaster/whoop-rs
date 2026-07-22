@@ -33,6 +33,6 @@ pub mod workout;
 
 pub use calibration::Calibration;
 pub use hr_anomaly::{HrWatch, HrWatchState};
-pub use hrv::{HrvReadiness, HrvReadinessResult, ReadinessTier, SECS_PER_DAY};
+pub use hrv::{HrvAnalysis, HrvReadiness, HrvReadinessResult, ReadinessTier, SECS_PER_DAY};
 pub use spo2::{RollingReading, Spo2};
 pub use stats::{linear_fit, pearson, LinearFit};

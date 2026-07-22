@@ -1113,6 +1113,33 @@ pub fn hrv_sdnn(rr_ms: Vec<u16>) -> Option<f64> {
     HrvReadiness::sdnn(&rr_ms)
 }
 
+/// Full HRV analysis over a raw R-R capture (ms): cleaned RMSSD/SDNN/pNN50/meanNN + input/clean counts.
+/// Fields are `None` (and `n_clean` 0) below the 20-clean-beat floor, or when `max_rejected_fraction` (the
+/// spot honesty gate) is set and exceeded. The nightly path passes `None` (no gate).
+#[derive(uniffi::Record)]
+pub struct HrvAnalysisInfo {
+    pub rmssd: Option<f64>,
+    pub sdnn: Option<f64>,
+    pub mean_nn: Option<f64>,
+    pub pnn50: Option<f64>,
+    pub n_input: u32,
+    pub n_clean: u32,
+}
+
+/// Clean-and-analyze a raw R-R series in one call (the app's full spot/nightly HRV analysis path).
+#[uniffi::export]
+pub fn hrv_analyze_raw(rr_ms: Vec<u16>, max_rejected_fraction: Option<f64>) -> HrvAnalysisInfo {
+    let a = HrvReadiness::analyze_raw(&rr_ms, max_rejected_fraction);
+    HrvAnalysisInfo {
+        rmssd: a.rmssd,
+        sdnn: a.sdnn,
+        mean_nn: a.mean_nn,
+        pnn50: a.pnn50,
+        n_input: a.n_input,
+        n_clean: a.n_clean,
+    }
+}
+
 /// Daily resting HR = min of the per-session floors.
 #[uniffi::export]
 pub fn daily_resting_hr(session_floors: Vec<Option<i32>>) -> Option<i32> {

@@ -31,6 +31,10 @@ const MAX_BEAT_DELTA_MS: f64 = 200.0;
 const ECTOPIC_THRESHOLD: f64 = 0.20;
 /// Half-width (beats) of the centred median window; a 5-beat window at radius 2.
 const ECTOPIC_WINDOW_RADIUS: usize = 2;
+/// Minimum clean NN intervals before a full [`HrvReadiness::analyze_raw`] result is trustworthy.
+pub const MIN_BEATS: usize = 20;
+/// A successive |ΔNN| above this (ms) counts toward pNN50.
+const PNN50_THRESHOLD_MS: f64 = 50.0;
 
 /// Where the short baseline sits vs the personal normal band.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,9 +55,56 @@ pub struct HrvReadinessResult {
     pub overreaching_watch: bool,
 }
 
+/// Full HRV analysis over one raw R-R capture: cleaned RMSSD/SDNN/pNN50/meanNN plus the input and clean
+/// beat counts. Fields are `None` (and `n_clean` 0) on an insufficient/refused reading.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HrvAnalysis {
+    pub rmssd: Option<f64>,
+    pub sdnn: Option<f64>,
+    pub mean_nn: Option<f64>,
+    pub pnn50: Option<f64>,
+    pub n_input: u32,
+    pub n_clean: u32,
+}
+
 pub struct HrvReadiness;
 
 impl HrvReadiness {
+    /// Full clean-and-analyze over a raw R-R series (ms): range filter -> Malik ectopic -> gap-aware RMSSD +
+    /// pNN50, with SDNN + meanNN over the clean beats. Empty (all `None`, `n_clean` 0) when fewer than
+    /// [`MIN_BEATS`] clean survive, or -- when `max_rejected_fraction` is set (the spot honesty gate) -- when
+    /// the dropped fraction exceeds it. The nightly path passes `None` (no gate), so it is unchanged.
+    pub fn analyze_raw(rr_ms: &[u16], max_rejected_fraction: Option<f64>) -> HrvAnalysis {
+        let n_input = rr_ms.len();
+        let empty = HrvAnalysis {
+            rmssd: None,
+            sdnn: None,
+            mean_nn: None,
+            pnn50: None,
+            n_input: n_input as u32,
+            n_clean: 0,
+        };
+        let (nn, contiguous) = clean_rr_gap_aware(rr_ms);
+        if nn.len() < MIN_BEATS {
+            return empty;
+        }
+        if let Some(max_rej) = max_rejected_fraction {
+            if n_input > 0 && 1.0 - nn.len() as f64 / n_input as f64 > max_rej {
+                return empty;
+            }
+        }
+        // meanNN over the clean beats; SDNN reuses [`Self::sdnn`] over the same beats (n >= MIN_BEATS here).
+        let mean_nn = nn.iter().map(|&v| v as f64).sum::<f64>() / nn.len() as f64;
+        HrvAnalysis {
+            rmssd: rmssd_from_clean(&nn, &contiguous),
+            sdnn: Self::sdnn(&nn),
+            mean_nn: Some(mean_nn),
+            pnn50: pnn50_from_clean(&nn, &contiguous),
+            n_input: n_input as u32,
+            n_clean: nn.len() as u32,
+        }
+    }
+
     /// Gap-aware, artifact-corrected RMSSD (ms): pools squared successive differences **within** each run
     /// of consecutive beats, never across the break between runs, and drops any single beat-to-beat change
     /// over `MAX_BEAT_DELTA_MS` (an ectopic/missed beat), so neither an offload gap nor an artifact can
@@ -95,14 +146,14 @@ impl HrvReadiness {
         rr_ms.iter().copied().filter(|&v| (RR_MIN_MS..=RR_MAX_MS).contains(&v)).collect()
     }
 
-    /// Standard deviation of NN intervals (ms). `None` for < 2 values.
+    /// Sample standard deviation (ddof=1) of NN intervals (ms). `None` for < 2 values. Sums in f64 so a
+    /// long clean series can't overflow a u16 accumulator.
     pub fn sdnn(rr_ms: &[u16]) -> Option<f64> {
-        if rr_ms.len() < 2 { return None; }
-        let mean = rr_ms.iter().sum::<u16>() as f64 / rr_ms.len() as f64;
-        let var = rr_ms.iter().map(|&v| {
-            let d = v as f64 - mean;
-            d * d
-        }).sum::<f64>() / (rr_ms.len() - 1) as f64;
+        if rr_ms.len() < 2 {
+            return None;
+        }
+        let mean = rr_ms.iter().map(|&v| v as f64).sum::<f64>() / rr_ms.len() as f64;
+        let var = rr_ms.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / (rr_ms.len() - 1) as f64;
         Some(var.sqrt())
     }
 
@@ -250,6 +301,21 @@ fn rmssd_from_clean(nn: &[u16], contiguous: &[bool]) -> Option<f64> {
     (count > 0).then(|| (sumsq / count as f64).sqrt())
 }
 
+/// Gap-aware pNN50 (% of contiguous successive |ΔNN| > 50 ms). `None` when no contiguous pair survives.
+fn pnn50_from_clean(nn: &[u16], contiguous: &[bool]) -> Option<f64> {
+    let (mut nn50, mut pairs) = (0usize, 0usize);
+    for i in 1..nn.len() {
+        if !contiguous[i] {
+            continue;
+        }
+        if (nn[i] as f64 - nn[i - 1] as f64).abs() > PNN50_THRESHOLD_MS {
+            nn50 += 1;
+        }
+        pairs += 1;
+    }
+    (pairs > 0).then(|| nn50 as f64 / pairs as f64 * 100.0)
+}
+
 /// The last `n` elements, or all if fewer.
 fn tail(xs: &[f64], n: usize) -> &[f64] {
     &xs[xs.len().saturating_sub(n)..]
@@ -359,6 +425,61 @@ mod tests {
         let (nn, contig) = clean_rr_gap_aware(&[800, 805, 810, 1300, 806, 802, 808]);
         assert_eq!(nn, vec![800, 805, 810, 806, 802, 808]);
         assert_eq!(contig, vec![false, true, true, false, true, true]);
+    }
+
+    fn alternating(n: usize, lo: u16, hi: u16) -> Vec<u16> {
+        (0..n).map(|i| if i % 2 == 0 { lo } else { hi }).collect()
+    }
+
+    #[test]
+    fn analyze_raw_full_clean_series() {
+        let a = HrvReadiness::analyze_raw(&alternating(24, 800, 810), None);
+        assert_eq!((a.n_input, a.n_clean), (24, 24));
+        assert!((a.rmssd.unwrap() - 10.0).abs() < 1e-9); // every successive Δ = 10
+        assert_eq!(a.mean_nn, Some(805.0));
+        assert_eq!(a.pnn50, Some(0.0)); // all |Δ| = 10 < 50
+        assert!((a.sdnn.unwrap() - (600.0f64 / 23.0).sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn analyze_raw_too_few_clean_is_empty() {
+        let a = HrvReadiness::analyze_raw(&[800, 810, 820], None);
+        assert_eq!(
+            a,
+            HrvAnalysis { rmssd: None, sdnn: None, mean_nn: None, pnn50: None, n_input: 3, n_clean: 0 }
+        );
+    }
+
+    #[test]
+    fn analyze_raw_spot_rejected_fraction_gate() {
+        // 25 clean beats + 15 out-of-range (100 ms) = 40 input; cleaning keeps 25 (0.375 rejected).
+        let mut s = alternating(25, 800, 810);
+        s.extend(std::iter::repeat_n(100u16, 15));
+        let open = HrvReadiness::analyze_raw(&s, None);
+        assert_eq!((open.n_input, open.n_clean), (40, 25));
+        assert!(open.rmssd.is_some());
+        // Spot gate at 0.35: 0.375 > 0.35 → refused (empty, n_clean 0).
+        let gated = HrvReadiness::analyze_raw(&s, Some(0.35));
+        assert_eq!(gated.n_clean, 0);
+        assert!(gated.rmssd.is_none());
+        // A looser gate passes.
+        assert!(HrvReadiness::analyze_raw(&s, Some(0.40)).rmssd.is_some());
+    }
+
+    #[test]
+    fn analyze_raw_pnn50_counts_big_jumps() {
+        // 20 beats alternating 700/800 → every contiguous |Δ| = 100 > 50 → pNN50 = 100 %.
+        let a = HrvReadiness::analyze_raw(&alternating(20, 700, 800), None);
+        assert_eq!(a.pnn50, Some(100.0));
+    }
+
+    #[test]
+    fn sdnn_does_not_overflow_on_a_long_series() {
+        // 300 × ~800 ms sums to ~240k, far past u16::MAX; a u16 accumulator would have wrapped/panicked.
+        // Alternating 800/810 → sample SD = sqrt(7500 / 299) ≈ 5.0084.
+        let s = HrvReadiness::analyze_raw(&alternating(300, 800, 810), None).sdnn.unwrap();
+        assert!((s - (7500.0f64 / 299.0).sqrt()).abs() < 1e-9, "got {s}");
+        assert_eq!(HrvReadiness::sdnn(&vec![900u16; 400]), Some(0.0)); // flat long series → zero spread
     }
 
     #[test]
