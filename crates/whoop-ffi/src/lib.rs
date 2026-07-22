@@ -1556,6 +1556,81 @@ pub fn workout_detect(
     }).collect()
 }
 
+// -- Nap detection --
+
+/// Tri-state nap verdict.
+#[derive(uniffi::Enum)]
+pub enum NapVerdictInfo {
+    Nap,
+    None,
+    Inconclusive,
+}
+
+/// A proposed nap to offer for review. `confidence` orders the UI only, never a medical claim.
+#[derive(uniffi::Record)]
+pub struct NapCandidateInfo {
+    pub start: i64,
+    pub end: i64,
+    pub mean_hr: Option<i32>,
+    pub confidence: f64,
+}
+
+/// The nap verdict + (only when `Nap`) the candidate to review.
+#[derive(uniffi::Record)]
+pub struct NapDecisionInfo {
+    pub verdict: NapVerdictInfo,
+    pub candidate: Option<NapCandidateInfo>,
+}
+
+/// User-tunable nap thresholds.
+#[derive(uniffi::Record)]
+pub struct NapConfigInfo {
+    pub enabled: bool,
+    pub min_nap_minutes: i32,
+    pub max_nap_minutes: i32,
+    pub still_threshold_g: f64,
+    pub hr_settle_margin_bpm: i32,
+    pub smooth_window_seconds: f64,
+}
+
+/// Classify one candidate window for a short nap (tri-state, conservative — only PROPOSES a review card).
+#[uniffi::export]
+pub fn nap_evaluate(
+    gravity: Vec<WorkoutGravitySample>,
+    hr: Vec<HrTick>,
+    resting_hr: Option<i32>,
+    config: NapConfigInfo,
+) -> NapDecisionInfo {
+    let grav: Vec<workout::GravitySample> = gravity
+        .into_iter()
+        .map(|g| workout::GravitySample { ts: g.ts, x: g.x, y: g.y, z: g.z })
+        .collect();
+    let hr_samples: Vec<workout::HrSample> =
+        hr.into_iter().map(|h| workout::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let cfg = physio_algo::nap::NapConfig {
+        enabled: config.enabled,
+        min_nap_minutes: config.min_nap_minutes,
+        max_nap_minutes: config.max_nap_minutes,
+        still_threshold_g: config.still_threshold_g,
+        hr_settle_margin_bpm: config.hr_settle_margin_bpm,
+        smooth_window_seconds: config.smooth_window_seconds,
+    };
+    let d = physio_algo::nap::evaluate(&grav, &hr_samples, resting_hr, &cfg);
+    NapDecisionInfo {
+        verdict: match d.verdict {
+            physio_algo::nap::NapVerdict::Nap => NapVerdictInfo::Nap,
+            physio_algo::nap::NapVerdict::None => NapVerdictInfo::None,
+            physio_algo::nap::NapVerdict::Inconclusive => NapVerdictInfo::Inconclusive,
+        },
+        candidate: d.candidate.map(|c| NapCandidateInfo {
+            start: c.start,
+            end: c.end,
+            mean_hr: c.mean_hr,
+            confidence: c.confidence,
+        }),
+    }
+}
+
 /// Deep-sleep-windowed session avgHrv (ms): per-5min-bucket RMSSD like [hrv_windowed_avg], keeping only
 /// buckets whose center falls inside a deep-sleep (SWS/N3) span. Takes the full segment list; filters for
 /// `SleepStage::Deep` internally. `None` when no deep bucket yields a value.

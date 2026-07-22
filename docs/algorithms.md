@@ -50,6 +50,7 @@ Each algorithm below is tagged with how it reaches the app:
 | 21 | Daytime stress | `stress.rs` | FFI | ✓ |
 | 22 | HR anomaly watch | `hr_anomaly.rs` | Rust-only | 7 |
 | 23 | HRV frequency domain (Lomb-Scargle) | `hrv_freq.rs` | FFI | 3 |
+| 24 | Short-nap detection | `nap.rs` | FFI | 6 |
 | — | Calibration schedule | `calibration.rs` | internal | 4 |
 | — | Shared stats | `stats.rs` | internal | ✓ |
 
@@ -239,6 +240,13 @@ never real-time. No app caller and no Kotlin twin yet.
 Lomb-Scargle periodogram (estimated directly from the uneven samples, no resampling). Task Force (1996)
 bands (LF 0.04-0.15 Hz, HF 0.15-0.40 Hz); span gates HF >= 60 s, LF (and LF/HF, total) >= 250 s; 20-beat
 floor. Range + Malik-ectopic cleaned first. Approximate, non-clinical.
+
+## 24. Short-nap detection  ·  FFI `nap_evaluate`
+
+`nap.rs`, the `NapDecision` type. Tri-state (Nap / None / Inconclusive) over a candidate window: dense-gravity
+eligibility gate (>= 20 rows, median inter-sample gap <= 90 s), the longest sustained-still run (reusing
+`workout::activity_series` + `smoothed_intensity`), a `[min,max]`-minute length gate, and an HR-settled gate
+(mean HR <= resting + margin when resting is known). Only PROPOSES a review card, never auto-writes sleep.
 
 ## Internal helpers
 
