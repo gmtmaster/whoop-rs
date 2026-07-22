@@ -1140,6 +1140,27 @@ pub fn hrv_analyze_raw(rr_ms: Vec<u16>, max_rejected_fraction: Option<f64>) -> H
     }
 }
 
+/// Frequency-domain HRV bands (ms²): LF / HF / LF-HF / total power. `lf`/`lfhf` are `None` under the 250 s
+/// LF span gate; the whole record is absent (`None`) under the 60 s HF gate or the 20-beat floor.
+#[derive(uniffi::Record)]
+pub struct HrvBandsInfo {
+    pub lf: Option<f64>,
+    pub hf: f64,
+    pub lfhf: Option<f64>,
+    pub total_power: f64,
+}
+
+/// Frequency-domain HRV over a time-ordered R-R series (ms) via the Lomb-Scargle periodogram.
+#[uniffi::export]
+pub fn hrv_freq_domain(rr_ms: Vec<u16>) -> Option<HrvBandsInfo> {
+    physio_algo::hrv_freq::freq_domain(&rr_ms).map(|b| HrvBandsInfo {
+        lf: b.lf,
+        hf: b.hf,
+        lfhf: b.lfhf,
+        total_power: b.total_power,
+    })
+}
+
 /// Daily resting HR = min of the per-session floors.
 #[uniffi::export]
 pub fn daily_resting_hr(session_floors: Vec<Option<i32>>) -> Option<i32> {

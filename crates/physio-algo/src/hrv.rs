@@ -157,6 +157,12 @@ impl HrvReadiness {
         Some(var.sqrt())
     }
 
+    /// Range + Malik-ectopic cleaned NN series (ms), in input order. The clean beats only (no contiguity
+    /// mask); a successive-difference metric wants [`clean_rr_gap_aware`] instead.
+    pub fn clean_rr(rr_ms: &[u16]) -> Vec<u16> {
+        clean_rr_gap_aware(rr_ms).0
+    }
+
     /// Median of a slice of f64 values. Empty → 0.
     pub fn median_f64(values: &[f64]) -> f64 {
         if values.is_empty() { return 0.0; }

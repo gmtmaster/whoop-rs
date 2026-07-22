@@ -49,6 +49,7 @@ Each algorithm below is tagged with how it reaches the app:
 | 20 | Daily stress | `stress.rs` | FFI | ✓ |
 | 21 | Daytime stress | `stress.rs` | FFI | ✓ |
 | 22 | HR anomaly watch | `hr_anomaly.rs` | Rust-only | 7 |
+| 23 | HRV frequency domain (Lomb-Scargle) | `hrv_freq.rs` | FFI | 3 |
 | — | Calibration schedule | `calibration.rs` | internal | 4 |
 | — | Shared stats | `stats.rs` | internal | ✓ |
 
@@ -100,7 +101,7 @@ targeting the habitual midsleep (circular mean over >= 14 days, else 03:30 local
 across the 30-220 bpm lag band, pick the fundamental, report bpm + confidence. Fills only seconds the strap
 banked no HR for; never overrides a stored HR.
 
-## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_windowed_avg*`, `hrv_readiness`
+## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_analyze_raw`, `hrv_windowed_avg*`, `hrv_readiness`
 
 `hrv.rs`, the `HrvReadiness` type.
 ```
@@ -108,6 +109,8 @@ range_filter: keep 300-2000 ms
 rmssd            = sqrt(mean((rr[i+1] - rr[i])^2))          (Task Force 1996)
 rmssd_gap_aware  = split on gaps > 3 x median RR, RMSSD per gap-free segment (no splice, no interpolate)
 sdnn             = sample SD of NN, ddof = 1
+analyze_raw      = range + Malik-ectopic clean -> {rmssd, sdnn, mean_nn, pnn50, n_input, n_clean};
+                   20-beat floor + optional spot rejected-fraction gate (the full HrvResult)
 windowed_avg_hrv = mean of per-5-min-bucket gap-aware RMSSD over the session (the stored avgHrv)
 windowed_avg_deep= same, buckets whose centre lands in a deep (N3) span only
 readiness        = 7-night mean of ln(RMSSD) vs a smallest-worthwhile-change band (long mean +/- 0.5 SD)
@@ -230,6 +233,13 @@ RMSSD, `3 / (1 + exp(-(zHR + zHRV)))`. No exercise gate. Peak hour on a tie is t
 elevated only (low HR is never flagged), needs 600 baseline samples. Wellness nudge, never a diagnosis,
 never real-time. No app caller and no Kotlin twin yet.
 
+## 23. HRV frequency domain  ·  FFI `hrv_freq_domain`
+
+`hrv_freq.rs`, the `HrvBands` type. LF / HF / LF-HF / total power over the R-R tachogram via the
+Lomb-Scargle periodogram (estimated directly from the uneven samples, no resampling). Task Force (1996)
+bands (LF 0.04-0.15 Hz, HF 0.15-0.40 Hz); span gates HF >= 60 s, LF (and LF/HF, total) >= 250 s; 20-beat
+floor. Range + Malik-ectopic cleaned first. Approximate, non-clinical.
+
 ## Internal helpers
 
 - `calibration.rs` — WHOOP's per-metric unlock/full-calibration night schedule (blood O2 1, recovery 3,
@@ -242,7 +252,7 @@ never real-time. No app caller and no Kotlin twin yet.
 
 | State | Algorithms |
 |---|---|
-| FFI + app-wired | sleep (detect/stage/main-night), ppg HR, HRV (rmssd/gap-aware/windowed/sdnn/range-filter), resting HR, respiratory rate, strain, recovery, baselines (update), HR zones, fitness age/VO2max, Baevsky SI, stress onset, SpO2 nightly means, **steps, day-calories, rest, sleep-debt, daily stress, daytime stress** |
+| FFI + app-wired | sleep (detect/stage/main-night), ppg HR, HRV (rmssd/gap-aware/windowed/sdnn/range-filter/analyze-raw), resting HR, respiratory rate, strain, recovery, baselines (update), HR zones, fitness age/VO2max, Baevsky SI, stress onset, SpO2 nightly means, steps, day-calories, rest, sleep-debt, daily stress, daytime stress, **HRV freq-domain (Lomb-Scargle)** |
 | FFI, no app caller yet | workout detect, calories bout, IMU features, HRV readiness, SpO2 from-paired, baseline fold-history |
 | Rust-only (app still owns the math) | HR anomaly watch |
 

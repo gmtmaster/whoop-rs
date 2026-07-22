@@ -4,7 +4,7 @@
 //! slice — never a wire frame, never BLE. Pure and deterministic: no async, no IO. Absent signal
 //! returns `None`, never a fabricated number. Outputs are wellness estimates, never medical advice.
 //!
-//! Modules are organised by physiological domain: `sleep`, `ppg`, `hrv`, `spo2`, `calibration`,
+//! Modules are organised by physiological domain: `sleep`, `ppg`, `hrv`, `hrv_freq`, `spo2`, `calibration`,
 //! `hr_anomaly`, `recovery`, `strain`, `stress`, `resting_hr`, `hr_zones`, `vo2max`,
 //! `respiratory_rate`, `imu_features` and the shared `stats`.
 
@@ -14,6 +14,7 @@ pub mod calibration;
 pub mod hr_anomaly;
 pub mod hr_zones;
 pub mod hrv;
+pub mod hrv_freq;
 pub mod imu_features;
 pub mod ppg;
 pub mod recovery;
@@ -34,5 +35,6 @@ pub mod workout;
 pub use calibration::Calibration;
 pub use hr_anomaly::{HrWatch, HrWatchState};
 pub use hrv::{HrvAnalysis, HrvReadiness, HrvReadinessResult, ReadinessTier, SECS_PER_DAY};
+pub use hrv_freq::HrvBands;
 pub use spo2::{RollingReading, Spo2};
 pub use stats::{linear_fit, pearson, LinearFit};
