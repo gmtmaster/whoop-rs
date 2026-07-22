@@ -1,328 +1,252 @@
-# Algorithms — formulas, location, verification
+# Algorithms
 
-Every formula NOOP ships. Status icons: ✅ verified (golden tests or DREAMT) · ⚡ verified (parity test) · 🔧 formula correct but code path leak · ❌ unverified.
+Source of truth for every wellness algorithm NOOP ships. All decode, scoring, and derived-metric math
+lives here in `crates/physio-algo` (pure, sans-IO, deterministic); `crates/whoop-ffi` exposes the subset
+the apps consume over uniffi. The Kotlin/Swift frontends compute nothing themselves that appears below,
+they call these functions. See `architecture.md` for the crate map and `sleep.md` for the sleep deep-dive.
+
+Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fields) or an already-decoded
+`HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
+number. Outputs are wellness estimates, never medical.
+
+`physio-algo` carries **206 unit tests** (golden vectors, parity fixtures, synthetic sweeps).
+
+## Wiring legend
+
+Each algorithm below is tagged with how it reaches the app:
+
+- **FFI** — exported by `whoop-ffi` and called by the app today (the app owns no copy of the math).
+- **FFI (unwired)** — exported by `whoop-ffi`, no app caller yet. The Rust is the intended home; the app
+  still runs its own copy until the call site is cut over. Tracked in the noop-tan `ANALYTICS.md`.
+- **Rust-only** — implemented here, not yet on the FFI surface. The app still owns this metric.
+- **internal** — a shared helper other algorithms depend on, not a metric.
 
 ---
 
-## 1. Sleep detection
+## Module map
 
+| # | Domain | Module | Wiring | Tests |
+|---|---|---|---|---|
+| 1 | Sleep detection + staging | `sleep/{detect,v2,refine,mainnight,common,input}.rs` | FFI | golden + 60+ |
+| 2 | HR from PPG | `ppg.rs` | FFI | 6 |
+| 3 | HRV / RMSSD / readiness | `hrv.rs` | FFI | 31 |
+| 4 | Resting HR | `resting_hr.rs` | FFI | ✓ |
+| 5 | Respiratory rate (RSA) | `respiratory_rate.rs` | FFI | ✓ |
+| 6 | Effort / Strain | `strain.rs` | FFI | 14 |
+| 7 | Charge / Recovery | `recovery.rs` | FFI | 20 |
+| 8 | Personal baselines (EWMA) | `baselines.rs` | FFI | 17 |
+| 9 | HR zones | `hr_zones.rs` | FFI | 15 |
+| 10 | Fitness Age / VO2max | `vo2max.rs` | FFI | ✓ |
+| 11 | Baevsky Stress Index | `stress.rs` | FFI | ✓ |
+| 12 | Stress onset (live) | `stress_onset.rs` | FFI | 5 |
+| 13 | SpO2 | `spo2.rs` | FFI | ✓ |
+| 14 | Calories | `calories.rs` | FFI (unwired) | 18 |
+| 15 | Workout detection | `workout.rs` | FFI (unwired) | ✓ |
+| 16 | Steps (5/MG counter) | `steps.rs` | FFI (unwired) | ✓ |
+| 17 | IMU activity features | `imu_features.rs` | FFI (unwired) | 7 |
+| 18 | Rest (sleep performance) | `rest.rs` | FFI | 5 |
+| 19 | Sleep debt | `sleep_debt.rs` | FFI | 5 |
+| 20 | Daily stress | `stress.rs` | FFI | ✓ |
+| 21 | Daytime stress | `stress.rs` | FFI | ✓ |
+| 22 | HR anomaly watch | `hr_anomaly.rs` | Rust-only | 7 |
+| — | Calibration schedule | `calibration.rs` | internal | 4 |
+| — | Shared stats | `stats.rs` | internal | ✓ |
+
+`crates/whoop-metrics` is a thin re-export shim over `physio-algo`, kept so old `whoop_metrics::…` paths
+resolve. New code depends on `physio-algo` directly.
+
+---
+
+## 1. Sleep detection + staging  ·  FFI `analyze_sleep`, `stage_sleep_refined`, `main_night_*`
+
+One border call, `analyze_sleep(streams)`, carves in-bed spans from raw signals, stages each, and returns
+one `SleepSession` per detected night. `sleep.md` is the full record. In brief:
+
+**Detection** (`sleep/detect.rs`)
 ```
-gravity_deltas = L2(Δx, Δy, Δz) per sample
-still_sample  = rolling_window(gravity_deltas) → fraction < 0.01g ≥ 0.70
-runs          = collapse(still_samples), break on class change or >20 min gap
-                sparse gravity: HR-vouched gap bridge (≤baseline×1.05 across gap)
-merged        = absorb runs <15 min into neighbours
-bridged       = sparse-only: merge sleep runs ≤90 min apart when HR stays in sleep band
-gate loop:
-  reject ≤60 min, >16 h
-  reject median HR > baseline × 1.05 (×1.30 if deeply motion-quiescent)
-  reject off-wrist fraction ≥ 50%
-  daytime [11:00,20:00) local: reject unless ≥90 min + resting HR ≤ baseline × 0.95
-  morning-stillness (≤3 h after overnight wake): also band-state ≥60% asleep or RHR≤baseline×0.90
-  night-continuation chain: overnight-onset run anchors, subsequent ≤90 min from tail = kept
-output: DetectedSpan { start, end, resting_hr }
+gravity_delta = L2(Δx, Δy, Δz) per sample
+still_sample  = rolling 15-min window, fraction < 0.01 g >= 0.70
+runs          = collapse still samples, break on class change or > 20 min gap
+sparse gravity: HR-vouched gap bridge (median HR <= baseline x 1.05 across gap)
+merge runs < 15 min into neighbours
+gate loop: reject <= 60 min / > 16 h; median HR > baseline x 1.05 (x1.30 if deeply motion-quiescent);
+           off-wrist fraction >= 50%; daytime [11:00,20:00) unless >= 90 min + RHR <= baseline x 0.95;
+           night-continuation chain anchors the overnight-onset run, tails <= 90 min kept
 ```
 
-| Location | Status |
+**Staging V2, cardiorespiratory** (`sleep/v2.rs`), the 5.0/MG default, per 30 s epoch z-scored within-night:
+```
+deep  = -0.8 z(hr_var) + 0.5 z(HR) - 0.1 z(move) - deep_gate + 0.6 z(resp_reg) + ln(0.15)
+rem   = +0.8 z(hr_var) - 0.4 z(move) + 0.4 z(HR) - 0.6 z(resp_reg) + ln(0.22)
+light = ln(0.50)
+wake  = 1.0 z(move) + 0.5 dz(z(hr_var)) + 0.6 dz(z(HR)) + motion_gate_boost + ln(0.34)
+deep_gate = 5 x max(0, hr_flat11_pct - 0.40);  motion-quiescent clamps the cardiac wake term to <= 0
+resp_reg  = R-R tachogram -> 4 Hz resample -> detrend -> DFT peak/sum over 0.15-0.40 Hz
+cycle prior: deep decays to 0 after 55% of night; rem suppressed in first 12%
+Viterbi 4-state, sticky self-transitions (deep 0.76, rem 0.92, light 0.80, wake 0.90)
+```
+Validated on DREAMT n=100 (kappa 0.33, at the wrist-optical ceiling), AAUWSS (0.42), Walch (0.35); frozen
+golden hypnogram test pins the tuned constants.
+
+**Motion-aware wake refinement** (`sleep/refine.rs`): a wake segment >= 5 min at the night motion floor with
+stable posture and no locomotion demotes its non-burst minutes to light.
+
+**Main-night selection** (`sleep/mainnight.rs`): `score = asleep_minutes + alignment_bonus`, alignment
+targeting the habitual midsleep (circular mean over >= 14 days, else 03:30 local); adjacent blocks bridge.
+
+## 2. HR from PPG  ·  FFI `ppg_hr`
+
+`ppg.rs`. Autocorrelation pitch-detect over the v26 24 Hz single-wavelength optical buffer: detrend, ACF
+across the 30-220 bpm lag band, pick the fundamental, report bpm + confidence. Fills only seconds the strap
+banked no HR for; never overrides a stored HR.
+
+## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_windowed_avg*`, `hrv_readiness`
+
+`hrv.rs`, the `HrvReadiness` type.
+```
+range_filter: keep 300-2000 ms
+rmssd            = sqrt(mean((rr[i+1] - rr[i])^2))          (Task Force 1996)
+rmssd_gap_aware  = split on gaps > 3 x median RR, RMSSD per gap-free segment (no splice, no interpolate)
+sdnn             = sample SD of NN, ddof = 1
+windowed_avg_hrv = mean of per-5-min-bucket gap-aware RMSSD over the session (the stored avgHrv)
+windowed_avg_deep= same, buckets whose centre lands in a deep (N3) span only
+readiness        = 7-night mean of ln(RMSSD) vs a smallest-worthwhile-change band (long mean +/- 0.5 SD)
+                   -> primed / normal / suppressed + overreaching watch
+```
+
+## 4. Resting HR  ·  FFI `session_resting_hr`, `daily_resting_hr`
+
+`resting_hr.rs`. Session resting HR = lowest 5-min tumbling-window mean bpm over `[start, end]`. Daily
+resting HR = min of the per-session floors.
+
+## 5. Respiratory rate (RSA)  ·  FFI `resp_rate_from_rr`
+
+`respiratory_rate.rs`. R-R tachogram -> 4 Hz resample -> 8 s detrend -> per 5-min window peak-pick the
+breathing modulation -> median rate. Plausible band 8-25 bpm, else `None`.
+
+## 6. Effort / Strain  ·  FFI `strain_score`, `strain_default_denominator`
+
+`strain.rs`.
+```
+HRR = HRmax - RHR;  %HRR = clamp((HR - RHR) / HRR x 100, 0, 100)          (Karvonen 1957)
+TRIMP per sample: zone_weight x its own inter-sample gap (dropout capped 20 min)
+   Edwards (default) 5-zone weights at 50/60/70/80/90 %HRR, or Banister exponential
+Effort = 100 x ln(TRIMP + 1) / ln(7201)                                   (Edwards 1993 / Banister 1991)
+```
+Denominator 7201 maps a 24 h top-zone day (5 x 1440 = 7200) to exactly 100.
+
+## 7. Charge / Recovery  ·  FFI `recovery_score`, `recovery_band`, `recovery_index_slope`, `recovery_banked_nights`
+
+`recovery.rs`. Weighted robust-z composite through a logistic squash.
+```
+z(x) = (x - mu) / max(1.253 x spread, 1e-9)                               (Plews 2013 / Buchheit 2014)
+HRV 0.55 (higher better) · RHR 0.20 (lower) · Rest 0.15 · Respiration 0.05 (lower) · Skin temp 0.05 (|dev|)
+present terms only, weights renormalise
+Charge = clamp(100 / (1 + exp(-1.6 (composite_z + 0.20))), 0, 100)        (z = 0 -> ~58%)
+```
+Cold-start (HRV baseline unusable) returns `None`. Bands red < 34, yellow 34-67, green >= 67.
+
+## 8. Personal baselines (EWMA)  ·  FFI `baseline_update`, `baseline_fold_history`, `baseline_metric_cfg_*`
+
+`baselines.rs`. Per metric (HRV, RHR, respiration, skin temp, Effort):
+```
+centre alpha = 1 - 0.5^(1/14 nights);  spread alpha = 1 - 0.5^(1/21 nights)
+winsor fold within +/- 3 x spread (spread tracks the unclamped deviation); hard-outlier reject > 5 x
+status: calibrating < 4 nights · provisional 4-13 · trusted >= 14 · stale if > 14 nights since update
+```
+
+## 9. HR zones  ·  FFI `hr_zones_for_age`, `hr_time_in_zone`
+
+`hr_zones.rs`. `HRmax = override ?? tanaka(208 - 0.7 age) ?? 220 - age`; five 10%-HRR bands from 50% up;
+time-in-zone holds each sample until the next.
+
+## 10. Fitness Age / VO2max  ·  FFI `vo2max_estimate`, `fitness_age_compute`
+
+`vo2max.rs`. Nes 2011 HUNT non-exercise VO2max from age, sex, waist, RHR, PA-index; Fitness Age inverts the
+same equation against a normative peer (RHR 65, PAI 5) so the body term cancels. Display band +/- 5 years.
+
+## 11. Baevsky Stress Index  ·  FFI `stress_index`, `stress_components`
+
+`stress.rs`. `SI = AMo / (2 x Mo x MxDMn)` over a cleaned R-R histogram (Mo modal R-R s, AMo modal-bin
+share %, MxDMn range s). Tall-narrow-low-range reads high.
+
+## 12. Stress onset, live  ·  FFI `stress_onset_evaluate`
+
+`stress_onset.rs`. Stateful, edge-triggered: fast RMSSD (last 60 beats) below 0.6 x a slow EWMA baseline
+fires a JITAI nudge. Gated by resting HR band (55-100), recent motion, min 20 beats, and a 15-min refractory.
+
+## 13. SpO2  ·  FFI `spo2_from_paired`, `nightly_spo2_raw_means`
+
+`spo2.rs`. Ratio-of-ratios over the 4.0 v24 paired red/IR window (30 s, curve `110 - 25 R`, clamp 70-100),
+plus a 30-night soft-anchored rolling readout. 5.0/MG v26 is a single wavelength with no red/IR pair, so a
+percent is produced on 4.0 only; on 5/MG the app stores nightly raw red/IR ADC means, never a fabricated %.
+
+## 14. Calories  ·  FFI (unwired) `calories_estimate_day`, `calories_estimate_bout`
+
+`calories.rs`. Per-second Keytel 2005 active energy above a HRR gate, revised Harris-Benedict BMR below it,
+sex-specific coefficients. Day path gates at 50% HRR, bout path at 30%. Approximate, not calorimetry.
+
+## 15. Workout detection  ·  FFI (unwired) `workout_detect`
+
+`workout.rs`. A sustained window (>= 5 min) of elevated HR (RHR + 15 bpm) and sustained motion (> 0.20,
+10 s smoothed), merged across short gaps, qualified by >= 50% of the bout in Edwards zone 2+. Per bout:
+avg/peak HR, zone-time %, mean %HRR, strain, and calories.
+
+## 16. Steps, 5/MG counter  ·  FFI (unwired) `steps_counter`
+
+`steps.rs`. Wrap-aware deltas of the strap's cumulative u16 step counter, dropping any delta >= 512
+(sync-gap or reboot). Returns raw motion ticks; the caller applies its ticks-per-step calibration.
+
+## 17. IMU activity features  ·  FFI (unwired) `imu_features`
+
+`imu_features.rs`. Over a window of decoded 100 Hz 6-axis IMU samples: accel-AC RMS energy (g), gyro energy
+(deg/s), jerk RMS, and a gait-band (1.2-3.5 Hz) autocorrelation cadence with its own strength. A feature
+for coarse activity classification, never a physiological gate.
+
+## 18. Rest (sleep performance)  ·  FFI `rest_score`
+
+`rest.rs`. `0.50 duration-vs-need + 0.20 efficiency + 0.20 restorative(deep+REM) + 0.10 consistency`,
+0-100, deep-adequacy factor on the restorative term, 8 h default need.
+
+## 19. Sleep debt  ·  FFI `sleep_debt_ledger`
+
+`sleep_debt.rs`. Rolling `sum(slept - need)` over a 14-night window of nights with data (never zero-fills),
+8 h need, on-target band +/- 30 min.
+
+## 20. Daily stress  ·  FFI `daily_stress`
+
+`stress.rs`. `3 / (1 + exp(-(zRHR + zHRV)))` against up to 30 prior (RHR, HRV) nights, 14-day baseline gate.
+Bands low [0,1), medium [1,2), high [2,3].
+
+## 21. Daytime stress  ·  FFI `daytime_stress`
+
+`stress.rs`. Per hour 06:00-21:59 with >= 300 HR rows: `zHR` vs the Q25 calm-hour HR, `zHRV` vs the Q75 calm
+RMSSD, `3 / (1 + exp(-(zHR + zHRV)))`. No exercise gate. Peak hour on a tie is the last (adopted app-side).
+
+## 22. HR anomaly watch  ·  Rust-only `HrWatch`
+
+`hr_anomaly.rs`. A sustained (>= 300 s) elevated-at-rest run over offloaded history: personal resting HR =
+10th percentile of good-signal, on-wrist, at-rest samples; elevated = RHR + 45 or the 100 bpm floor. Flags
+elevated only (low HR is never flagged), needs 600 baseline samples. Wellness nudge, never a diagnosis,
+never real-time. No app caller and no Kotlin twin yet.
+
+## Internal helpers
+
+- `calibration.rs` — WHOOP's per-metric unlock/full-calibration night schedule (blood O2 1, recovery 3,
+  sleep consistency 5, skin temp 7, VO2max 14), so a readout appears on the same schedule the app uses.
+- `stats.rs` — `mean`, `median`, `percentile`, `amplitude`, `pearson`, `linear_fit`.
+
+---
+
+## Wiring status summary
+
+| State | Algorithms |
 |---|---|
-| `whoop-rs/crates/physio-algo/src/sleep/detect.rs` | ✅ 30 synthetic tests |
-| `noop-tan/…/analytics/SleepStager.kt` | 🔧 **DEAD PATH — not called since 2026-07-20** |
-| `noop-tan/…/analytics/AnalyticsEngine.kt` → `RustSleepStager.analyze()` | ✅ FFI routed 2026-07-20 |
-
----
-
-## 2. Sleep staging V2 (cardiorespiratory)
-
-```
-Per 30 s epoch, z-scored within-night:
-
-EMISSION:
-  deep  = −0.8·z(hr_var) + 0.5·z(HR) − 0.1·z(move_frac) − deep_gate + 0.6·z(resp_reg) + ln(0.15)
-  rem   = +0.8·z(hr_var) − 0.4·z(move_frac) + 0.4·z(HR) − 0.6·z(resp_reg) + ln(0.22)
-  light = ln(0.50)
-  wake  = 1.0·z(move_frac) + 0.5·dz(z(hr_var)) + 0.6·dz(z(HR)) + motion_gate_boost + ln(0.34)
-
-  dz(x)     = deadzone: x in [−0.30,+0.30] → 0
-  deep_gate = 5 × max(0, hr_flat11_percentile − 0.40)
-  motion_quiescent → clamps cardiac wake term to ≤0
-  jerk_max > night_median_jerk × 35 → +4.0 on wake
-  resp_reg = R-R tachogram → 4 Hz resample → detrend → DFT peak/sum 0.15–0.40 Hz
-
-CYCLE PRIOR:
-  deep = 1.2 × (1 − clock/0.55), decays to 0 after 55 % of night
-  rem  = 1.0 × clock − (clock < 0.12 ? 3.0 : 0)
-
-VITERBI (4-state): deep→deep 0.76, rem→rem 0.92, light→light 0.80, wake→wake 0.90
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/sleep/v2.rs` | ✅ DREAMT κ=0.325 (n=100) · frozen golden test |
-| `noop-tan/…/analytics/SleepStager.kt` (V2 path) | 🔧 dead since detection → Rust |
-
----
-
-## 3. Motion-aware wake refinement
-
-```
-Per wake segment ≥5 min, density-gated (≥80 % minutes have ≥2 grav + ≥1 step sample):
-  no locomotion (walk ticks) → posture-stable ≥80 % of minutes → burst minutes stay wake, rest → light
-  locomotion present → segment stays wake
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/sleep/refine.rs` | ✅ unit tests |
-
----
-
-## 4. Main-night selection
-
-```
-score(block) = asleep_minutes + alignment_bonus
-
-alignment_bonus:
-  target = habitual_midsleep (circular mean, ≥14 days) ?? 03:30 local
-  bonus = 90 min within ±2 h, linear decay to 0 at ±5 h
-
-bridge: adjacent blocks <60 min apart → merge; overnight block 60–90 min → merge
-reason: OnlyBlock | Longest | LongestNearUsual | AlignedToUsual
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/sleep/mainnight.rs` | ✅ 15+ tests (cold-start, habitual, biphasic, nap-vs-night) |
-| `noop-tan/…/analytics/SleepStageTotals.kt` | 🔧 thin FFI wrapper (delegates to Rust), mirror code still present |
-
----
-
-## 5. Effort / Strain
-
-```
-HR_reserve = HRmax − RHR
-%HRR = clamp((HR − RHR) / HR_reserve × 100, 0, 100)
-
-Edwards zones: [90,100)%→5, [80,90)%→4, [70,80)%→3, [60,70)%→2, [50,60)%→1, <50%→0
-
-Per-interval TRIMP (since 2026-07-20):
-  Each sample's zone_weight × its own interval_gap (capped at 20 min dropout).
-  First sample → forward gap, last → backward gap, middle → avg(fwd, bwd).
-
-Effort = 100 × ln(TRIMP + 1) / ln(7201)
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/strain.rs` | ✅ 14 tests (golden, cadence transition, dropout cap, uniform agreement) |
-| `noop-tan/…/analytics/StrainScorer.kt` | ✅ delegated to RustScores 2026-07-20 (6 callers → per-interval fix) |
-
----
-
-## 6. Charge / Recovery
-
-```
-For each nightly metric x, EWMA baseline (μ = center, s = spread):
-  σ = 1.253 × s
-  z(x) = (x − μ) / max(σ, 1e−9)
-
-Term             Formula                        Weight
-HRV              z(HRV)                         0.55   higher → better
-Resting HR       z(RHR_baseline, RHR_current)  0.20   lower → better
-Respiration      z(resp_baseline, resp_current) 0.05   lower → better
-Rest quality     (Rest/100 − 0.85) / 0.12      0.15   higher → better
-Skin temp        −|deviation_C| / 1.0           0.05   near baseline → better
-
-Only present terms enter; weights renormalize.
-composite_z = Σ(term_z × weight) / Σ(weights)
-Charge = clamp(100 / (1 + exp(−1.6·(composite_z + 0.20))), 0, 100)
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/recovery.rs` | ✅ parity tests |
-| `noop-tan/…/analytics/IntelligenceEngine.kt` | ✅ skin temp ordering + chronological baselines fixed 2026-07-20 |
-
----
-
-## 7. Personal baselines (EWMA)
-
-```
-Per metric (HRV, RHR, respiration, skin temp, Effort):
-  center α = 1 − exp(ln(0.5) / 14)   (14-night half-life)
-  spread α = 1 − exp(ln(0.5) / 21)   (21-night half-life)
-
-  <4 nights: Calibrating (unusable)
-  4−13: Provisional (usable)
-  ≥14: Trusted
-  >14 missing after usable: Stale
-
-  Cold-start (first 8): center α=3-night half-life, winsor ×2.5, no hard-outlier reject
-  Steady-state: accepted values clamped to 3×spread, beyond 5× seen but not folded
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/baselines.rs` | ✅ Rust 2026-07-20 (4 tests) · Kotlin delegates via FFI |
-
----
-
-## 8. Daily Stress
-
-```
-Against up to 30 prior (RHR, HRV) rows:
-  zRHR = (RHR_today − μ_RHR) / max(σ_RHR, 0.0001)
-  zHRV = (μ_HRV − HRV_today) / max(σ_HRV, 0.0001)
-  Stress = 3 / (1 + exp(−(zRHR + zHRV)))
-
-Bands: low [0,1) · medium [1,2) · high [2,3]
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/stress.rs` | ✅ Rust 2026-07-20 (5 tests) · 14-day baseline gate · Kotlin StressModel still called from UI |
-| `whoop-rs/crates/physio-algo/src/stress.rs` | Baevsky SI only, not daily Stress |
-
----
-
-## 9. Daytime Stress
-
-```
-Per hour 06:00−21:59, ≥300 HR rows:
-  calm_HR  = Q25(hourly means)     calm_HRV = Q75(hourly RMSSDs)
-  zHR   = (mean_HR − calm_HR) / σ_HR     zHRV = (calm_HRV − RMSSD) / σ_HRV
-  Stress = 3 / (1 + exp(−(zHR + zHRV)))
-
-No exercise gate.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/stress.rs` | ✅ Rust 2026-07-20 (4 tests) · calm-hour quartile reference · Kotlin DaytimeStress.kt still called |
-
----
-
-## 10. R-R / HRV
-
-```
-range_filter: keep 300–2000 ms
-RMSSD = √(mean((rr[i+1] − rr[i])²))
-windowed_avg_HRV = mean of 5-min tumbling-window RMSSDs over session
-Gap-aware: gaps > 3×median-RR split the run, RMSSD computed per gap-free segment
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/hrv.rs` | ✅ parity tests · real-data agreement fixtures |
-| `noop-tan/…/analytics/HrvAnalyzer.kt` | ⚡ rmssdRaw + rangeFilter delegated to whoop-rs 2026-07-20 · sdnnRaw kept Kotlin (f64 summation order) |
-
----
-
-## 11. Resting HR
-
-```
-Session resting HR = lowest 5-min rolling-mean HR across the session.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/resting_hr.rs` | ✅ parity tests |
-| `noop-tan/…/analytics/AnalyticsEngine.kt` | ⚡ routed through `RustScores.dailyRestingHr()` |
-
----
-
-## 12. Respiration rate (RSA)
-
-```
-Median R-R-derived RSA estimate per session.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/respiratory_rate.rs` | ✅ parity tests |
-| `noop-tan/…/analytics/AnalyticsEngine.kt` | 🔧 Kotlin also computes independently |
-
----
-
-## 13. Baevsky Stress Index
-
-```
-SI = AMo / (2 × Mo × MxDMn)
-  AMo = mode amplitude (histogram peak %)   Mo = mode RR (s)   MxDMn = RR range (s)
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/stress.rs` | ✅ golden test |
-| `noop-tan/…/analytics/StressIndex.kt` | 🔧 duplicated |
-
----
-
-## 14. Live stress onset detector
-
-```
-Rolling R-R + HR window: RMSSD decline + HR stability/rise → onset event.
-Suppressed by: HR zone (exercise), recent motion, low R-R count.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/stress_onset.rs` | ✅ Rust 2026-07-20 (5 tests) · stateful FFI via Record |
-
----
-
-## 15. Rest quality composite
-
-```
-Rest = f(main-night stages, efficiency, duration, prior Rest)
-Exact formula embedded in AnalyticsEngine.computeRest.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/rest.rs` | ✅ Rust 2026-07-20 (5 tests) · Kotlin RestScorer still called, FFI not yet wired |
-
----
-
-## 16. Sleep debt
-
-```
-Rolling 14-night window total sleep vs 8 h fixed need.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/sleep_debt.rs` | ✅ Rust 2026-07-20 (5 tests) · Kotlin SleepDebt.kt still called |
-
----
-
-## 17. HR zones
-
-```
-HRmax = user override ?? tanaka(208−0.7×age) ?? 220−age
-Zones: each 10 %-HRR band from 50 % up.
-```
-
-| Location | Status |
-|---|---|
-| `whoop-rs/crates/physio-algo/src/hr_zones.rs` | ✅ parity tests |
-| `noop-tan/…/analytics/HrZones.kt` | 🔧 Kotlin mirror |
-
----
-
-## Fix status
-
-| # | Formula | Status |
-|---|---|---|
-| ✅ | Sleep detection → `analyzeSleep` FFI | Routed 2026-07-20 |
-| ✅ | Effort per-interval integration | Fixed 2026-07-20 (whoop-rs) + StrainScorer delegates |
-| ✅ | Charge skin temp ordering | Fixed 2026-07-20 (Kotlin) |
-| ✅ | Charge chronological baselines | Incremental fold in pass-2 2026-07-20 |
-| ✅ | R-R beat order | `ORDER BY ts, seq` in Room query 2026-07-20 |
-| ✅ | HRV rmssdRaw + rangeFilter → Rust | Delegated 2026-07-20 (sdnnRaw kept Kotlin) |
-| ✅ | Daily Stress → whoop-rs | stress.rs 2026-07-20 (14-day baseline gate) |
-| ✅ | Daytime Stress → whoop-rs | stress.rs 2026-07-20 (calm-hour quartiles) |
-| ✅ | Rest formula → whoop-rs | rest.rs 2026-07-20 |
-| ✅ | Sleep debt → whoop-rs | sleep_debt.rs 2026-07-20 |
-| ✅ | Daytime Stress source | activeStrapId 2026-07-20 |
-| ✅ | Baselines → whoop-rs | baselines.rs 2026-07-20 (EWMA update via FFI) |
-| ✅ | Onset detector → whoop-rs | stress_onset.rs 2026-07-20 (stateful FFI via Record) |
+| FFI + app-wired | sleep (detect/stage/main-night), ppg HR, HRV (rmssd/gap-aware/windowed/sdnn/range-filter), resting HR, respiratory rate, strain, recovery, baselines (update), HR zones, fitness age/VO2max, Baevsky SI, stress onset, SpO2 nightly means, **steps, day-calories, rest, sleep-debt, daily stress, daytime stress** |
+| FFI, no app caller yet | workout detect, calories bout, IMU features, HRV readiness, SpO2 from-paired, baseline fold-history |
+| Rust-only (app still owns the math) | HR anomaly watch |
+
+The FFI-unwired and Rust-only rows are the migration backlog: what still runs in Kotlin is tracked in the
+noop-tan `docs/ANALYTICS.md`, which references this file as the source of truth. Daily/daytime stress were
+wired by ADOPTING the whoop-rs semantics (14-day daily gate, last-hour peak tie-break), a deliberate app
+behaviour change, not a byte-parity swap.
