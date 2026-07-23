@@ -12,6 +12,7 @@ pub mod baselines;
 pub mod calories;
 pub mod calibration;
 pub mod hr_anomaly;
+pub mod hr_recovery;
 pub mod hr_zones;
 pub mod hrv;
 pub mod hrv_freq;

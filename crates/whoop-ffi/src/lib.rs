@@ -8,7 +8,8 @@ uniffi::setup_scaffolding!();
 use std::sync::{Arc, Mutex};
 
 use physio_algo::{
-    baselines, calories, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, rest, resting_hr,
+    baselines, calories, hr_recovery, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, rest,
+    resting_hr,
     sleep, sleep_debt, steps, strain, stress, stress_onset, vo2max, workout,
     HrvReadiness, Spo2,
 };
@@ -1087,6 +1088,27 @@ pub fn stress_components(rr_ms: Vec<f64>) -> Option<StressComponentsInfo> {
 pub fn session_resting_hr(start: i64, end: i64, hr: Vec<HrTick>) -> Option<i32> {
     let s: Vec<resting_hr::HrSample> = hr.into_iter().map(|h| resting_hr::HrSample { ts: h.ts, bpm: h.bpm }).collect();
     resting_hr::session_resting_hr(start, end, &s)
+}
+
+/// HR recovery: bpm drop 1/2/5 min after a sustained high-intensity bout. `None` when ineligible or
+/// under-sampled; a HR rise stays signed.
+#[derive(uniffi::Record)]
+pub struct HrRecoveryInfo {
+    pub end_hr: i32,
+    pub after_1min: Option<i32>,
+    pub after_2min: Option<i32>,
+    pub after_5min: Option<i32>,
+}
+
+#[uniffi::export]
+pub fn hr_recovery_calculate(hr: Vec<HrTick>, workout_start: i64, workout_end: i64, max_hr: f64) -> Option<HrRecoveryInfo> {
+    let s: Vec<resting_hr::HrSample> = hr.into_iter().map(|h| resting_hr::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    hr_recovery::calculate(&s, workout_start, workout_end, max_hr).map(|r| HrRecoveryInfo {
+        end_hr: r.end_hr,
+        after_1min: r.after_1min,
+        after_2min: r.after_2min,
+        after_5min: r.after_5min,
+    })
 }
 
 /// RMSSD (ms) of raw R-R values. `None` for <2 beats (filtered, drops deltas >200ms).
