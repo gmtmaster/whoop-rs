@@ -2,7 +2,7 @@
 //! SpO2 % byte at inner 74 (tri-mode: %-range kept, sentinels/codes dropped).
 
 use super::{gravity3, HistoryRecord, ImuRecord, OpticalRecord, PpgRecord};
-use crate::bytes::{i16_at, nonzero_u8_at, rr_intervals, u16_at, u32_at, u8_at, unix_at};
+use crate::bytes::{f32_at, i16_at, nonzero_u8_at, rr_intervals, u16_at, u32_at, u8_at, unix_at};
 use crate::packet::Frame;
 
 /// Samples per axis in a v21 IMU buffer (both the accel and gyro count fields carry this). Reused as
@@ -35,6 +35,9 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
         sleep_state: u8_at(b, 73).map(|v| (v >> 4) & 3),
         signal_flags: u8_at(b, 25),
         signal_quality: u8_at(b, 32),
+        // On-chip gravity-removed motion magnitude (g), 1 Hz; gated finite and in 0..8 g so a wrong
+        // offset stores nothing. Feeds the circadian activity series (CosinorAge).
+        dynamic_acceleration_g: f32_at(b, 33).filter(|v| v.is_finite() && (0.0..=8.0).contains(v)),
         ..Default::default()
     })
 }
@@ -166,6 +169,22 @@ mod tests {
         assert_eq!(decode(2), Some(2)); // run
         assert_eq!(decode(0xFF), None); // invalid sentinel
         assert_eq!(decode(7), None); // unmapped code
+    }
+
+    #[test]
+    fn v18_decodes_dynamic_acceleration_gated() {
+        // dynamic_acceleration f32 @ inner 33 (frame 41); gravity is a separate vector @ inner 37/41/45.
+        let decode = |g: f32| {
+            let mut payload = vec![0u8; 80];
+            payload[33 - 3..37 - 3].copy_from_slice(&g.to_le_bytes());
+            let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+            v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap().dynamic_acceleration_g
+        };
+        assert_eq!(decode(0.014), Some(0.014)); // real rest-floor motion
+        assert_eq!(decode(3.2), Some(3.2)); // active
+        assert_eq!(decode(9.0), None); // above the 0..8 g band
+        assert_eq!(decode(-1.0), None); // impossible negative
+        assert!(decode(f32::NAN).is_none()); // non-finite
     }
 
     #[test]

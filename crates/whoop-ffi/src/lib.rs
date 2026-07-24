@@ -8,7 +8,8 @@ uniffi::setup_scaffolding!();
 use std::sync::{Arc, Mutex};
 
 use physio_algo::{
-    baselines, calories, hr_recovery, hr_zones, imu_features, ppg as ppg_hr, recovery, respiratory_rate, rest,
+    baselines, biological_age, calories, circadian, hr_recovery, hr_zones, imu_features, ppg as ppg_hr,
+    recovery, respiratory_rate, rest,
     resting_hr,
     sleep, sleep_debt, steps, strain, stress, stress_onset, vo2max, workout,
     HrvReadiness, Spo2,
@@ -74,6 +75,7 @@ pub struct HistorySummary {
     pub sleep_state: Option<u8>,
     pub signal_flags: Option<u8>,   // 5.0 v18 PPG SIGPROC bitfield (bit 4 = off-wrist)
     pub signal_quality: Option<u8>, // 5.0 v18 PPG confidence, 255 = clean
+    pub dynamic_acceleration_g: Option<f32>, // 5.0 v18 on-chip gravity-removed motion magnitude (g); the ENMO signal
 }
 
 impl From<records::HistoryRecord> for HistorySummary {
@@ -95,6 +97,7 @@ impl From<records::HistoryRecord> for HistorySummary {
             sleep_state: h.sleep_state,
             signal_flags: h.signal_flags,
             signal_quality: h.signal_quality,
+            dynamic_acceleration_g: h.dynamic_acceleration_g,
         }
     }
 }
@@ -1797,6 +1800,135 @@ pub fn daytime_stress(hours: Vec<HourPointInfo>) -> DaytimeStressInfo {
         sustained_high: r.sustained_high,
         sustained_run: r.sustained_run as u32,
     }
+}
+
+// -- Circadian rhythm + CosinorAge (Rhythm Age) --
+
+/// Sex selector for the biological-age coefficient set.
+#[derive(uniffi::Enum, Clone, Copy)]
+pub enum SexInput {
+    Female,
+    Male,
+    Unknown,
+}
+
+impl From<SexInput> for biological_age::Sex {
+    fn from(s: SexInput) -> Self {
+        match s {
+            SexInput::Female => biological_age::Sex::Female,
+            SexInput::Male => biological_age::Sex::Male,
+            SexInput::Unknown => biological_age::Sex::Unknown,
+        }
+    }
+}
+
+/// One raw activity sample: unix seconds + the on-chip gravity-removed motion magnitude (g).
+#[derive(uniffi::Record, Clone, Copy)]
+pub struct ActivitySample {
+    pub unix: i64,
+    pub activity: f64,
+}
+
+/// A circadian Rhythm Age result plus the cosinor fit it came from.
+#[derive(uniffi::Record, Clone, Copy)]
+pub struct RhythmAgeInfo {
+    pub cosinor_age_years: f64,
+    pub advance_years: f64,
+    pub mesor: f64,
+    pub amplitude: f64,
+    pub acrophase_hours: f64,
+    pub relative_amplitude: f64,
+}
+
+fn to_pairs(samples: Vec<ActivitySample>) -> Vec<(i64, f64)> {
+    samples.into_iter().map(|s| (s.unix, s.activity)).collect()
+}
+
+/// Circadian Rhythm Age from raw (unix, activity) samples + tz offset + chronological age + sex: bins the
+/// samples per LOCAL hour, fits a single-component cosinor, then the Gompertz biological-age transform.
+/// `None` when the fit is degenerate (< 3 populated hours). v1 is a RELATIVE index; the activity scale is
+/// not calibrated to the model's mg-ENMO training units.
+#[uniffi::export]
+pub fn rhythm_age_from_samples(
+    samples: Vec<ActivitySample>,
+    tz_offset_seconds: i64,
+    chronological_age: f64,
+    sex: SexInput,
+) -> Option<RhythmAgeInfo> {
+    // Scale on-chip activity (g) → the model's mg-ENMO training units before the fit; without it the
+    // mesor/amplitude terms collapse and the age is wrong.
+    let scale = biological_age::ACTIVITY_TO_MG_ENMO_SCALE;
+    let pairs: Vec<(i64, f64)> = to_pairs(samples).into_iter().map(|(t, a)| (t, a * scale)).collect();
+    let bins = circadian::hourly_bins(&pairs, tz_offset_seconds);
+    let fit = circadian::cosinor(&bins)?;
+    // A real rhythm only: below the relative-amplitude floor the fit is flat/noise, so no age is fabricated.
+    if fit.relative_amplitude() < circadian::MIN_RELATIVE_AMPLITUDE {
+        return None;
+    }
+    let age = biological_age::cosinor_age(
+        fit.mesor,
+        fit.amplitude,
+        fit.acrophase_radians(),
+        chronological_age,
+        sex.into(),
+    )?;
+    Some(RhythmAgeInfo {
+        cosinor_age_years: age.cosinor_age_years,
+        advance_years: age.advance_years,
+        mesor: fit.mesor,
+        amplitude: fit.amplitude,
+        acrophase_hours: fit.acrophase_hours,
+        relative_amplitude: fit.relative_amplitude(),
+    })
+}
+
+/// A body-clock phase estimate. `confidence` is "unreadable"/"wide"/"solid"; `lean` is
+/// "earlier"/"aligned"/"later" (the app renders the sentence from these).
+#[derive(uniffi::Record, Clone)]
+pub struct PhaseEstimateInfo {
+    pub temp_min_hour: f64,
+    pub acrophase_hours: f64,
+    pub offset_vs_schedule_minutes: f64,
+    pub confidence: String,
+    pub lean: String,
+}
+
+/// Body-clock phase from raw (unix, activity) samples + tz offset, days observed, habitual wake hour, and an
+/// optional observed skin-temp minimum hour. `None` when the cosinor is degenerate.
+#[uniffi::export]
+pub fn circadian_phase_from_samples(
+    samples: Vec<ActivitySample>,
+    tz_offset_seconds: i64,
+    days_observed: u32,
+    habitual_wake_hour: f64,
+    observed_temp_min_hour: Option<f64>,
+) -> Option<PhaseEstimateInfo> {
+    let bins = circadian::hourly_bins(&to_pairs(samples), tz_offset_seconds);
+    let e = circadian::estimate_phase(&bins, days_observed, habitual_wake_hour, observed_temp_min_hour)?;
+    let confidence = match e.confidence {
+        circadian::PhaseConfidence::Unreadable => "unreadable",
+        circadian::PhaseConfidence::Wide => "wide",
+        circadian::PhaseConfidence::Solid => "solid",
+    };
+    let lean = match e.lean {
+        circadian::PhaseLean::Earlier => "earlier",
+        circadian::PhaseLean::Aligned => "aligned",
+        circadian::PhaseLean::Later => "later",
+    };
+    Some(PhaseEstimateInfo {
+        temp_min_hour: e.temp_min_hour,
+        acrophase_hours: e.acrophase_hours,
+        offset_vs_schedule_minutes: e.offset_vs_schedule_minutes,
+        confidence: confidence.to_string(),
+        lean: lean.to_string(),
+    })
+}
+
+/// Personal sleep need (hours) = mean of recent nightly asleep hours, floored at 7.5. For the Rest
+/// score's sleep-need input.
+#[uniffi::export]
+pub fn personal_sleep_need_hours(recent_asleep_hours: Vec<f64>) -> f64 {
+    rest::personal_sleep_need_hours(&recent_asleep_hours)
 }
 
 

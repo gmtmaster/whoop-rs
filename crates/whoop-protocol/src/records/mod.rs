@@ -29,6 +29,7 @@ pub struct HistoryRecord {
     pub sleep_state: Option<u8>,  // 5.0 v18 packed state, provisional {0 still / 1 wake / 2 asleep / 3 up}
     pub signal_flags: Option<u8>, // 5.0 v18 PPG SIGPROC status bitfield (bit 4 = off-wrist); empirical
     pub signal_quality: Option<u8>, // 5.0 v18 PPG confidence, 255 = clean; empirical
+    pub dynamic_acceleration_g: Option<f32>, // 5.0 v18 on-chip gravity-removed motion magnitude (g, 0..8); empirical
 }
 
 /// A raw 24 Hz optical buffer (v26 on 5.0/MG). One record = one strap second.

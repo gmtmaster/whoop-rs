@@ -9,8 +9,10 @@
 //! `respiratory_rate`, `imu_features` and the shared `stats`.
 
 pub mod baselines;
+pub mod biological_age;
 pub mod calories;
 pub mod calibration;
+pub mod circadian;
 pub mod hr_anomaly;
 pub mod hr_recovery;
 pub mod hr_zones;

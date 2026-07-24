@@ -42,9 +42,36 @@ pub fn rest(
     Some((weighted * 100.0).round() / 100.0)
 }
 
+/// Healthy floor for the personal sleep-need estimate (hours).
+pub const MIN_SLEEP_NEED_HOURS: f64 = 7.5;
+
+/// Personal sleep need (hours) = the mean of recent nightly asleep hours, floored at [MIN_SLEEP_NEED_HOURS].
+/// Non-positive nights are ignored; an empty window returns the floor. Feeds `rest`'s `sleep_need_hours`.
+pub fn personal_sleep_need_hours(recent_asleep_hours: &[f64]) -> f64 {
+    let mut sum = 0.0;
+    let mut n = 0u32;
+    for &h in recent_asleep_hours {
+        if h > 0.0 {
+            sum += h;
+            n += 1;
+        }
+    }
+    if n == 0 {
+        return MIN_SLEEP_NEED_HOURS;
+    }
+    (sum / n as f64).max(MIN_SLEEP_NEED_HOURS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personal_sleep_need_floors_and_averages() {
+        assert_eq!(personal_sleep_need_hours(&[]), MIN_SLEEP_NEED_HOURS);
+        assert_eq!(personal_sleep_need_hours(&[6.0, 0.0, 6.5]), MIN_SLEEP_NEED_HOURS); // mean 6.25 < floor
+        assert!((personal_sleep_need_hours(&[8.0, 9.0, 8.5]) - 8.5).abs() < 1e-9);
+    }
 
     #[test]
     fn perfect_night_scores_high() {
