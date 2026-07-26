@@ -60,7 +60,7 @@ fn capture_parity() {
                 }
                 if p["meta_type"].as_str().unwrap_or("").starts_with("HISTORY_END") {
                     end_total += 1;
-                    // Kotlin stored u32 as a possibly-negative Int; widen back through i64.
+                    // The fixture stored u32 as a possibly-negative signed int; widen back through i64.
                     let want_unix = p["unix"].as_i64().unwrap() as u32;
                     let want_trim = p["trim_cursor"].as_i64().unwrap() as u32;
                     if m.unix == want_unix && m.trim_cursor == want_trim {
@@ -158,7 +158,7 @@ fn capture_parity() {
     assert_eq!(cr_cmd_ok, cr_total, "COMMAND_RESPONSE resp_cmd parity");
 }
 
-/// The real WHOOP 4.0 GET_DATA_RANGE frames from DataRangeScanTest — pins the Rust scan == Kotlin scan
+/// Real WHOOP 4.0 GET_DATA_RANGE frames — pins the scan
 /// on hardware frames before the app routes the sync gate through the FFI.
 #[test]
 fn data_range_scan_matches_real_whoop4_frames() {

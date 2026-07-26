@@ -22,12 +22,6 @@ pub fn to_wall(device_unix: u32, wall_now: i64) -> i64 {
     }
 }
 
-/// Plausibility gate for a type-47 / event unix: reject a 2023-11 floor or a timestamp over a day ahead.
-pub fn is_plausible(unix: u32, wall_now: i64) -> bool {
-    let t = unix as i64;
-    t >= 1_700_000_000 && t <= wall_now + DAY
-}
-
 /// SET_CLOCK payload — the 8-byte form `[u32 LE seconds][4 zero]` newer 4.0 and 5.0/MG firmware latches.
 pub fn set_clock_payload(now_unix: u32) -> [u8; 8] {
     let mut out = [0u8; 8];

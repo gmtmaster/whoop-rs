@@ -136,6 +136,11 @@ fn run_dataset(ds: &str) -> (f64, usize) {
             continue;
         }
         let fx = load_fixture(dir);
+        // A fixture with no labels cannot be scored; counting it would dilute the matrix with nothing
+        // and report an agreement figure that was never measured.
+        if fx.truth.is_empty() {
+            continue;
+        }
         let segs = stage_v2(&fx.input);
         let pred = predict_epochs(&segs, fx.w0, fx.n_epochs);
         for (k, &t) in &fx.truth {
@@ -162,4 +167,26 @@ fn v2_aauwss_kappa_matches_shipped() {
     let (kappa, n) = run_dataset("aauwss");
     println!("V2 AAUWSS: kappa={kappa:.3} over {n} subjects (target ~0.412)");
     assert!((kappa - 0.412).abs() < 0.008, "V2 AAUWSS kappa {kappa:.3} off target 0.412");
+}
+
+/// Every fixture set in one table, so a recipe change is read as one before/after sheet rather than
+/// two pinned numbers. A set whose fixtures carry no labels is reported as such, never as kappa 0.
+/// Prints only — the two gates above are what fail on drift.
+#[test]
+#[ignore = "reads external fixtures; run with --ignored for the full sheet"]
+fn v2_all_datasets_report() {
+    println!("{:<14} {:>8} {:>10}", "dataset", "kappa", "subjects");
+    for ds in ["dreamt", "aauwss", "e9night", "killa5", "sleep-accel"] {
+        let root = fixtures_root().join(ds);
+        if !root.is_dir() {
+            println!("{ds:<14} {:>8} {:>10}", "-", "missing");
+            continue;
+        }
+        let (kappa, n) = run_dataset(ds);
+        if n == 0 {
+            println!("{ds:<14} {:>8} {:>10}   no ground truth", "-", 0);
+            continue;
+        }
+        println!("{ds:<14} {kappa:>8.3} {n:>10}");
+    }
 }

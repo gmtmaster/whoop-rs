@@ -11,7 +11,8 @@ use physio_algo::{
     baselines, biological_age, calories, circadian, hr_recovery, hr_zones, imu_features, ppg as ppg_hr,
     recovery, respiratory_rate, rest,
     resting_hr,
-    sleep, sleep_debt, steps, strain, stress, stress_onset, vo2max, workout,
+    sleep, sleep_debt, sleep_regularity, steps, strain, stress, stress_onset, vitality, vo2max,
+    workout,
     HrvReadiness, Spo2,
 };
 use whoop_protocol::deframe::DeframerMap;
@@ -203,13 +204,6 @@ pub struct ImuFrame {
     pub sample_rate_hz: u16,
     pub accel: Vec<i16>,
     pub gyro: Vec<i16>,
-}
-
-/// One haptic buzz pulse; a clock chime is a sequence of these (write a buzz per pulse).
-#[derive(uniffi::Record)]
-pub struct Pulse {
-    pub duration_ms: u32,
-    pub gap_ms: u32,
 }
 
 /// One raw PPG sample for `ppg_hr` (wall-clock second + raw ADC value).
@@ -601,7 +595,7 @@ impl WhoopCodec {
     /// Feed one native notification (its channel + bytes): reassembles frames and drives the offload,
     /// returning the steps to perform (persist records, write ACKs, stop on Complete).
     pub fn feed(&self, chan: Chan, bytes: Vec<u8>) -> Vec<Step> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().expect("Mutex poisoned — a prior codec panic left the inner state corrupted");
         let frames = inner.deframers.push(chan.into(), &bytes);
         let mut out = Vec::new();
         for f in frames {
@@ -832,15 +826,6 @@ impl WhoopCodec {
     }
 }
 
-/// The haptic pulses for a clock chime (write a buzz per pulse, spaced by its gap). Pure encoder.
-#[uniffi::export]
-pub fn haptic_clock_pulses(hour: u32, minute: u32, is_24h: bool) -> Vec<Pulse> {
-    haptic::pulses(hour, minute, is_24h)
-        .into_iter()
-        .map(|p| Pulse { duration_ms: p.duration_ms, gap_ms: p.gap_ms })
-        .collect()
-}
-
 /// Newest plausible unix banked, scanning EVERY byte offset of a GET_DATA_RANGE frame and preferring the
 /// newest non-future word (falls back to newest-any). This is the sync gate — it REPLACES the fixed-offset
 /// `Response::DataRange` newest read.
@@ -921,7 +906,7 @@ pub struct Spo2RawSample {
     pub ir: i32,
 }
 
-/// Integer-truncated nightly means of the raw red/IR ADC (the app's `DailyMetric.spo2Red`/`spo2Ir`).
+/// Integer-truncated nightly means of the raw red/IR ADC over the detected in-bed spans.
 #[derive(uniffi::Record)]
 pub struct Spo2RawMeans {
     pub red: i32,
@@ -938,7 +923,7 @@ pub fn nightly_spo2_raw_means(spans: Vec<Spo2Span>, samples: Vec<Spo2RawSample>)
     Spo2::nightly_raw_means(&spans, &samples).map(|(red, ir)| Spo2RawMeans { red, ir })
 }
 
-/// Stage one already-detected in-bed span with the V2 recipe + motion-aware wake refinement (the app's
+/// Stage one already-detected in-bed span with the V2 recipe + motion-aware wake refinement (the
 /// single-span edit self-heal path). Per-30 s-epoch stage segments over `[start, end]`.
 #[uniffi::export]
 pub fn stage_sleep_refined(input: SleepInput, steps: Vec<SleepStepSample>) -> Vec<SleepSegment> {
@@ -954,6 +939,11 @@ pub fn stage_sleep_refined(input: SleepInput, steps: Vec<SleepStepSample>) -> Ve
 pub struct HrTick {
     pub ts: i64,
     pub bpm: i32,
+}
+
+/// The one `HrTick` -> algo-crate `HrSample` conversion; every plain-value metric takes this series.
+fn to_hr(ticks: Vec<HrTick>) -> Vec<physio_algo::HrSample> {
+    ticks.into_iter().map(|h| physio_algo::HrSample { ts: h.ts, bpm: h.bpm }).collect()
 }
 
 /// A personal baseline driver (mean + spread) for recovery z-scoring.
@@ -1014,7 +1004,7 @@ pub fn recovery_band(score: f64) -> String {
 /// Overnight HR-decline slope (bpm/hour) — the recovery-index driver.
 #[uniffi::export]
 pub fn recovery_index_slope(hr: Vec<HrTick>, start: i64, end: i64) -> Option<f64> {
-    let s: Vec<recovery::HrSample> = hr.into_iter().map(|h| recovery::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let s = to_hr(hr);
     recovery::recovery_index_slope(&s, start, end)
 }
 
@@ -1050,7 +1040,7 @@ pub fn strain_score(
     sex: String,
     denominator: f64,
 ) -> Option<f64> {
-    let s: Vec<strain::HrSample> = hr.into_iter().map(|h| strain::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let s = to_hr(hr);
     strain::strain(&s, max_hr, resting_hr, method.into(), &sex, denominator)
 }
 
@@ -1089,7 +1079,7 @@ pub fn stress_components(rr_ms: Vec<f64>) -> Option<StressComponentsInfo> {
 /// Lowest 5-min tumbling-window mean bpm floor over `[start, end]`. `None` with no samples.
 #[uniffi::export]
 pub fn session_resting_hr(start: i64, end: i64, hr: Vec<HrTick>) -> Option<i32> {
-    let s: Vec<resting_hr::HrSample> = hr.into_iter().map(|h| resting_hr::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let s = to_hr(hr);
     resting_hr::session_resting_hr(start, end, &s)
 }
 
@@ -1105,7 +1095,7 @@ pub struct HrRecoveryInfo {
 
 #[uniffi::export]
 pub fn hr_recovery_calculate(hr: Vec<HrTick>, workout_start: i64, workout_end: i64, max_hr: f64) -> Option<HrRecoveryInfo> {
-    let s: Vec<resting_hr::HrSample> = hr.into_iter().map(|h| resting_hr::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let s = to_hr(hr);
     hr_recovery::calculate(&s, workout_start, workout_end, max_hr).map(|r| HrRecoveryInfo {
         end_hr: r.end_hr,
         after_1min: r.after_1min,
@@ -1120,7 +1110,7 @@ pub fn hrv_rmssd(rr_ms: Vec<u16>) -> Option<f64> {
     HrvReadiness::rmssd(&rr_ms)
 }
 
-/// Plain unfiltered RMSSD, matching Kotlin HrvAnalyzer.rmssdRaw exactly.
+/// Plain unfiltered RMSSD (no artifact rejection); the raw counterpart to `hrv_rmssd`.
 #[uniffi::export]
 pub fn hrv_rmssd_plain(rr_ms: Vec<u16>) -> Option<f64> {
     HrvReadiness::rmssd_plain(&rr_ms)
@@ -1245,18 +1235,19 @@ pub fn hr_zones_for_age(age: f64, max_hr_override: Option<f64>) -> HrZoneSetInfo
 #[uniffi::export]
 pub fn hr_time_in_zone(hr: Vec<HrTick>, age: f64, max_hr_override: Option<f64>) -> TimeInZoneInfo {
     let zs = hr_zones::zones_for_age(age, max_hr_override);
-    let s: Vec<hr_zones::HrSample> = hr.into_iter().map(|h| hr_zones::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let s = to_hr(hr);
     let t = hr_zones::time_in_zone(&s, &zs);
     TimeInZoneInfo { seconds: t.seconds.to_vec(), below_zone1: t.below_zone1 }
 }
 
 /// A computed Fitness Age with the inputs to present it. `vo2max` is filled only with a waist.
+/// `advance_years` is POSITIVE when older than chronological, matching `rhythm_age`'s convention.
 #[derive(uniffi::Record)]
 pub struct FitnessAgeInfo {
     pub vo2max: Option<f64>,
     pub fitness_age: f64,
     pub chrono_age: f64,
-    pub delta_years: f64,
+    pub advance_years: f64,
     pub band_years: f64,
     pub lower_confidence: bool,
 }
@@ -1281,7 +1272,7 @@ pub fn fitness_age_compute(
         vo2max: r.vo2max,
         fitness_age: r.fitness_age,
         chrono_age: r.chrono_age,
-        delta_years: r.delta_years,
+        advance_years: r.advance_years,
         band_years: r.band_years,
         lower_confidence: r.lower_confidence,
     })
@@ -1341,7 +1332,7 @@ pub fn imu_features(samples: Vec<ImuSampleInfo>, sample_rate_hz: i32) -> ImuFeat
     }
 }
 
-// ── Stress onset detector ────────────────────────────────────────────────────
+// ── Stress onset detector ──────────────────────────────────────────────────
 
 /// Persisted state for the onset detector, serializable across FFI.
 #[derive(uniffi::Record)]
@@ -1351,7 +1342,7 @@ pub struct OnsetStateInfo {
     pub last_fire_at: i64,
 }
 
-/// Stress-onset evaluation result.
+/// The decision returned each evaluation, with the state to persist for the next one.
 #[derive(uniffi::Record)]
 pub struct OnsetDecisionInfo {
     pub should_nudge: bool,
@@ -1409,14 +1400,18 @@ pub fn stress_onset_evaluate(
     }
 }
 
-// ── Personal baselines ───────────────────────────────────────────────────────
-
+/// One metric's baseline configuration: the validity band, the spread floor and the two EWMA
+/// half-lives (centre, spread).
 #[derive(uniffi::Record)]
 pub struct MetricCfgInfo {
-    pub min_val: f64, pub max_val: f64, pub floor_spread: f64,
-    pub half_life_b: f64, pub half_life_s: f64,
+    pub min_val: f64,
+    pub max_val: f64,
+    pub floor_spread: f64,
+    pub half_life_b: f64,
+    pub half_life_s: f64,
 }
 
+/// Persisted baseline state for one metric.
 #[derive(uniffi::Record)]
 pub struct BaselineStateInfo {
     pub baseline: f64,
@@ -1426,11 +1421,21 @@ pub struct BaselineStateInfo {
     pub status: String,
 }
 
+/// One metric's baseline configuration by name ("hrv" / "resting_hr" / "resp" / "skin_temp" /
+/// "strain"). The tuning table lives here so the app cannot hold a second copy that drifts from it;
+/// an unknown name yields `None`.
 #[uniffi::export]
-pub fn baseline_metric_cfg_hrv() -> MetricCfgInfo {
-    let c = baselines::MetricCfg::hrv();
-    MetricCfgInfo { min_val: c.min_val, max_val: c.max_val, floor_spread: c.floor_spread,
-        half_life_b: c.half_life_b, half_life_s: c.half_life_s }
+pub fn baseline_metric_cfg(metric: String) -> Option<MetricCfgInfo> {
+    let c = match metric.as_str() {
+        "hrv" => baselines::MetricCfg::hrv(),
+        "resting_hr" => baselines::MetricCfg::resting_hr(),
+        "resp" => baselines::MetricCfg::resp(),
+        "skin_temp" => baselines::MetricCfg::skin_temp(),
+        "strain" => baselines::MetricCfg::strain(),
+        _ => return None,
+    };
+    Some(MetricCfgInfo { min_val: c.min_val, max_val: c.max_val, floor_spread: c.floor_spread,
+        half_life_b: c.half_life_b, half_life_s: c.half_life_s })
 }
 
 #[uniffi::export]
@@ -1456,7 +1461,7 @@ pub fn baseline_fold_history(values: Vec<Option<f64>>, cfg: MetricCfgInfo) -> Ba
         nights_since_update: r.nights_since_update, status: r.status.as_str().to_string() }
 }
 
-// -- Steps counter (FFI bridge) --
+// ── Steps counter ──────────────────────────────────────────────────────────
 
 /// Raw wrap-aware motion-tick total from step counter samples. None with fewer than 2 samples
 /// or no forward movement. The caller applies its stepTicksPerStep calibration.
@@ -1469,7 +1474,7 @@ pub fn steps_counter(samples: Vec<SleepStepSample>) -> Option<u64> {
     steps::steps_in_window(&s).map(|v| v as u64)
 }
 
-// -- Calories (Keytel + Harris-Benedict) --
+// ── Calories (Keytel + Harris-Benedict) ────────────────────────────────────
 
 /// Whole-day energy estimate (kcal) from HR samples. Each sample = one second.
 #[uniffi::export]
@@ -1482,10 +1487,7 @@ pub fn calories_estimate_day(
     hrmax: f64,
     resting_hr: f64,
 ) -> f64 {
-    let samples: Vec<calories::HrSample> = hr
-        .into_iter()
-        .map(|h| calories::HrSample { ts: h.ts, bpm: h.bpm })
-        .collect();
+    let samples = to_hr(hr);
     calories::estimate_day_calories(&samples, weight_kg, height_cm, age, &sex, hrmax, resting_hr)
 }
 
@@ -1500,15 +1502,12 @@ pub fn calories_estimate_bout(
     hrmax: f64,
     resting_hr: f64,
 ) -> Vec<f64> {
-    let samples: Vec<calories::HrSample> = hr
-        .into_iter()
-        .map(|h| calories::HrSample { ts: h.ts, bpm: h.bpm })
-        .collect();
+    let samples = to_hr(hr);
     let (kcal, kj) = calories::estimate_bout_calories(&samples, weight_kg, height_cm, age, &sex, hrmax, resting_hr);
     vec![kcal, kj]
 }
 
-// -- Workout detection --
+// ── Workout detection ──────────────────────────────────────────────────────
 
 /// A gravity/accel sample for workout detection.
 #[derive(uniffi::Record)]
@@ -1537,6 +1536,10 @@ pub struct WorkoutSession {
     pub duration_s: f64,
     pub zone_time: Vec<ZoneTimeEntry>,
     pub avg_hrr_pct: Option<f64>,
+    /// Effective HRmax the zone maths used (bpm), and where it came from
+    /// ("caller" / "observed" / "tanaka" / "unknown").
+    pub hrmax: Option<f64>,
+    pub hrmax_source: String,
     pub calories_kcal: Option<f64>,
     pub calories_kj: Option<f64>,
 }
@@ -1554,10 +1557,7 @@ pub fn workout_detect(
     height_cm: f64,
     sex: String,
 ) -> Vec<WorkoutSession> {
-    let hr_samples: Vec<workout::HrSample> = hr
-        .into_iter()
-        .map(|h| workout::HrSample { ts: h.ts, bpm: h.bpm })
-        .collect();
+    let hr_samples = to_hr(hr);
     let grav_samples: Vec<workout::GravitySample> = gravity
         .into_iter()
         .map(|g| workout::GravitySample { ts: g.ts, x: g.x, y: g.y, z: g.z })
@@ -1576,12 +1576,46 @@ pub fn workout_detect(
         duration_s: s.duration_s,
         zone_time: s.zone_time_pct.into_iter().map(|(z, p)| ZoneTimeEntry { zone: z, pct: p }).collect(),
         avg_hrr_pct: s.avg_hrr_pct,
+        hrmax: s.hrmax,
+        hrmax_source: s.hrmax_source,
         calories_kcal: s.calories_kcal,
         calories_kj: s.calories_kj,
     }).collect()
 }
 
-// -- Nap detection --
+/// One motion-intensity sample: the L2 magnitude of the gravity change vs the previous sample.
+#[derive(uniffi::Record)]
+pub struct ActivityPointInfo {
+    pub ts: i64,
+    pub intensity: f64,
+}
+
+/// Trailing rolling mean of the motion intensities over `window_s` — the smoothed spine the stillness
+/// and sedentary gates threshold against.
+#[uniffi::export]
+pub fn smoothed_intensity(motion: Vec<ActivityPointInfo>, window_s: f64) -> Vec<f64> {
+    let pts: Vec<workout::ActivityPoint> = motion
+        .into_iter()
+        .map(|p| workout::ActivityPoint { ts: p.ts, intensity: p.intensity })
+        .collect();
+    workout::smoothed_intensity(&pts, window_s)
+}
+
+/// Per-record motion-intensity series from a gravity stream — the shared motion spine the workout,
+/// nap and sedentary readings all measure against.
+#[uniffi::export]
+pub fn activity_series(gravity: Vec<WorkoutGravitySample>) -> Vec<ActivityPointInfo> {
+    let g: Vec<workout::GravitySample> = gravity
+        .into_iter()
+        .map(|s| workout::GravitySample { ts: s.ts, x: s.x, y: s.y, z: s.z })
+        .collect();
+    workout::activity_series(&g)
+        .into_iter()
+        .map(|p| ActivityPointInfo { ts: p.ts, intensity: p.intensity })
+        .collect()
+}
+
+// ── Nap detection ──────────────────────────────────────────────────────────
 
 /// Tri-state nap verdict.
 #[derive(uniffi::Enum)]
@@ -1630,8 +1664,7 @@ pub fn nap_evaluate(
         .into_iter()
         .map(|g| workout::GravitySample { ts: g.ts, x: g.x, y: g.y, z: g.z })
         .collect();
-    let hr_samples: Vec<workout::HrSample> =
-        hr.into_iter().map(|h| workout::HrSample { ts: h.ts, bpm: h.bpm }).collect();
+    let hr_samples = to_hr(hr);
     let cfg = physio_algo::nap::NapConfig {
         enabled: config.enabled,
         min_nap_minutes: config.min_nap_minutes,
@@ -1675,7 +1708,7 @@ pub fn hrv_windowed_avg_deep(
     HrvReadiness::windowed_avg_hrv_deep(start, end, &beats, &deep_spans)
 }
 
-// ── Rest (sleep performance composite) ───────────────────────────────────────
+// ── Rest (sleep performance composite) ─────────────────────────────────────
 
 /// Rest (sleep performance) composite [0, 100] from a night's aggregates. `None` when there is no asleep
 /// time. Absent `sleep_need_hours` defaults to 8 h; absent `consistency` defaults to a neutral 0.5.
@@ -1691,7 +1724,7 @@ pub fn rest_score(
     rest::rest(asleep_seconds, efficiency, deep_seconds, rem_seconds, sleep_need_hours, consistency)
 }
 
-// ── Sleep debt ledger ────────────────────────────────────────────────────────
+// ── Sleep debt ledger ──────────────────────────────────────────────────────
 
 /// One night fed into the debt ledger: local `day` key + `slept_min` (None = no data, skipped not zeroed).
 #[derive(uniffi::Record)]
@@ -1733,7 +1766,7 @@ pub fn sleep_debt_ledger(series: Vec<DebtNightInput>, need_hours: Option<f64>, w
     }
 }
 
-// ── Daily stress (autonomic, RHR + HRV vs baseline) ──────────────────────────
+// ── Daily stress (autonomic, RHR + HRV vs baseline) ────────────────────────
 
 /// One day's RHR + HRV for daily-stress scoring (either may be absent).
 #[derive(uniffi::Record)]
@@ -1750,7 +1783,7 @@ pub fn daily_stress(today: StressDayInfo, baseline: Vec<StressDayInfo>) -> Optio
     stress::daily_stress(stress::StressDay { rhr: today.rhr, hrv: today.hrv }, &b)
 }
 
-// ── Daytime stress (intraday autonomic activation) ───────────────────────────
+// ── Daytime stress (intraday autonomic activation) ─────────────────────────
 
 /// One hour's aggregates: local `hour` (0–23), mean HR (None below the sample gate) and RMSSD (None on
 /// insufficient clean R-R).
@@ -1802,7 +1835,7 @@ pub fn daytime_stress(hours: Vec<HourPointInfo>) -> DaytimeStressInfo {
     }
 }
 
-// -- Circadian rhythm + CosinorAge (Rhythm Age) --
+// ── Circadian rhythm + CosinorAge (Rhythm Age) ─────────────────────────────
 
 /// Sex selector for the biological-age coefficient set.
 #[derive(uniffi::Enum, Clone, Copy)]
@@ -1922,6 +1955,145 @@ pub fn circadian_phase_from_samples(
         confidence: confidence.to_string(),
         lean: lean.to_string(),
     })
+}
+
+// ── Vitality / Body Age ──────────────────────────────────────────────────────
+
+/// A `[start, end)` unix-second span.
+#[derive(uniffi::Record)]
+pub struct TimeSpan {
+    pub start: i64,
+    pub end: i64,
+}
+
+/// One driver's signed log-hazard against its population reference.
+#[derive(uniffi::Record)]
+pub struct VitalityContribution {
+    pub key: String,
+    pub label: String,
+    pub ln_hazard: f64,
+}
+
+/// A Vitality reading. `advance_years` is POSITIVE when Body Age is above chronological.
+#[derive(uniffi::Record)]
+pub struct VitalityInfo {
+    pub vitality: f64,
+    pub body_age: f64,
+    pub chrono_age: f64,
+    pub advance_years: f64,
+    pub band_years: f64,
+    pub contributions: Vec<VitalityContribution>,
+    pub factors_used: u32,
+}
+
+/// Vitality (0-100) + Body Age (years) from the wearable drivers. `None` below three present drivers.
+#[allow(clippy::too_many_arguments)]
+#[uniffi::export]
+pub fn vitality_compute(
+    chrono_age: f64,
+    resting_hr: Option<f64>,
+    vo2max: Option<f64>,
+    expected_vo2max: Option<f64>,
+    sleep_hours: Option<f64>,
+    sleep_regularity_index: Option<f64>,
+    sleep_consistency: Option<f64>,
+    rmssd: Option<f64>,
+    rmssd_norm: Option<f64>,
+    steps: Option<f64>,
+) -> Option<VitalityInfo> {
+    let input = vitality::VitalityInput {
+        chrono_age, resting_hr, vo2max, expected_vo2max, sleep_hours,
+        sleep_regularity_index, sleep_consistency, rmssd, rmssd_norm, steps,
+    };
+    vitality::compute(&input).map(|r| VitalityInfo {
+        vitality: r.vitality,
+        body_age: r.body_age,
+        chrono_age: r.chrono_age,
+        advance_years: r.advance_years,
+        band_years: r.band_years,
+        contributions: r.contributions.into_iter()
+            .map(|c| VitalityContribution { key: c.key, label: c.label, ln_hazard: c.ln_hazard })
+            .collect(),
+        factors_used: r.factors_used,
+    })
+}
+
+/// Each present driver's signed log-hazard, without the three-driver gate — the "why" behind a
+/// reading, and the door a caller uses to inspect one driver at a time.
+#[allow(clippy::too_many_arguments)]
+#[uniffi::export]
+pub fn vitality_contributions(
+    chrono_age: f64,
+    resting_hr: Option<f64>,
+    vo2max: Option<f64>,
+    expected_vo2max: Option<f64>,
+    sleep_hours: Option<f64>,
+    sleep_regularity_index: Option<f64>,
+    sleep_consistency: Option<f64>,
+    rmssd: Option<f64>,
+    rmssd_norm: Option<f64>,
+    steps: Option<f64>,
+) -> Vec<VitalityContribution> {
+    let input = vitality::VitalityInput {
+        chrono_age, resting_hr, vo2max, expected_vo2max, sleep_hours,
+        sleep_regularity_index, sleep_consistency, rmssd, rmssd_norm, steps,
+    };
+    vitality::contributions(&input).into_iter()
+        .map(|c| VitalityContribution { key: c.key, label: c.label, ln_hazard: c.ln_hazard })
+        .collect()
+}
+
+/// Nocturnal RMSSD age norm (ms) — the reference the HRV driver is scored against.
+#[uniffi::export]
+pub fn vitality_rmssd_norm(for_age: f64) -> f64 {
+    vitality::rmssd_norm(for_age)
+}
+
+/// Coverage windows from a sample series: consecutive timestamps within `max_gap_s` form one span.
+/// Feed the HR timestamps here rather than a day's min..max, or every mid-day gap counts as worn.
+#[uniffi::export]
+pub fn coverage_spans(timestamps: Vec<i64>, max_gap_s: i64) -> Vec<TimeSpan> {
+    sleep_regularity::coverage_spans(&timestamps, max_gap_s)
+        .into_iter()
+        .map(|(start, end)| TimeSpan { start, end })
+        .collect()
+}
+
+/// Sleep Regularity Index (-100..100) from asleep spans and the wear windows they sit in. Non-wear is
+/// UNKNOWN, never awake. `None` below the day-pair and coverage gates.
+#[uniffi::export]
+pub fn sleep_regularity_index(
+    first_local_midnight: i64,
+    days: u32,
+    asleep: Vec<TimeSpan>,
+    covered: Vec<TimeSpan>,
+) -> Option<f64> {
+    let to_pairs = |v: Vec<TimeSpan>| -> Vec<(i64, i64)> {
+        v.into_iter().map(|s| (s.start, s.end)).collect()
+    };
+    let grid = sleep_regularity::epoch_grid(
+        first_local_midnight, days as usize, &to_pairs(asleep), &to_pairs(covered),
+    );
+    sleep_regularity::sleep_regularity_index(&grid)
+}
+
+/// Sleep regularity in [0, 1] from nightly durations (hours). `None` below three nights.
+#[uniffi::export]
+pub fn vitality_sleep_consistency(nightly_hours: Vec<f64>) -> Option<f64> {
+    vitality::sleep_consistency(&nightly_hours)
+}
+
+/// Median of a series. `0.0` when empty — the one median the app and the algorithms share.
+#[uniffi::export]
+pub fn series_median(values: Vec<f64>) -> f64 {
+    physio_algo::stats::median(&values)
+}
+
+/// OLS slope of a series over x = 0, 1, 2, … — the trend direction behind a week-over-week read.
+/// `0.0` for fewer than two points or a degenerate spread.
+#[uniffi::export]
+pub fn series_slope(values: Vec<f64>) -> f64 {
+    physio_algo::stats::least_squares_slope(&values)
 }
 
 /// Personal sleep need (hours) = mean of recent nightly asleep hours, floored at 7.5. For the Rest

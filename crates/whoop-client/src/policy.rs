@@ -49,11 +49,6 @@ pub fn should_run(
     }
 }
 
-/// Reconnect delay (seconds) for attempt N: 3, 6, 12, 24, 48, then a 60 s cap.
-pub fn reconnect_delay_s(attempt: u32) -> u32 {
-    (3u32.saturating_mul(1u32 << attempt.min(5))).min(60)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,13 +74,5 @@ mod tests {
         assert!(!should_run(BackfillTrigger::Strap, 100000.0, Some(0.0), 0, true));
         // …but a connect pass still runs.
         assert!(should_run(BackfillTrigger::Connect, 100.0, Some(0.0), 0, true));
-    }
-
-    #[test]
-    fn reconnect_backoff_schedule() {
-        assert_eq!(
-            [0, 1, 2, 3, 4, 5, 6].map(reconnect_delay_s),
-            [3, 6, 12, 24, 48, 60, 60]
-        );
     }
 }

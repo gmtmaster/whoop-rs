@@ -5,20 +5,9 @@
 
 const WINDOW_SECONDS: i64 = 5 * 60;
 
-/// One HR reading: unix-second `ts` and integer `bpm`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HrSample {
-    pub ts: i64,
-    pub bpm: i32,
-}
+pub use crate::hr_sample::HrSample;
 
-impl HrSample {
-    pub fn new(ts: i64, bpm: i32) -> Self {
-        Self { ts, bpm }
-    }
-}
-
-/// Round to nearest, ties toward positive infinity (matches the source integer rounding).
+/// Round to nearest, ties toward positive infinity.
 fn round_half_up(x: f64) -> i32 {
     (x + 0.5).floor() as i32
 }

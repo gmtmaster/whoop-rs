@@ -3,7 +3,7 @@
 //! from the shipped recipe fails immediately. Integer-literal input keeps the two languages bit-identical.
 
 use super::input::{AccelSample, HrSample, RrRun, SleepInput};
-use super::v2::TRANSITION;
+use super::params::Params;
 use super::{analyze, stage_v2, SleepStage, SleepStreams, DEEP_GATE_THRESH};
 
 const REF_MIDNIGHT: i64 = 1_749_513_600;
@@ -67,8 +67,8 @@ fn frozen_golden_hypnogram_v2() {
 #[test]
 fn tuned_deep_boundary_constants_are_pinned() {
     assert_eq!(0.40, DEEP_GATE_THRESH);
-    assert_eq!([0.76, 0.012, 0.216, 0.012], TRANSITION[0]);
-    for row in TRANSITION.iter() {
+    assert_eq!([0.76, 0.012, 0.216, 0.012], Params::SHIPPED.transition[0]);
+    for row in Params::SHIPPED.transition.iter() {
         let sum: f64 = row.iter().sum();
         assert!((sum - 1.0).abs() < 1e-9, "transition row must sum to 1.0");
     }

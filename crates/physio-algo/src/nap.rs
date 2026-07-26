@@ -42,7 +42,7 @@ pub struct NapDecision {
     pub candidate: Option<NapCandidate>,
 }
 
-/// User-tunable thresholds; defaults mirror the app's fixed config.
+/// User-tunable thresholds.
 #[derive(Clone, Copy, Debug)]
 pub struct NapConfig {
     pub enabled: bool,

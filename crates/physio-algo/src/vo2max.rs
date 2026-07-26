@@ -37,15 +37,6 @@ fn coeffs(sex: &str) -> &'static Coeffs {
     }
 }
 
-/// Body-mass index from metric height/weight. `0.0` for non-positive height.
-pub fn bmi(weight_kg: f64, height_cm: f64) -> f64 {
-    let m = height_cm / 100.0;
-    if m <= 0.0 {
-        return 0.0;
-    }
-    weight_kg / (m * m)
-}
-
 /// Nes waist-variant VO2max (ml/kg/min). Needs a waist measurement.
 pub fn estimate_vo2max(age: f64, sex: &str, waist_cm: f64, resting_hr: f64, pa_index: f64) -> f64 {
     let c = coeffs(sex);
@@ -110,12 +101,14 @@ pub fn physical_activity_index_from_strain(active_days_per_week: i32, mean_activ
 }
 
 /// A computed Fitness Age with the inputs to present it. `vo2max` is filled only with a waist.
+/// `advance_years` follows the same convention as the biological-age model: POSITIVE = older than
+/// chronological (worse), negative = younger (fitter).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FitnessAgeResult {
     pub vo2max: Option<f64>,
     pub fitness_age: f64,
     pub chrono_age: f64,
-    pub delta_years: f64,
+    pub advance_years: f64,
     pub band_years: f64,
     pub lower_confidence: bool,
 }
@@ -142,7 +135,7 @@ pub fn compute(
         vo2max: vo2,
         fitness_age: fa,
         chrono_age: age,
-        delta_years: age - fa,
+        advance_years: fa - age,
         band_years: DISPLAY_BAND_YEARS,
         lower_confidence: lower_confidence || nb,
     })
@@ -168,7 +161,6 @@ mod tests {
 
     #[test]
     fn bmi_helper() {
-        approx(bmi(80.0, 178.0), 25.249, 1e-3);
     }
 
     #[test]
@@ -224,7 +216,7 @@ mod tests {
     fn compute_reference_person() {
         let r = compute(40.0, "male", 65.0, 5.0, None, false).unwrap();
         approx(r.fitness_age, 40.0, 1e-9);
-        approx(r.delta_years, 0.0, 1e-9);
+        approx(r.advance_years, 0.0, 1e-9);
         assert!(r.vo2max.is_none());
         assert!(!r.lower_confidence);
     }

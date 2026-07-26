@@ -1,36 +1,9 @@
-//! Shared numeric helpers for the V2 sleep stager: population std, a median, a per-night z-scorer, and the
-//! R-R run flattener. Kept private to the `sleep` module.
+//! Shared helpers for the V2 sleep stager: a per-night z-scorer and the R-R run flattener. The numeric
+//! primitives come from `crate::stats`. Kept private to the `sleep` module.
 
 use super::input::RrRun;
-
-/// Population standard deviation (divide by n). Empty → 0.
-pub(super) fn population_std(vals: &[f64]) -> f64 {
-    if vals.is_empty() {
-        return 0.0;
-    }
-    let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-    let var = vals.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / vals.len() as f64;
-    if var < 0.0 {
-        0.0
-    } else {
-        var.sqrt()
-    }
-}
-
-/// Median of a slice (sorts a copy). Empty → 0.
-pub(super) fn median(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut s = values.to_vec();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = s.len();
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        0.5 * (s[n / 2 - 1] + s[n / 2])
-    }
-}
+pub(super) use crate::stats::median;
+use crate::stats::population_sd;
 
 /// A per-night z-scorer over present values: population std, with a flat channel (0 std → 1) neutral,
 /// and a missing value scoring the neutral centre 0.
@@ -47,7 +20,7 @@ impl ZScore {
             return ZScore { mean: 0.0, sd: 1.0, empty: true };
         }
         let mean = present.iter().sum::<f64>() / present.len() as f64;
-        let sd0 = population_std(&present);
+        let sd0 = population_sd(&present);
         let sd = if sd0 == 0.0 { 1.0 } else { sd0 };
         ZScore { mean, sd, empty: false }
     }

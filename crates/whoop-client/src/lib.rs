@@ -9,8 +9,8 @@ mod error;
 mod policy;
 mod uuids;
 
-pub use capture::{archive_line, capture_line, decode_capture};
+pub use capture::{capture_line, decode_capture};
 pub use client::WhoopClient;
 pub use error::Error;
-pub use policy::{reconnect_delay_s, should_run, BackfillTrigger};
+pub use policy::{should_run, BackfillTrigger};
 pub use uuids::{all_services, characteristic, channel_of, service};

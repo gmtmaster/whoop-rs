@@ -1,11 +1,7 @@
-//! Parity gate for resting_hr. Includes the module directly so it runs before the crate root wires it.
-//! `floor_mean_log_line` cases are the exact source unit-test fixtures; the session-floor tests recover
-//! multiple injected floors so the method is shown to track a varying input, not one lucky match.
+//! Parity gate for resting_hr, over the crate's own module. The session-floor tests recover multiple
+//! injected floors so the method is shown to track a varying input, not one lucky match.
 
-#[path = "../src/resting_hr.rs"]
-mod resting_hr;
-
-use resting_hr::{daily_resting_hr, floor_mean_log_line, session_resting_hr, HrSample};
+use physio_algo::resting_hr::{daily_resting_hr, floor_mean_log_line, session_resting_hr, HrSample};
 
 const SUFFIX: &str = "(floor = WHOOP-style lowest-sustained = NOOP RHR; mean = sleeping-HR-app number)";
 

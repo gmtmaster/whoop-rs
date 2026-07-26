@@ -40,8 +40,11 @@ pub const ACTIVE_HRR_FRACTION: f64 = 0.30;
 pub const DAY_ACTIVE_HRR_FRACTION: f64 = 0.50;
 /// 60 s/min × 4.184 kJ/kcal.
 pub const WORKOUT_DIVISOR: f64 = 251.04;
-/// Max inter-sample gap credited in the bout path (mirrors WorkoutDetector.mergeGapS).
+/// Max inter-sample gap credited in the bout path; the workout detector merges runs on the same gap.
 pub const MERGE_GAP_S: f64 = 150.0;
+/// Max inter-sample gap credited in the day path. Wider than [MERGE_GAP_S] because an ordinary day has
+/// legitimate sparse stretches, but bounded so a wear gap is not billed as resting metabolism.
+pub const DAY_GAP_CAP_S: f64 = 300.0;
 
 /// Resolve the coefficient set for a sex string.
 pub fn resolve_coeffs(sex: &str) -> Coeffs {
@@ -67,15 +70,11 @@ pub fn active_kcal_per_s(c: &Coeffs, hr: f64, hrmax: f64, weight_kg: f64, age: f
     (ee_kj_min.max(0.0)) / WORKOUT_DIVISOR
 }
 
-/// One HR sample for calorie estimation.
-#[derive(Clone, Copy, Debug)]
-pub struct HrSample {
-    pub ts: i64,
-    pub bpm: i32,
-}
+pub use crate::hr_sample::HrSample;
 
 /// Estimate (kcal, kJ) for a workout bout. Each sample is weighted by the elapsed time to the next
-/// sample (capped at [MERGE_GAP_S]), so sparse streams are counted over real seconds.
+/// sample (capped at [MERGE_GAP_S]), so sparse streams are counted over real seconds. An active sample
+/// is floored at the resting rate, so a bout can never burn less than lying still for the same span.
 pub fn estimate_bout_calories(
     hr_samples: &[HrSample],
     weight_kg: f64,
@@ -109,14 +108,15 @@ pub fn estimate_bout_calories(
         total_kcal += if bpm < active_threshold {
             resting_rate * dur
         } else {
-            active_kcal_per_s(&coeffs, bpm, hrmax, weight_kg, age) * dur
+            resting_rate.max(active_kcal_per_s(&coeffs, bpm, hrmax, weight_kg, age)) * dur
         };
     }
     (total_kcal, total_kcal * 4.184)
 }
 
-/// Whole-day energy estimate (kcal) from HR samples. Each sample counts as exactly one second
-/// (flat per-sample, no elapsed-time weighting). Uses [DAY_ACTIVE_HRR_FRACTION] gate.
+/// Whole-day energy estimate (kcal) from HR samples. Each sample is credited with the elapsed time to
+/// the next sample, capped at [DAY_GAP_CAP_S] so an off-wrist stretch is not billed in full; the tail
+/// sample gets one second. Uses the [DAY_ACTIVE_HRR_FRACTION] gate.
 pub fn estimate_day_calories(
     hr_samples: &[HrSample],
     weight_kg: f64,
@@ -135,14 +135,24 @@ pub fn estimate_day_calories(
     let active_threshold = resting_hr + DAY_ACTIVE_HRR_FRACTION * hr_reserve;
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
 
+    let mut ordered: Vec<&HrSample> = hr_samples.iter().collect();
+    ordered.sort_by_key(|s| s.ts);
     let mut total_kcal = 0.0;
-    for s in hr_samples {
+    for (i, s) in ordered.iter().enumerate() {
         let bpm = s.bpm as f64;
-        total_kcal += if bpm < active_threshold {
+        let dur = match ordered.get(i + 1) {
+            Some(next) => {
+                let gap = (next.ts - s.ts) as f64;
+                if gap > 0.0 { gap.min(DAY_GAP_CAP_S) } else { 1.0 }
+            }
+            None => 1.0,
+        };
+        let rate = if bpm < active_threshold {
             resting_rate
         } else {
             resting_rate.max(active_kcal_per_s(&coeffs, bpm, hrmax, weight_kg, age))
         };
+        total_kcal += rate * dur;
     }
     total_kcal
 }
@@ -198,21 +208,30 @@ mod tests {
     }
 
     #[test]
-    fn day_path_does_not_overcount_gappy_days() {
+    fn day_path_caps_a_wear_gap_instead_of_billing_it() {
         let profile = (80.0, 180.0, 35.0, "male");
-        let gapped = vec![
-            HrSample { ts: 0, bpm: 130 },
-            HrSample { ts: 3600, bpm: 130 },
-        ];
-        let two_adjacent = vec![
-            HrSample { ts: 0, bpm: 130 },
-            HrSample { ts: 1, bpm: 130 },
-        ];
+        // One hour between two samples: credited at DAY_GAP_CAP_S, not the full 3600 s.
+        let gapped = vec![HrSample { ts: 0, bpm: 130 }, HrSample { ts: 3600, bpm: 130 }];
         let gap_day = estimate_day_calories(&gapped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        let adj_day = estimate_day_calories(&two_adjacent, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        assert!((gap_day - adj_day).abs() < 1e-9);
-        let (bout_gapped, _) = estimate_bout_calories(&gapped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        assert!(bout_gapped > gap_day * 10.0);
+        // The identical rate held for exactly the cap + the tail second.
+        let capped: Vec<HrSample> = (0..=DAY_GAP_CAP_S as i64).map(|i| HrSample { ts: i, bpm: 130 }).collect();
+        let capped_day = estimate_day_calories(&capped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        assert!((gap_day - capped_day).abs() < capped_day * 0.01, "gap {gap_day} vs capped {capped_day}");
+        // Far below billing the whole hour.
+        let full_hour = estimate_day_calories(
+            &hr_day(130, 3601), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        assert!(gap_day < full_hour * 0.2, "a wear gap must not read as an hour of effort");
+    }
+
+    #[test]
+    fn day_path_credits_elapsed_time_on_a_sparse_stream() {
+        // A day sampled every 60 s must total the same as the dense 1 Hz day it stands in for.
+        let profile = (80.0, 180.0, 35.0, "male");
+        let dense: Vec<HrSample> = (0..3600).map(|i| HrSample { ts: i, bpm: 70 }).collect();
+        let sparse: Vec<HrSample> = (0..3600).step_by(60).map(|i| HrSample { ts: i, bpm: 70 }).collect();
+        let d = estimate_day_calories(&dense, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let s = estimate_day_calories(&sparse, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        assert!((s - d).abs() < d * 0.05, "sparse {s} should track dense {d}");
     }
 
     #[test]

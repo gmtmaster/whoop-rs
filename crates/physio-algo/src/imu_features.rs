@@ -119,8 +119,8 @@ mod tests {
     use super::*;
     use std::f64::consts::PI;
 
-    // Parity gate: reproduces com.noop.analytics.ImuFeatureExtractorTest fixtures 1:1 (same synthetic
-    // gait generator, same recovered-value assertions) — cadence must track MULTIPLE injected rates.
+    // Parity gate: a synthetic gait generator whose injected cadence the extractor must recover —
+    // MULTIPLE distinct rates, so a lucky single match cannot pass.
     fn gait_samples(cadence: f64, amp: f64, seconds: f64, gyro_dps: f64) -> Vec<ImuSample> {
         let rate = 100.0;
         let n = (seconds * rate) as usize;

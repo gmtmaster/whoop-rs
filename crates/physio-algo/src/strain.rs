@@ -20,12 +20,7 @@ pub const DROPOUT_CAP_SECONDS: i64 = 1200;
 /// Edwards cut-offs as (%HRR threshold, weight), highest-first.
 const EDWARDS_ZONES: [(f64, i64); 5] = [(90.0, 5), (80.0, 4), (70.0, 3), (60.0, 2), (50.0, 1)];
 
-/// One HR reading: unix seconds and beats-per-minute.
-#[derive(Clone, Copy, Debug)]
-pub struct HrSample {
-    pub ts: i64,
-    pub bpm: i32,
-}
+pub use crate::hr_sample::HrSample;
 
 /// TRIMP accumulation method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,20 +46,9 @@ pub fn default_max_hr(age: i32) -> i32 {
     220 - age
 }
 
-/// Linear-interpolated percentile of an already-sorted slice (numpy-style).
+/// Linear-interpolated percentile of an already-sorted slice; `pct` on the 0..100 scale.
 pub fn percentile(sorted_values: &[f64], pct: f64) -> f64 {
-    let n = sorted_values.len();
-    if n == 0 {
-        return 0.0;
-    }
-    if n == 1 {
-        return sorted_values[0];
-    }
-    let position = (pct / 100.0) * (n - 1) as f64;
-    let lower = position as usize;
-    let upper = (lower + 1).min(n - 1);
-    let frac = position - lower as f64;
-    sorted_values[lower] + frac * (sorted_values[upper] - sorted_values[lower])
+    crate::stats::percentile(sorted_values, pct / 100.0)
 }
 
 /// Personalized HRmax from a trailing HR series → (bpm, source ∈ observed/tanaka/unknown).
@@ -113,11 +97,6 @@ pub fn sample_duration_minutes(hr: &[HrSample]) -> f64 {
     } else {
         FALLBACK_SAMPLE_MIN
     }
-}
-
-pub fn edwards_trimp(hr: &[HrSample], resting_hr: f64, hr_reserve: f64, sample_dur_min: f64) -> f64 {
-    let weighted: i64 = hr.iter().map(|s| zone_weight(s.bpm as f64, resting_hr, hr_reserve)).sum();
-    weighted as f64 * sample_dur_min
 }
 
 pub fn banister_trimp(hr: &[HrSample], resting_hr: f64, hr_reserve: f64, sample_dur_min: f64, b: f64) -> f64 {
@@ -300,12 +279,11 @@ mod tests {
     }
 
     #[test]
-    fn interval_and_uniform_stream_agree() {
-        // On perfectly uniform 1s data, per-interval ≈ old first-gap (both use 1s gaps).
+    fn uniform_stream_credits_one_second_per_sample() {
+        // 600 samples 1 s apart at zone-3 intensity: every gap is 1 s, so TRIMP = 600 × 3 × 1/60 = 30 min.
         let uniform = hr_constant(135, 600);
-        let old = edwards_trimp(&uniform, 60.0, 100.0, sample_duration_minutes(&uniform));
-        let new = edwards_trimp_interval(&uniform, 60.0, 100.0, 1200);
-        assert!((old - new).abs() < 5.0, "uniform stream: old={old} new={new}");
+        let trimp = edwards_trimp_interval(&uniform, 60.0, 100.0, 1200);
+        assert!((trimp - 30.0).abs() < 0.1, "got {trimp}");
     }
 
     #[test]

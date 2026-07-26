@@ -103,7 +103,7 @@ fn sustained_seconds(threshold: f64, samples: &[HrSample]) -> i64 {
     seconds
 }
 
-/// Integer median; even counts round the mean half-up, matching the source.
+/// Integer median; even counts round the mean half-up.
 fn median(values: &[i32]) -> Option<i32> {
     if values.is_empty() {
         return None;

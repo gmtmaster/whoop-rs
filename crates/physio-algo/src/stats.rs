@@ -1,5 +1,5 @@
-//! Small pure statistics shared by the metrics: mean, sample SD, OLS slope, median, percentile, and the
-//! robust pulsatile amplitude (p95 − p5).
+//! Small pure statistics shared by the metrics: mean, sample/population SD, OLS slope, median, median
+//! sample gap, percentile, and the robust pulsatile amplitude (p95 − p5).
 
 /// Arithmetic mean; `0.0` for an empty slice.
 pub fn mean(xs: &[f64]) -> f64 {
@@ -17,6 +17,21 @@ pub fn sample_sd(xs: &[f64]) -> f64 {
     let m = mean(xs);
     let var = xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (xs.len() - 1) as f64;
     var.sqrt()
+}
+
+/// Population standard deviation (divide by n); `0.0` for an empty slice. The per-night / per-window
+/// spread the z-scorers use, as distinct from the n−1 [`sample_sd`] the baselines use.
+pub fn population_sd(xs: &[f64]) -> f64 {
+    if xs.is_empty() {
+        return 0.0;
+    }
+    let m = mean(xs);
+    let var = xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / xs.len() as f64;
+    if var < 0.0 {
+        0.0
+    } else {
+        var.sqrt()
+    }
 }
 
 /// OLS slope of `ys` over x = 0, 1, 2, …; `0.0` for fewer than two points or a degenerate x-spread.
@@ -47,8 +62,11 @@ pub fn least_squares_line(ys: &[f64]) -> (f64, f64) {
     (slope, mean(ys) - slope * mean_x)
 }
 
-/// Median: the middle on odd counts, the mean of the two middles on even counts. Caller ensures non-empty.
+/// Median: the middle on odd counts, the mean of the two middles on even counts; `0.0` when empty.
 pub fn median(xs: &[f64]) -> f64 {
+    if xs.is_empty() {
+        return 0.0;
+    }
     let mut s = xs.to_vec();
     s.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = s.len();
@@ -59,9 +77,33 @@ pub fn median(xs: &[f64]) -> f64 {
     }
 }
 
-/// Linear-interpolated percentile over an ascending-sorted slice; `p` in 0..=1. Caller ensures non-empty.
+/// Median spacing (s) between consecutive timestamps, restricted to plausible `(0, 300)` gaps, floored at
+/// 1.0; `fallback` when no plausible gap exists. Not a true median: takes the upper-middle after sort.
+/// The one sample-cadence estimate every per-sample duration credit is derived from.
+pub fn median_gap_s(times: &[i64], fallback: f64) -> f64 {
+    if times.len() < 2 {
+        return fallback;
+    }
+    let mut gaps: Vec<f64> = Vec::new();
+    for w in times.windows(2) {
+        let g = (w[1] - w[0]) as f64;
+        if g > 0.0 && g < 300.0 {
+            gaps.push(g);
+        }
+    }
+    if gaps.is_empty() {
+        return fallback;
+    }
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    gaps[gaps.len() / 2].max(1.0)
+}
+
+/// Linear-interpolated percentile over an ascending-sorted slice; `p` in 0..=1; `0.0` when empty.
 pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     let n = sorted.len();
+    if n == 0 {
+        return 0.0;
+    }
     if n == 1 {
         return sorted[0];
     }
@@ -160,6 +202,29 @@ mod tests {
     fn median_odd_even() {
         assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&[4.0, 1.0, 3.0, 2.0]), 2.5);
+        assert_eq!(median(&[]), 0.0); // empty is 0, never an index panic
+    }
+
+    #[test]
+    fn population_sd_divides_by_n() {
+        // [2,4,6]: mean 4, squared devs 4+0+4 = 8 -> /3 = 2.667, sqrt ~1.633 (vs 2.0 for sample_sd).
+        assert!((population_sd(&[2.0, 4.0, 6.0]) - (8.0f64 / 3.0).sqrt()).abs() < 1e-12);
+        assert_eq!(population_sd(&[]), 0.0);
+        assert_eq!(population_sd(&[7.0]), 0.0);
+    }
+
+    #[test]
+    fn median_gap_uses_upper_middle_and_drops_implausible() {
+        assert_eq!(median_gap_s(&[100], 60.0), 60.0); // too few to time -> fallback
+        assert_eq!(median_gap_s(&[0, 1, 2, 3], 60.0), 1.0);
+        assert_eq!(median_gap_s(&[0, 2, 402], 60.0), 2.0); // the 400 s gap is excluded
+        assert_eq!(median_gap_s(&[0, 900], 1.0), 1.0); // no plausible gap -> fallback
+    }
+
+    #[test]
+    fn percentile_empty_is_zero_not_a_panic() {
+        assert_eq!(percentile(&[], 0.5), 0.0);
+        assert_eq!(percentile(&[42.0], 0.9), 42.0);
     }
 
     #[test]

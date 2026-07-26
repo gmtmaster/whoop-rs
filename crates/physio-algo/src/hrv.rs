@@ -163,17 +163,7 @@ impl HrvReadiness {
         clean_rr_gap_aware(rr_ms).0
     }
 
-    /// Median of a slice of f64 values. Empty → 0.
-    pub fn median_f64(values: &[f64]) -> f64 {
-        if values.is_empty() { return 0.0; }
-        let mut s = values.to_vec();
-        s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let n = s.len();
-        if n % 2 == 1 { s[n / 2] } else { 0.5 * (s[n / 2 - 1] + s[n / 2]) }
-    }
-
-    /// Gap-aware nightly RMSSD (ms) from one night's per-record `(unix, R-R)` beats, matching the app's
-    /// cleaned RMSSD. Flattens the beats in time order, range-filters and Malik-ectopic-cleans them, then
+    /// Gap-aware nightly RMSSD (ms) from one night's per-record `(unix, R-R)` beats. Flattens the beats in time order, range-filters and Malik-ectopic-cleans them, then
     /// pools only successive differences whose two beats were adjacent in the source: a dropped range or
     /// ectopic beat splices its neighbours apart and that difference is skipped. Divides by the
     /// contiguous-pair count. Input need not be sorted. `None` if no contiguous pair survives.
@@ -186,7 +176,7 @@ impl HrvReadiness {
     }
 
     /// Windowed session RMSSD (ms): the mean of per-`HRV_WINDOW_SECS`-bucket gap-aware RMSSD over the
-    /// `[start, end]` span, matching the app's stored session avgHrv. `beats` are `(unix, rr)` in the
+    /// `[start, end]` span — the stored session avgHrv. `beats` are `(unix, rr)` in the
     /// caller's chronological order; buckets tumble from `start`, each range+ectopic-cleaned then
     /// gap-aware-RMSSD'd (kept only with >= 2 clean beats and a surviving contiguous pair). No whole-night
     /// beat-count gate. `None` when no bucket yields a value.
@@ -427,7 +417,7 @@ mod tests {
     #[test]
     fn clean_rr_gap_aware_drops_ectopic_and_splices() {
         // A Malik-ectopic spike (1300) is dropped; its removal splices 810→806 apart so that difference is
-        // not contiguous. Values hand-verified against the app's cleanRRGapAware.
+        // not contiguous. Values hand-verified.
         let (nn, contig) = clean_rr_gap_aware(&[800, 805, 810, 1300, 806, 802, 808]);
         assert_eq!(nn, vec![800, 805, 810, 806, 802, 808]);
         assert_eq!(contig, vec![false, true, true, false, true, true]);

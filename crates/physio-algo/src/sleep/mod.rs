@@ -11,13 +11,16 @@ mod common;
 mod detect;
 mod input;
 mod mainnight;
+pub mod params;
 mod refine;
 mod v2;
 
 use crate::hrv::HrvReadiness;
 
 pub use input::{AccelSample, HrSample, RespSample, RrRun, SleepInput, StepSample};
-pub use v2::{stage as stage_v2, DEEP_GATE_THRESH};
+pub use params::Params;
+pub use v2::{prepare as prepare_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
+    stage_with as stage_v2_with, Prepared, DEEP_GATE_THRESH};
 pub use mainnight::{
     bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices, main_night_index,
     main_night_selection, BridgedNightGroup, HistoryBlock, MainNightReason, MainNightSelection, NightBlock,
@@ -100,8 +103,8 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
     out
 }
 
-/// Stage a single detected span with the V2 recipe + the motion-aware wake refinement (single-span
-/// re-stage for the app's edit self-heal path).
+/// Stage a single detected span with the V2 recipe + the motion-aware wake refinement — the single-span
+/// re-stage a caller runs after editing a session's bounds.
 pub fn stage_refined(input: &SleepInput, steps: &[StepSample]) -> Vec<StageSegment> {
     refine::refine(&v2::stage(input), &input.accel, steps)
 }

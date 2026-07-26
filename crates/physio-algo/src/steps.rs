@@ -6,7 +6,15 @@ use crate::sleep::StepSample;
 
 /// Largest wrap-aware delta treated as real motion between two adjacent 1 Hz records.
 /// A delta at/above this is a sync-gap or reboot boundary, not real steps.
-const MAX_STEP_DELTA: u16 = 512;
+pub const MAX_STEP_DELTA: u16 = 512;
+
+/// Wrap-aware motion ticks between two adjacent counter samples, or `None` when the delta is zero,
+/// backwards, or past [`MAX_STEP_DELTA`] (a sync gap / reboot boundary, not real steps). The one
+/// counter-delta rule: the daily total, the per-workout window and the wake refinement all read it.
+pub fn tick_delta(prev: &StepSample, next: &StepSample) -> Option<u16> {
+    let delta = next.counter.wrapping_sub(prev.counter);
+    (delta > 0 && delta < MAX_STEP_DELTA).then_some(delta)
+}
 
 /// Raw wrap-aware motion-tick total across `samples`. Sorts by `ts`. Returns `None` for
 /// fewer than two samples or no positive forward movement (so "no data" stays distinct from zero).
@@ -20,8 +28,7 @@ pub fn steps_in_window(samples: &[StepSample]) -> Option<u32> {
 
     let mut total: u32 = 0;
     for pair in sorted.windows(2) {
-        let delta = pair[1].counter.wrapping_sub(pair[0].counter);
-        if delta > 0 && delta < MAX_STEP_DELTA {
+        if let Some(delta) = tick_delta(pair[0], pair[1]) {
             total += delta as u32;
         }
     }
@@ -66,6 +73,15 @@ mod tests {
     #[test]
     fn drops_big_gap_delta_as_boundary() {
         assert_eq!(steps_in_window(&[step(0, 100), step(60, 140), step(120, 5000), step(180, 5030)]), Some(70));
+    }
+
+    #[test]
+    fn tick_delta_rejects_gap_reboot_and_backwards() {
+        assert_eq!(tick_delta(&step(0, 100), &step(1, 140)), Some(40));
+        assert_eq!(tick_delta(&step(0, 65500), &step(1, 20)), Some(56)); // genuine wrap
+        assert_eq!(tick_delta(&step(0, 100), &step(1, 100)), None); // no movement
+        assert_eq!(tick_delta(&step(0, 100), &step(1, 5000)), None); // sync gap / reboot
+        assert_eq!(tick_delta(&step(0, 0), &step(1, MAX_STEP_DELTA)), None); // ceiling is exclusive
     }
 
     #[test]

@@ -1,5 +1,8 @@
 //! Live stress-onset detector — edge-triggered, exercise-gated HRV-dip detection for JITAI nudges.
-//! Stateful: the caller persists `State` between evaluations.
+//! Stateful: the caller persists `State` between evaluations. R-R cleaning and the plain RMSSD come from
+//! [`crate::hrv`], so the live window and the nightly path share one definition.
+
+use crate::hrv::HrvReadiness;
 
 const BASELINE_EMA_ALPHA: f64 = 0.98;
 const DROP_RATIO: f64 = 0.6;
@@ -46,39 +49,6 @@ pub struct OnsetDecision {
     pub next_state: OnsetState,
 }
 
-/// Clean R-R (range filter + ectopic reject), matching HrvAnalyzer.cleanRR.
-#[allow(clippy::needless_range_loop)]
-fn clean_rr(rr: &[u16]) -> Vec<u16> {
-    let ranged: Vec<u16> = rr.iter().copied().filter(|&v| (300..=2000).contains(&v)).collect();
-    if ranged.len() <= 2 { return ranged; }
-    let mut kept = Vec::with_capacity(ranged.len());
-    for i in 0..ranged.len() {
-        let lo = i.saturating_sub(2);
-        let hi = (i + 2).min(ranged.len() - 1);
-        let mut neighbours = Vec::with_capacity(hi - lo);
-        for j in lo..=hi { if j != i { neighbours.push(ranged[j] as f64); } }
-        if neighbours.len() < 2 { kept.push(ranged[i]); continue; }
-        neighbours.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let med = if neighbours.len() % 2 == 1 {
-            neighbours[neighbours.len() / 2]
-        } else {
-            0.5 * (neighbours[neighbours.len() / 2 - 1] + neighbours[neighbours.len() / 2])
-        };
-        if med <= 0.0 { kept.push(ranged[i]); continue; }
-        let dev = (ranged[i] as f64 - med).abs() / med;
-        if dev <= 0.20 { kept.push(ranged[i]); }
-    }
-    kept
-}
-
-/// Plain RMSSD over a cleaned NN series.
-fn rmssd_raw(nn: &[u16]) -> Option<f64> {
-    if nn.len() < 2 { return None; }
-    let mut sum_sq = 0.0;
-    for i in 1..nn.len() { let d = nn[i] as f64 - nn[i-1] as f64; sum_sq += d * d; }
-    Some((sum_sq / (nn.len() - 1) as f64).sqrt())
-}
-
 /// Evaluate the live window. `rr_buffer` is the rolling R-R series (ms, newest last).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate(
@@ -103,9 +73,9 @@ pub fn evaluate(
     };
     if !enabled || !auto_nudge { return refuse(OnsetReason::Disabled); }
 
-    let clean_all = clean_rr(rr_buffer);
+    let clean_all = HrvReadiness::clean_rr(rr_buffer);
     let fast_window = if clean_all.len() > FAST_WINDOW_BEATS { &clean_all[clean_all.len() - FAST_WINDOW_BEATS..] } else { &clean_all[..] };
-    let fast = if fast_window.len() >= MIN_BEATS { rmssd_raw(fast_window) } else { None };
+    let fast = if fast_window.len() >= MIN_BEATS { HrvReadiness::rmssd_plain(fast_window) } else { None };
     let Some(fast) = fast else { return refuse(OnsetReason::InsufficientData); };
 
     let new_baseline = if state.baseline_rmssd == 0.0 { fast }

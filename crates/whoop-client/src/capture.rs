@@ -20,11 +20,6 @@ pub fn capture_line(captured_at_ms: i64, session_id: &str, characteristic: &str,
     )
 }
 
-/// The reject archive (undecodable frames captured before the trim ACK) uses the same line shape.
-pub fn archive_line(captured_at_ms: i64, session_id: &str, frame: &Frame) -> String {
-    capture_line(captured_at_ms, session_id, "rejected", frame, true)
-}
-
 /// Decode a raw-capture JSONL blob back into history records (plus the strap serial from `session_id`),
 /// the file-level inverse of `capture_line`. Lines without a decodable historical frame are skipped.
 pub fn decode_capture(text: &str, family: Family) -> (Option<String>, Vec<Record>) {

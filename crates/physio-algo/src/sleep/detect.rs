@@ -66,28 +66,8 @@ pub(super) fn gravity_deltas(grav: &[AccelSample]) -> Vec<f64> {
     out
 }
 
-/// Median spacing between consecutive timestamps, restricted to `(0, 300)` s; `DEFAULT_INTERVAL_S` when
-/// unknowable. Not a true median: takes the upper-middle after sort, floored at 1.0.
-fn median_interval_s(times: &[i64]) -> f64 {
-    if times.len() < 2 {
-        return DEFAULT_INTERVAL_S;
-    }
-    let mut gaps: Vec<f64> = Vec::new();
-    for w in times.windows(2) {
-        let g = (w[1] - w[0]) as f64;
-        if g > 0.0 && g < 300.0 {
-            gaps.push(g);
-        }
-    }
-    if gaps.is_empty() {
-        return DEFAULT_INTERVAL_S;
-    }
-    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    gaps[gaps.len() / 2].max(1.0)
-}
-
 fn window_size(times: &[i64]) -> i64 {
-    let interval = median_interval_s(times);
+    let interval = crate::stats::median_gap_s(times, DEFAULT_INTERVAL_S);
     ((STILL_WINDOW_MIN * 60) as f64 / interval).trunc() as i64
 }
 
@@ -616,12 +596,13 @@ mod tests {
     }
 
     #[test]
-    fn median_interval_defaults_and_bounds() {
-        assert_eq!(median_interval_s(&[100]), DEFAULT_INTERVAL_S);
-        // gaps 1,1,1 -> upper-middle = 1, floored at 1.0
-        assert_eq!(median_interval_s(&[0, 1, 2, 3]), 1.0);
-        // a 400 s gap is excluded (>=300); remaining gap 2 -> 2.0
-        assert_eq!(median_interval_s(&[0, 2, 402]), 2.0);
+    fn window_size_falls_back_and_tracks_cadence() {
+        // Too few samples to time -> DEFAULT_INTERVAL_S -> 15 min / 60 s = 15 windows.
+        assert_eq!(window_size(&[100]), (STILL_WINDOW_MIN * 60 / DEFAULT_INTERVAL_S as i64));
+        // 1 s cadence -> a 15-min window spans 900 samples.
+        assert_eq!(window_size(&[0, 1, 2, 3]), STILL_WINDOW_MIN * 60);
+        // A 400 s gap is excluded (>= 300); the remaining 2 s gap sets the cadence.
+        assert_eq!(window_size(&[0, 2, 402]), STILL_WINDOW_MIN * 60 / 2);
     }
 
     #[test]
@@ -709,7 +690,7 @@ mod tests {
         assert!(!band_state_confirms_asleep(p, &[(10, 2), (20, 0), (30, 0), (40, 3)])); // 0.25
     }
 
-    // ── ported from the Kotlin gate suites (byte-identical parity pins) ─────────────────────────────
+    // ── gate parity pins ───────────────────────────────────────────────────────────────────────────
 
     const REF_MID: i64 = 1_749_513_600; // a fixed midnight (ref % 86400 == 0)
     fn at_hour(h: i64) -> i64 {

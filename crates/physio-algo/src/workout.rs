@@ -2,7 +2,7 @@
 //! of elevated HR AND sustained motion. Per detected bout: avg/peak HR, Edwards zone time-%, mean %HRR,
 //! strain and estimated calories (Keytel 2005 + Harris-Benedict BMR). APPROXIMATE, not medical advice.
 
-use crate::calories;
+use crate::calories::{self, MERGE_GAP_S};
 use crate::strain;
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -11,7 +11,6 @@ const MIN_EXERCISE_MIN: f64 = 5.0;
 const HR_MARGIN_BPM: f64 = 15.0;
 const MOTION_THRESHOLD: f64 = 0.20;
 const MOTION_SMOOTH_S: f64 = 10.0;
-const MERGE_GAP_S: f64 = 150.0;
 const MIN_INTENSITY_Z2PLUS: f64 = 0.50;
 const ALIGN_TOLERANCE_S: f64 = 5.0;
 const RESTING_PERCENTILE: f64 = 10.0;
@@ -20,12 +19,7 @@ const BRIDGE_GAP_S: f64 = 300.0;
 
 // ── Input / output types ──────────────────────────────────────────────────────
 
-/// One heart-rate sample.
-#[derive(Clone, Copy, Debug)]
-pub struct HrSample {
-    pub ts: i64,
-    pub bpm: i32,
-}
+pub use crate::hr_sample::HrSample;
 
 /// One 3-axis gravity / accelerometer sample.
 #[derive(Clone, Copy, Debug)]
@@ -362,8 +356,8 @@ pub fn detect(
         }
 
         // Intensity qualification: require >= MIN_INTENSITY_Z2PLUS in zone 2+.
-        let z3plus: f64 = zone_pct.iter().filter(|(z, _)| *z >= 2).map(|(_, p)| p / 100.0).sum();
-        if !zone_pct.is_empty() && z3plus < MIN_INTENSITY_Z2PLUS {
+        let z2plus: f64 = zone_pct.iter().filter(|(z, _)| *z >= 2).map(|(_, p)| p / 100.0).sum();
+        if !zone_pct.is_empty() && z2plus < MIN_INTENSITY_Z2PLUS {
             continue;
         }
 
@@ -377,11 +371,8 @@ pub fn detect(
         }
         let bpms: Vec<f64> = window.iter().map(|h| h.bpm as f64).collect();
 
-        let (kcal, kj) = if has_profile {
-            let hr_for_cal: Vec<calories::HrSample> = window
-                .iter()
-                .map(|h| calories::HrSample { ts: h.ts, bpm: h.bpm })
-                .collect();
+        let calories = has_profile.then(|| {
+            let hr_for_cal: Vec<HrSample> = window.iter().copied().copied().collect();
             calories::estimate_bout_calories(
                 &hr_for_cal,
                 weight_kg,
@@ -391,23 +382,16 @@ pub fn detect(
                 eff_max_hr.unwrap_or(220.0),
                 rest_hr,
             )
-        } else {
-            (0.0, 0.0)
-        };
+        });
 
         let avg = bpms.iter().sum::<f64>() / bpms.len() as f64;
         let peak = window.iter().map(|h| h.bpm).max().unwrap_or(0);
 
         let session_strain = eff_max_hr.and_then(|m| {
-            let core_copies: Vec<strain::HrSample> = window
-                .iter()
-                .map(|h| strain::HrSample { ts: h.ts, bpm: h.bpm })
-                .collect();
+            let core_copies: Vec<HrSample> = window.iter().copied().copied().collect();
             strain::strain(&core_copies, Some(m), rest_hr, strain::Method::Edwards, profile_sex, strain::STRAIN_DENOMINATOR)
         });
 
-        let kcal_to_store = if has_profile { Some(kcal) } else { None };
-        let kj_to_store = if has_profile { Some(kj) } else { None };
 
         sessions.push(ExerciseSession {
             start: eff_start,
@@ -420,8 +404,8 @@ pub fn detect(
             avg_hrr_pct: avg_hrr,
             hrmax: eff_max_hr,
             hrmax_source: hrmax_source.clone(),
-            calories_kcal: kcal_to_store,
-            calories_kj: kj_to_store,
+            calories_kcal: calories.map(|(kcal, _)| kcal),
+            calories_kj: calories.map(|(_, kj)| kj),
         });
     }
     sessions

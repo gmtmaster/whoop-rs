@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use super::common::{flatten_rr, median, ZScore};
+use super::params::Params;
 use super::input::{AccelSample, HrSample, SleepInput};
 use super::{SleepStage, StageSegment};
 
@@ -19,26 +20,8 @@ const REM: usize = 1;
 const LIGHT: usize = 2;
 const AWAKE: usize = 3;
 
-/// Deep-eligibility HR-flatness percentile gate (raised by the DREAMT n=100 joint re-tune).
-pub const DEEP_GATE_THRESH: f64 = 0.40;
-const DEEP_GATE_SLOPE: f64 = 5.0;
-const JERK_FLOOR_MOVE_MULT: f64 = 75.0;
-const JERK_FLOOR_GATE_MULT: f64 = 35.0;
-const MOTION_GATE_BOOST: f64 = 4.0;
-const RESP_WEIGHT: f64 = 0.6;
-const AWAKE_DEADZONE: f64 = 0.30;
-
-/// The sticky transition matrix (rows = from, cols = to) in [deep, rem, light, awake] order.
-pub(super) const TRANSITION: [[f64; 4]; 4] = [
-    [0.76, 0.012, 0.216, 0.012],
-    [0.00333, 0.92, 0.06667, 0.01],
-    [0.08, 0.08, 0.80, 0.04],
-    [0.0, 0.0, 0.10, 0.90],
-];
-
-fn base_log_prior() -> [f64; 4] {
-    [(0.15f64).ln(), (0.22f64).ln(), (0.50f64).ln(), (0.34f64).ln()]
-}
+/// Deep-eligibility HR-flatness percentile gate of the shipped recipe.
+pub const DEEP_GATE_THRESH: f64 = Params::SHIPPED.deep_gate_thresh;
 
 /// One 30 s epoch's recipe features. `None` means "no measurement" (scored neutral).
 struct Epoch {
@@ -46,15 +29,49 @@ struct Epoch {
     hr: Option<f64>,
     hr_var: Option<f64>,
     hr_flat11: Option<f64>,
-    move_frac: f64,
+    move_frac: Option<f64>,
     jerk_max: f64,
     resp_reg: Option<f64>,
     clock: f64,
     jerk_scale: f64,
 }
 
-/// Stage a detected in-bed span with the V2 recipe; segments tile `[start, end]`.
+/// Stage a detected in-bed span with the shipped V2 recipe; segments tile `[start, end]`.
 pub fn stage(input: &SleepInput) -> Vec<StageSegment> {
+    stage_with(input, &Params::SHIPPED)
+}
+
+/// One night's epoch features, already extracted. Only `jerk_move_mult` changes these, so a sweep over
+/// the emission/prior/transition axes can extract once and re-label many times.
+pub struct Prepared {
+    feats: Vec<Epoch>,
+    start: i64,
+    end: i64,
+}
+
+/// Extract a night's epoch features under `p`. Pair with [`stage_prepared`].
+pub fn prepare(input: &SleepInput, p: &Params) -> Prepared {
+    let mut grav = input.accel.clone();
+    grav.sort_by_key(|g| g.ts);
+    let mut hr = input.hr.clone();
+    hr.sort_by_key(|h| h.ts);
+    let mut rr = flatten_rr(&input.rr);
+    rr.sort_by_key(|a| a.0);
+    let feats = features(input.start, input.end, &grav, &hr, &rr, p);
+    Prepared { feats, start: input.start, end: input.end }
+}
+
+/// Label already-extracted features under `p`; segments tile the prepared span.
+pub fn stage_prepared(prep: &Prepared, p: &Params) -> Vec<StageSegment> {
+    if prep.feats.is_empty() {
+        return vec![StageSegment { start: prep.start, end: prep.end, stage: SleepStage::Light }];
+    }
+    let labels = stage_epochs(&prep.feats, p);
+    segments_from(&prep.feats, &labels, prep.start, prep.end)
+}
+
+/// Stage with an explicit recipe. The tuning path; `stage` is what everything else calls.
+pub fn stage_with(input: &SleepInput, p: &Params) -> Vec<StageSegment> {
     let start = input.start;
     let end = input.end;
 
@@ -65,12 +82,16 @@ pub fn stage(input: &SleepInput) -> Vec<StageSegment> {
     let mut rr = flatten_rr(&input.rr);
     rr.sort_by_key(|a| a.0);
 
-    let feats = features(start, end, &grav, &hr, &rr);
+    let feats = features(start, end, &grav, &hr, &rr, p);
     if feats.is_empty() {
         return vec![StageSegment { start, end, stage: SleepStage::Light }];
     }
-    let labels = stage_epochs(&feats);
+    let labels = stage_epochs(&feats, p);
+    segments_from(&feats, &labels, start, end)
+}
 
+/// Tile `[start, end]` from one label per epoch, merging equal-stage neighbours.
+fn segments_from(feats: &[Epoch], labels: &[SleepStage], start: i64, end: i64) -> Vec<StageSegment> {
     let mut segments: Vec<StageSegment> = Vec::new();
     let n = feats.len();
     for (i, f) in feats.iter().enumerate() {
@@ -91,6 +112,7 @@ fn features(
     grav: &[AccelSample],
     hr: &[HrSample],
     rr: &[(i64, f64)],
+    p: &Params,
 ) -> Vec<Epoch> {
     if end <= start {
         return Vec::new();
@@ -255,18 +277,20 @@ fn features(
     }
 
     let jerk_scale = if all_jerks.is_empty() { 1e-6 } else { median(&all_jerks) };
-    let move_thr = jerk_scale * JERK_FLOOR_MOVE_MULT;
+    let move_thr = jerk_scale * p.jerk_move_mult;
 
     // PASS 2 — move fraction against the night-relative threshold.
     raws.into_iter()
         .map(|r| {
+            // No gravity in the epoch = no motion evidence; absent, not "perfectly still".
+            let observed = !r.jerks.is_empty();
             let moves = r.jerks.iter().filter(|&&j| j > move_thr).count();
             Epoch {
                 start: r.start,
                 hr: r.hr,
                 hr_var: r.hr_var,
                 hr_flat11: r.hr_flat11,
-                move_frac: moves as f64 / r.gap_sec as f64,
+                move_frac: observed.then(|| moves as f64 / r.gap_sec as f64),
                 jerk_max: r.jerk_max,
                 resp_reg: r.resp_reg,
                 clock: r.clock,
@@ -341,25 +365,26 @@ fn resp_regularity(beats: &[(f64, f64)]) -> Option<f64> {
 }
 
 /// Soft sleep-cycle prior: deep concentrated early (decays), REM suppressed in the first ~12% then rising.
-fn cycle_prior(c: f64) -> [f64; 4] {
+fn cycle_prior(c: f64, p: &Params) -> [f64; 4] {
     let mut pr = [0.0; 4];
-    pr[DEEP] = 1.2 * (1.0 - c / 0.55).max(0.0);
-    pr[REM] = 1.0 * c - if c < 0.12 { 3.0 } else { 0.0 };
+    pr[DEEP] = p.cycle_deep_scale * (1.0 - c / p.cycle_deep_decay).max(0.0);
+    pr[REM] = p.cycle_rem_scale * c - if c < p.cycle_rem_early_frac { p.cycle_rem_early_penalty } else { 0.0 };
     pr
 }
 
-/// Motion-quiescent: no observed movement and peak jerk at/below the night floor × the gate multiplier.
-fn motion_quiescent(f: &Epoch) -> bool {
-    f.move_frac <= 0.0 && f.jerk_max <= f.jerk_scale * JERK_FLOOR_GATE_MULT
+/// Motion-quiescent: movement was OBSERVED and was none, with peak jerk at/below the night floor × the
+/// gate multiplier. An epoch with no gravity cannot be quiescent — absence is not stillness.
+fn motion_quiescent(f: &Epoch, p: &Params) -> bool {
+    f.move_frac.is_some_and(|m| m <= 0.0) && f.jerk_max <= f.jerk_scale * p.jerk_gate_mult
 }
 
-fn dz(z: f64) -> f64 {
-    if AWAKE_DEADZONE <= 0.0 {
+fn dz(z: f64, deadzone: f64) -> f64 {
+    if deadzone <= 0.0 {
         z
-    } else if z > AWAKE_DEADZONE {
-        z - AWAKE_DEADZONE
-    } else if z < -AWAKE_DEADZONE {
-        z + AWAKE_DEADZONE
+    } else if z > deadzone {
+        z - deadzone
+    } else if z < -deadzone {
+        z + deadzone
     } else {
         0.0
     }
@@ -368,12 +393,12 @@ fn dz(z: f64) -> f64 {
 /// Viterbi most-likely path over the per-epoch log-emissions with the sticky transition matrix and a
 /// uniform start. Ties resolve to the earlier stage (deep < rem < light < awake).
 #[allow(clippy::needless_range_loop)]
-fn viterbi(em_seq: &[[f64; 4]]) -> Vec<SleepStage> {
+fn viterbi(em_seq: &[[f64; 4]], transition: &[[f64; 4]; 4]) -> Vec<SleepStage> {
     if em_seq.is_empty() {
         return Vec::new();
     }
     let mut log_t = [[0.0f64; 4]; 4];
-    for (fi, row) in TRANSITION.iter().enumerate() {
+    for (fi, row) in transition.iter().enumerate() {
         for (ti, &v) in row.iter().enumerate() {
             log_t[fi][ti] = v.max(1e-9).ln();
         }
@@ -427,14 +452,14 @@ fn idx_to_stage(i: usize) -> SleepStage {
 
 /// Run the full recipe over a night's epochs and return one stage label per epoch. All normalisation
 /// (z-scores, the HR-flatness percentile) is within the night.
-fn stage_epochs(feats: &[Epoch]) -> Vec<SleepStage> {
+fn stage_epochs(feats: &[Epoch], p: &Params) -> Vec<SleepStage> {
     if feats.is_empty() {
         return Vec::new();
     }
-    let blp = base_log_prior();
+    let blp = p.base_log_prior();
     let zhr = ZScore::build(&feats.iter().map(|f| f.hr).collect::<Vec<_>>());
     let zhv = ZScore::build(&feats.iter().map(|f| f.hr_var).collect::<Vec<_>>());
-    let zmv = ZScore::build(&feats.iter().map(|f| Some(f.move_frac)).collect::<Vec<_>>());
+    let zmv = ZScore::build(&feats.iter().map(|f| f.move_frac).collect::<Vec<_>>());
     let zrg = ZScore::build(&feats.iter().map(|f| f.resp_reg).collect::<Vec<_>>());
 
     let mut fsorted: Vec<f64> = feats.iter().filter_map(|f| f.hr_flat11).collect();
@@ -463,30 +488,76 @@ fn stage_epochs(feats: &[Epoch]) -> Vec<SleepStage> {
     for f in feats {
         let zhrv = zhr.apply(f.hr);
         let zhvv = zhv.apply(f.hr_var);
-        let zmvv = zmv.apply(Some(f.move_frac));
-        let gate = DEEP_GATE_SLOPE * (fpct(f.hr_flat11) - DEEP_GATE_THRESH).max(0.0);
-        let awake_cardiac0 = 0.5 * dz(zhvv) + 0.6 * dz(zhrv);
-        let awake_cardiac = if motion_quiescent(f) { awake_cardiac0.min(0.0) } else { awake_cardiac0 };
+        let zmvv = zmv.apply(f.move_frac);
+        let gate = p.deep_gate_slope * (fpct(f.hr_flat11) - p.deep_gate_thresh).max(0.0);
+        let awake_cardiac0 = p.awake_hrv * dz(zhvv, p.awake_deadzone) + p.awake_hr * dz(zhrv, p.awake_deadzone);
+        let awake_cardiac = if motion_quiescent(f, p) { awake_cardiac0.min(0.0) } else { awake_cardiac0 };
 
         let mut em = [0.0f64; 4];
-        em[DEEP] = -0.8 * zhvv + 0.5 * zhrv - 0.1 * zmvv - gate + blp[DEEP];
-        em[REM] = 0.8 * zhvv - 0.4 * zmvv + 0.4 * zhrv + blp[REM];
+        em[DEEP] = p.deep_hrv * zhvv + p.deep_hr * zhrv + p.deep_motion * zmvv - gate + blp[DEEP];
+        em[REM] = p.rem_hrv * zhvv + p.rem_motion * zmvv + p.rem_hr * zhrv + blp[REM];
         em[LIGHT] = blp[LIGHT];
-        em[AWAKE] = 1.0 * zmvv + awake_cardiac + blp[AWAKE];
+        em[AWAKE] = p.awake_motion * zmvv + awake_cardiac + blp[AWAKE];
 
-        let pr = cycle_prior(f.clock);
+        let pr = cycle_prior(f.clock, p);
         for (s, p) in pr.iter().enumerate() {
             em[s] += p;
         }
-        if f.jerk_max > f.jerk_scale * JERK_FLOOR_GATE_MULT {
-            em[AWAKE] += MOTION_GATE_BOOST;
+        if f.jerk_max > f.jerk_scale * p.jerk_gate_mult {
+            em[AWAKE] += p.motion_gate_boost;
         }
         if let Some(rg) = f.resp_reg {
             let z = zrg.apply(Some(rg));
-            em[DEEP] += RESP_WEIGHT * z;
-            em[REM] -= RESP_WEIGHT * z;
+            em[DEEP] += p.resp_weight * z;
+            em[REM] -= p.resp_weight * z;
         }
         seq.push(em);
     }
-    viterbi(&seq)
+    viterbi(&seq, &p.transition)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sleep::input::RrRun;
+
+    /// One minute of HR with gravity over only the first half: the epochs that saw the accelerometer
+    /// carry a motion reading, the epochs that did not carry `None`.
+    fn half_blind_epochs() -> Vec<Epoch> {
+        let start = 1_749_513_600i64;
+        let hr: Vec<HrSample> = (0..60).map(|i| HrSample { ts: start + i, bpm: 55 }).collect();
+        let accel: Vec<AccelSample> =
+            (0..30).map(|i| AccelSample { ts: start + i, x: 0.0, y: 0.0, z: 1.0 }).collect();
+        let input = SleepInput { start, end: start + 60, hr, rr: Vec::<RrRun>::new(), accel, resp: Vec::new() };
+        let mut grav = input.accel.clone();
+        grav.sort_by_key(|g| g.ts);
+        features(input.start, input.end, &grav, &input.hr, &[], &Params::SHIPPED)
+    }
+
+    #[test]
+    fn an_epoch_without_gravity_reports_no_motion_reading() {
+        let feats = half_blind_epochs();
+        assert_eq!(feats.len(), 2, "two 30 s epochs");
+        assert_eq!(feats[0].move_frac, Some(0.0), "gravity present and still -> a measured zero");
+        assert_eq!(feats[1].move_frac, None, "no gravity -> no reading, not a measured zero");
+    }
+
+    #[test]
+    fn an_epoch_without_gravity_is_not_motion_quiescent() {
+        // The quiescent gate clamps the awake-cardiac term, so asserting it on absent motion would let a
+        // dropout suppress wake. Only an epoch that actually SAW a still wrist may be quiescent.
+        let feats = half_blind_epochs();
+        assert!(motion_quiescent(&feats[0], &Params::SHIPPED), "an observed still wrist is quiescent");
+        assert!(!motion_quiescent(&feats[1], &Params::SHIPPED), "an absent accelerometer cannot assert stillness");
+    }
+
+    #[test]
+    fn an_absent_motion_reading_z_scores_neutral() {
+        // The z-scorer must place "no reading" at the centre, not at the bottom of the night's motion
+        // distribution, so a dropout never reads as the stillest stretch of the night.
+        let z = ZScore::build(&[Some(0.0), Some(4.0), Some(8.0), None]);
+        assert_eq!(z.apply(None), 0.0);
+        assert!(z.apply(Some(0.0)) < 0.0, "a measured zero sits below the night mean");
+        assert!(z.apply(None) > z.apply(Some(0.0)), "absence must not out-still a measured zero");
+    }
 }

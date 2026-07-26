@@ -144,8 +144,9 @@ fn stable_burst_minutes(mins: &[i64], grav_by_minute: &HashMap<i64, Vec<AccelSam
     Some(burst)
 }
 
-/// Per-minute walk-class tick cadence: the wrap-aware u16 counter delta between consecutive samples,
-/// attributed to the later sample's minute, kept only when its class is walk (1) or run (2).
+/// Per-minute walk-class tick cadence: the shared wrap-aware counter delta between consecutive samples,
+/// attributed to the later sample's minute, kept only when its class is walk (1) or run (2). A sync-gap
+/// or reboot delta is dropped by the kernel, so it can never read as a minute of locomotion.
 fn walk_class_ticks_per_minute(steps: &[StepSample]) -> HashMap<i64, i32> {
     let mut sorted = steps.to_vec();
     sorted.sort_by_key(|s| s.ts);
@@ -156,8 +157,8 @@ fn walk_class_ticks_per_minute(steps: &[StepSample]) -> HashMap<i64, i32> {
         if cls != 1 && cls != 2 {
             continue;
         }
-        let delta = cur.counter.wrapping_sub(w[0].counter) as i32;
-        *out.entry(cur.ts / 60).or_insert(0) += delta;
+        let Some(delta) = crate::steps::tick_delta(&w[0], &cur) else { continue };
+        *out.entry(cur.ts / 60).or_insert(0) += delta as i32;
     }
     out
 }

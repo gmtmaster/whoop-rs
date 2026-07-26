@@ -1,17 +1,17 @@
 //! HR-max and five %HRmax heart-rate zones with time-in-zone from an HR stream. Max HR comes from the
 //! Tanaka age formula (208 − 0.7·age) or a manual override; zones are the conventional 50/60/70/80/90/100%
 //! bands and the top zone is inclusive at HRmax. Time-in-zone credits each sample until the next reading,
-//! the tail sample gets the median inter-sample gap, and any gap is capped at that median. Pure.
+//! capped at [`DROPOUT_CAP_SECONDS`] so a wear gap is not counted as time in a zone; the tail sample gets
+//! the median inter-sample gap. Pure.
 
 /// %HRmax band edges for zones 1..5.
 pub const ZONE_EDGES: [f64; 6] = [0.50, 0.60, 0.70, 0.80, 0.90, 1.00];
 
-/// One HR reading: wall-clock second and beats-per-minute.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct HrSample {
-    pub ts: i64,
-    pub bpm: i32,
-}
+/// Longest inter-sample gap credited to a zone; past it the strap was not reporting, so the time is
+/// a wear gap rather than time spent in that zone. Shared ceiling with the strain TRIMP integrator.
+pub const DROPOUT_CAP_SECONDS: f64 = crate::strain::DROPOUT_CAP_SECONDS as f64;
+
+pub use crate::hr_sample::HrSample;
 
 /// A single zone as a bpm interval `[lower, upper)` plus its %HRmax band.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,7 +71,7 @@ impl TimeInZone {
 
 /// Tanaka age-predicted max HR: 208 − 0.7 × age (gender-independent).
 pub fn tanaka_max_hr(age: f64) -> f64 {
-    208.0 - 0.7 * age
+    crate::strain::tanaka_hrmax(age)
 }
 
 /// Build the 5-zone set from age (Tanaka) or a manual override.
@@ -104,7 +104,7 @@ pub fn zones_from_max(max_hr: f64, source: &str) -> HrZoneSet {
 }
 
 /// Time-in-zone (seconds) from a time-ordered (or unordered) HR stream. Each sample is credited with the
-/// duration until the next sample; the tail sample gets the median gap and any gap is capped at it.
+/// duration until the next sample, capped at [`DROPOUT_CAP_SECONDS`]; the tail sample gets the median gap.
 pub fn time_in_zone(hr: &[HrSample], zone_set: &HrZoneSet) -> TimeInZone {
     let mut sorted: Vec<HrSample> = hr.to_vec();
     sorted.sort_by_key(|s| s.ts);
@@ -119,7 +119,7 @@ pub fn time_in_zone(hr: &[HrSample], zone_set: &HrZoneSet) -> TimeInZone {
         let dur = if i < sorted.len() - 1 {
             let gap = (sorted[i + 1].ts - sorted[i].ts) as f64;
             if gap > 0.0 {
-                gap.min(tail_duration)
+                gap.min(DROPOUT_CAP_SECONDS)
             } else {
                 tail_duration
             }
@@ -139,21 +139,7 @@ pub fn time_in_zone(hr: &[HrSample], zone_set: &HrZoneSet) -> TimeInZone {
 /// Median spacing between consecutive timestamps, restricted to plausible (0, 300 s) gaps. Falls back to
 /// 1.0 s when no plausible gap exists.
 pub fn median_interval(sorted: &[HrSample]) -> f64 {
-    if sorted.len() < 2 {
-        return 1.0;
-    }
-    let mut gaps = Vec::new();
-    for i in 1..sorted.len() {
-        let g = (sorted[i].ts - sorted[i - 1].ts) as f64;
-        if g > 0.0 && g < 300.0 {
-            gaps.push(g);
-        }
-    }
-    if gaps.is_empty() {
-        return 1.0;
-    }
-    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    gaps[gaps.len() / 2].max(1.0)
+    crate::stats::median_gap_s(&sorted.iter().map(|s| s.ts).collect::<Vec<_>>(), 1.0)
 }
 
 #[cfg(test)]
@@ -200,9 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn caps_huge_positive_gap() {
-        // Parity with HrZonesTest.timeInZone_capsHugePositiveGap: three 1 Hz zone-1 samples then one an
-        // hour later; the 3600 s gap is capped at the median (1 s), so the series can't blow up a bucket.
+    fn caps_huge_positive_gap_at_the_dropout_ceiling() {
+        // Three 1 Hz zone-1 samples then one an hour later. The 3600 s gap is a wear gap: it is credited
+        // at DROPOUT_CAP_SECONDS, not in full, so one dropout can't dominate a bucket.
         let zs = zones_from_max(200.0, "manual");
         let hr = [
             HrSample { ts: 0, bpm: 110 },
@@ -211,7 +197,9 @@ mod tests {
             HrSample { ts: 3602, bpm: 110 },
         ];
         let tiz = time_in_zone(&hr, &zs);
-        assert!(tiz.total() < 10.0, "huge gap must be capped, got {}", tiz.total());
+        // 1 + 1 + capped(3600) + tail(median 1) = 1203, well under the 3602 s span.
+        assert!((tiz.total() - (2.0 + DROPOUT_CAP_SECONDS + 1.0)).abs() < 1e-9, "got {}", tiz.total());
+        assert!(tiz.total() < 3602.0 * 0.4, "a dropout must not be billed in full");
         assert!((tiz.total() - tiz.seconds_in_zone(1)).abs() < 1e-9); // all zone 1
     }
 

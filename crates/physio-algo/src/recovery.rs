@@ -4,12 +4,7 @@
 //! WHOOP-identical. Plain-value inputs; each driver z is standardised against a personal baseline
 //! (mean + EWMA-abs-dev spread). Missing terms drop and the weights renormalise. Wellness only.
 
-/// One heart-rate sample: wall-clock unix seconds and beats per minute.
-#[derive(Clone, Copy, Debug)]
-pub struct HrSample {
-    pub ts: i64,
-    pub bpm: i32,
-}
+pub use crate::hr_sample::HrSample;
 
 /// A baseline driver: personal mean and spread (internal EWMA-abs-dev units).
 #[derive(Clone, Copy, Debug)]
@@ -202,8 +197,7 @@ pub fn recovery(input: &RecoveryInput) -> Option<f64> {
 mod tests {
     use super::*;
 
-    // DriverBaseline from a Gaussian sigma (spread is internal abs-dev units) — mirrors the Kotlin
-    // `baseline(mean, sigma)` helper: spread = sigma / 1.253.
+    // DriverBaseline from a Gaussian sigma (spread is internal abs-dev units): spread = sigma / 1.253.
     fn baseline(mean: f64, sigma: f64) -> DriverBaseline {
         DriverBaseline { mean, spread: sigma / 1.253 }
     }
@@ -213,7 +207,7 @@ mod tests {
     }
 
     // Synthetic full-night HR series with a KNOWN injected slope: a sample every 30 s, rounded to the
-    // integer bpm the wire carries. Mirrors the Kotlin `slopeSeries` helper.
+    // integer bpm the wire carries.
     fn slope_series(start_bpm: f64, slope_per_hour: f64, hours: i64) -> (Vec<HrSample>, i64, i64) {
         let origin: i64 = 100_000;
         let total = hours * 3600;

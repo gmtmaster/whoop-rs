@@ -2,7 +2,7 @@
 //! sinus arrhythmia: reconstruct a beat-interval tachogram, resample to 4 Hz, detrend, then per 5-min
 //! window peak-pick the breathing modulation and take the median rate. Pure; `None` = no usable estimate.
 
-use crate::stats::median;
+use crate::stats::{median, population_sd};
 
 const RR_MIN_MS: f64 = 300.0;
 const RR_MAX_MS: f64 = 2000.0;
@@ -118,17 +118,8 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
     (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&m).then_some(m)
 }
 
-/// Population standard deviation (divides by `n`); `0.0` for an empty slice.
-fn population_sd(xs: &[f64]) -> f64 {
-    if xs.is_empty() {
-        return 0.0;
-    }
-    let m = xs.iter().sum::<f64>() / xs.len() as f64;
-    (xs.iter().map(|v| (v - m) * (v - m)).sum::<f64>() / xs.len() as f64).sqrt()
-}
-
-/// Local-maxima peak finder mirroring `scipy.find_peaks(distance, height)`: a plateau-aware maximum at
-/// or above `height`, with peaks closer than `distance` resolved by keeping the taller.
+/// Local-maxima peak finder: a plateau-aware maximum at or above `height`, with peaks closer than
+/// `distance` samples resolved by keeping the taller.
 fn find_peaks(x: &[f64], distance: usize, height: f64) -> Vec<usize> {
     let n = x.len();
     if n < 3 {
@@ -179,8 +170,8 @@ fn find_peaks(x: &[f64], distance: usize, height: f64) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    /// Reproduces the Kotlin `RespRateRsaTest` synthetic generator: mean HR with a known-Hz RSA
-    /// modulation, so the recovered rate can be cross-checked against the planted breathing frequency.
+    /// Synthetic tachogram: mean HR with a known-Hz RSA modulation, so the recovered rate can be
+    /// cross-checked against the planted breathing frequency.
     fn synth(breath_hz: f64, base_rr_ms: f64, amp_ms: f64, span_s: f64) -> (Vec<(i64, u16)>, i64, i64) {
         let start = 1_700_000_000_i64;
         let mut rows = Vec::new();

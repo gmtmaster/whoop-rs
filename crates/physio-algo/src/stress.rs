@@ -6,6 +6,8 @@
 //! R-R range (s). A tall, narrow, low-range histogram (rigid, sympathetic) reads high; a broad, flat
 //! one reads low. R-R is cleaned first (range band + Malik ectopic). Wellness only, never medical.
 
+use crate::stats::{median, percentile};
+
 /// Histogram bin width in seconds (Baevsky's 50 ms cardiointervalography grid).
 const BIN_WIDTH_SEC: f64 = 0.05;
 /// Minimum clean intervals before an SI is computed.
@@ -114,21 +116,6 @@ fn reject_ectopic(nn: &[f64]) -> Vec<f64> {
         }
     }
     kept
-}
-
-/// Median of a slice (sorts a copy). Empty → 0.
-fn median(values: &[f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut s = values.to_vec();
-    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = s.len();
-    if n % 2 == 1 {
-        s[n / 2]
-    } else {
-        0.5 * (s[n / 2 - 1] + s[n / 2])
-    }
 }
 
 #[cfg(test)]
@@ -323,12 +310,7 @@ fn calm_reference(xs: &[f64], calm_is_low: bool) -> Option<f64> {
     if xs.len() < CALM_QUARTILE_MIN_COUNT { return mean(xs); }
     let mut s = xs.to_vec();
     s.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let q = if calm_is_low { 0.25 } else { 0.75 };
-    let pos = q * (s.len() - 1) as f64;
-    let lo = pos as usize;
-    let hi = (lo + 1).min(s.len() - 1);
-    let frac = pos - lo as f64;
-    Some(s[lo] + frac * (s[hi] - s[lo]))
+    Some(percentile(&s, if calm_is_low { 0.25 } else { 0.75 }))
 }
 
 fn mean(xs: &[f64]) -> Option<f64> {

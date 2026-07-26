@@ -25,18 +25,12 @@ impl DebtLedger {
     pub fn night_count(&self) -> usize {
         self.nights.len()
     }
-    pub fn is_debt(&self) -> bool {
-        self.balance_min < 0.0
-    }
-    pub fn magnitude_min(&self) -> f64 {
-        self.balance_min.abs()
-    }
     pub fn is_on_target(&self) -> bool {
         self.balance_min.abs() < ON_TARGET_BAND_MIN
     }
 }
 
-/// Round to 1 dp, half-away-from-zero (matches Kotlin `round1`).
+/// Round to 1 dp, half-away-from-zero.
 fn round1(v: f64) -> f64 {
     let scaled = v * 10.0;
     let rounded = if scaled < 0.0 { (scaled - 0.5).ceil() } else { (scaled + 0.5).floor() };
