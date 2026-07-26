@@ -9,7 +9,16 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 `HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
 number. Outputs are wellness estimates, never medical.
 
-`physio-algo` carries **206 unit tests** (golden vectors, parity fixtures, synthetic sweeps).
+`physio-algo` carries **380 unit tests** (golden vectors, parity fixtures, synthetic sweeps).
+
+Every algorithm below is also tagged with the STRENGTH of its evidence, which is not the same as whether
+it is wired:
+
+- **hardware** — exercised against a real strap's own streams.
+- **gold standard** — scored against an external labelled dataset (PSG hypnograms).
+- **parity** — pinned against the previous implementation's figures, which still pass.
+- **literature** — coefficients cited to named studies; see each module header for PMIDs.
+- **unvalidated** — implemented and unit-tested, but nothing external confirms the output yet.
 
 ## Wiring legend
 
@@ -52,6 +61,9 @@ Each algorithm below is tagged with how it reaches the app:
 | 23 | HRV frequency domain (Lomb-Scargle) | `hrv_freq.rs` | FFI | 3 |
 | 24 | Short-nap detection | `nap.rs` | FFI | 6 |
 | — | Calibration schedule | `calibration.rs` | internal | 4 |
+| 25 | Vitality / Body Age | `vitality.rs` | FFI | 9 |
+| 26 | Sleep Regularity Index | `sleep_regularity.rs` | FFI | 7 |
+| 27 | Circadian phase + Rhythm Age | `circadian.rs`, `biological_age.rs` | FFI | ✓ |
 | — | Shared stats | `stats.rs` | internal | ✓ |
 
 `crates/whoop-metrics` is a thin re-export shim over `physio-algo`, kept so old `whoop_metrics::…` paths
@@ -256,15 +268,50 @@ eligibility gate (>= 20 rows, median inter-sample gap <= 90 s), the longest sust
 
 ---
 
-## Wiring status summary
+## Status, sorted by strength of evidence
 
-| State | Algorithms |
+Every algorithm is now FFI-exported AND called by the app: there is no unwired backlog and no metric the
+frontend still computes itself. What differs is how strongly each is verified.
+
+### ✅ Hardware-verified — run against a real 5.0/MG
+
+| Algorithm | Evidence |
 |---|---|
-| FFI + app-wired | sleep (detect/stage/main-night), ppg HR, HRV (rmssd/gap-aware/windowed/sdnn/range-filter/analyze-raw), resting HR, respiratory rate, strain, recovery, baselines (update), HR zones, fitness age/VO2max, Baevsky SI, stress onset, SpO2 nightly means, steps, day-calories, rest, sleep-debt, daily stress, daytime stress, **HRV freq-domain (Lomb-Scargle)** |
-| FFI, no app caller yet | workout detect, calories bout, IMU features, HRV readiness, SpO2 from-paired, baseline fold-history |
-| Rust-only (app still owns the math) | HR anomaly watch |
+| HR from PPG, HRV (all variants), resting HR, respiratory rate | decoded from real streams over months of wear |
+| Skin temperature, SpO2 % (5.0/MG) | cross-checked against the band's own readings |
+| Steps, IMU activity features | wrap-aware counter and 100 Hz buffer verified on-device |
+| Sleep Regularity Index | computes at 88 % coverage over a real week; correctly refuses below its gate |
 
-The FFI-unwired and Rust-only rows are the migration backlog: what still runs in Kotlin is tracked in the
-noop-tan `docs/ANALYTICS.md`, which references this file as the source of truth. Daily/daytime stress were
-wired by ADOPTING the whoop-rs semantics (14-day daily gate, last-hour peak tie-break), a deliberate app
-behaviour change, not a byte-parity swap.
+### ✅ Gold-standard scored — against external PSG datasets
+
+| Algorithm | Evidence |
+|---|---|
+| Sleep detection + staging (V2) | Cohen's κ 0.311 DREAMT (100 PSG subjects), 0.412 AAUWSS, 0.537 killa5, 0.379 sleep-accel. A re-tune was attempted and **rejected**: it gained 0.044 on the fitting set and lost up to 0.372 on held-out sets |
+
+### ✅ Parity-tested — pinned to the previous implementation
+
+Workout detection · bout + day calories · strain/Effort · recovery/Charge · HR zones · personal
+baselines · Fitness Age / VO2max · Rest · sleep debt · daily + daytime stress · Baevsky SI · stress
+onset · short-nap detection · HRV frequency domain. Each still reproduces the figures its Kotlin
+predecessor produced.
+
+### ⚠️ Literature-sourced — cited, but not validated on our data
+
+| Algorithm | Caveat |
+|---|---|
+| Vitality / Body Age | Every coefficient cites a named meta-analysis (PMIDs in the module header). Only VO2max is published as a per-unit slope; steps, HRV and sleep regularity are quartile contrasts we linearise, and the sleep-duration figure is ours. The Gompertz doubling time is a SENSITIVITY parameter, not a constant of nature |
+
+### ⚠️ Known-weak — documented rather than hidden
+
+| Algorithm | Issue |
+|---|---|
+| Resting HR | Reads ~10 bpm below a reference band. The bias is stable across independent halves and is NOT explained by wrist or sensor differences (two bands agree to within 2 bpm on the same statistic). Unchanged because the data says something is wrong, not what to change it to |
+| SpO2 from paired red/IR (4.0) | Generic curve constants, uncalibrated. The 5.0/MG path reads the strap's own value and is not affected |
+| Rhythm Age (CosinorAge) | Has **never computed** on real data — needs 7 worn days of on-chip motion. Its activity scale carries an unvalidated conversion factor that only a concurrent reference accelerometer can settle |
+| 4.0 record decode | Implemented and unit-tested, never exercised against a real 4.0 offload |
+
+### Rust-only, not on the FFI
+
+| Algorithm | Note |
+|---|---|
+| HR anomaly watch (`HrWatch`) | Implemented here; no app surface yet |
