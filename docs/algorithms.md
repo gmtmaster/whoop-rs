@@ -9,7 +9,9 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 `HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
 number. Outputs are wellness estimates, never medical.
 
-`physio-algo` carries **380 unit tests** (golden vectors, parity fixtures, synthetic sweeps).
+`physio-algo` carries **271 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
+workspace runs **380**. Three sleep-dataset parity gates read external fixtures and are `#[ignore]`d by
+default - run `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
 
 Every algorithm below is also tagged with the STRENGTH of its evidence, which is not the same as whether
 it is wired:
