@@ -923,6 +923,24 @@ pub fn nightly_spo2_raw_means(spans: Vec<Spo2Span>, samples: Vec<Spo2RawSample>)
     Spo2::nightly_raw_means(&spans, &samples).map(|(red, ir)| Spo2RawMeans { red, ir })
 }
 
+/// A smoothed multi-night SpO2 readout: `pct` once calibrated, else `calibrating_nights` carries the
+/// night count so far.
+#[derive(uniffi::Record)]
+pub struct Spo2Rolling {
+    pub pct: Option<f64>,
+    pub calibrating_nights: Option<u32>,
+}
+
+/// The 4.0 display value. Its ratio-of-ratios percent carries an uncalibrated per-device DC offset, so
+/// the absolute number means nothing on its own — this anchors the 30-night median to a plausible
+/// baseline and reports the 7-night median at that offset, keeping the night-to-night movement.
+/// `recent_nightly` is oldest to newest. 5.0/MG does not use this: its percent comes off the strap.
+#[uniffi::export]
+pub fn spo2_rolling_reading(recent_nightly: Vec<f64>) -> Spo2Rolling {
+    let r = Spo2::rolling_reading(&recent_nightly);
+    Spo2Rolling { pct: r.pct, calibrating_nights: r.calibrating_nights.map(|n| n as u32) }
+}
+
 /// Stage one already-detected in-bed span with the V2 recipe + motion-aware wake refinement (the
 /// single-span edit self-heal path). Per-30 s-epoch stage segments over `[start, end]`.
 #[uniffi::export]

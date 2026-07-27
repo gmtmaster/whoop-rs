@@ -8,6 +8,10 @@ use crate::stats::{amplitude, mean, median};
 
 const WINDOW_SECONDS: usize = 30;
 const MIN_SAMPLES_PER_WINDOW: usize = 10;
+/// Windows that must be pulsatile before a night is scored. Ratio-of-ratios reads the AC/DC ratio of a
+/// beat-to-beat waveform; a channel carrying a per-second baseline has no AC, and the few windows that
+/// do vary are quantisation steps. Below this the input is not a waveform and the night returns `None`.
+const MIN_PULSATILE_FRACTION: f64 = 0.5;
 const CURVE_A: f64 = 110.0;
 const CURVE_B: f64 = 25.0;
 const CLAMP_LOW: f64 = 70.0;
@@ -37,15 +41,20 @@ impl Spo2 {
     pub fn from_paired(red: &[f64], ir: &[f64]) -> Option<f64> {
         let n = red.len().min(ir.len());
         let mut per_window = Vec::new();
+        let mut eligible = 0usize;
         let mut start = 0;
         while start < n {
             let end = (start + WINDOW_SECONDS).min(n);
             if end - start >= MIN_SAMPLES_PER_WINDOW {
+                eligible += 1;
                 if let Some(s) = window_spo2(&red[start..end], &ir[start..end]) {
                     per_window.push(s);
                 }
             }
             start = end;
+        }
+        if eligible == 0 || (per_window.len() as f64) < MIN_PULSATILE_FRACTION * eligible as f64 {
+            return None;
         }
         finish(per_window)
     }
@@ -136,6 +145,35 @@ fn finish(per_window: Vec<f64>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A non-pulsatile channel must score nothing. The 4.0 red/IR pair carries a per-second baseline,
+    /// not a waveform: on a real 3.8-day offload only 17 of 995 windows varied at all, and the value
+    /// they produced (81.8%) would read as severe hypoxaemia.
+    #[test]
+    fn a_flat_channel_is_not_scored() {
+        // Flat but for one varying window in sixty, the shape the real strap produced.
+        let mut red = vec![526.0; 1800];
+        let mut ir = vec![594.0; 1800];
+        for i in 0..30 {
+            red[i] += (i % 3) as f64;
+            ir[i] += (i % 2) as f64;
+        }
+        assert_eq!(Spo2::from_paired(&red, &ir), None, "a baseline channel must not yield a percent");
+    }
+
+    /// A genuinely pulsatile pair still scores, so the gate does not silence real data.
+    #[test]
+    fn a_pulsatile_channel_still_scores() {
+        let mut red = Vec::new();
+        let mut ir = Vec::new();
+        for i in 0..1800 {
+            let beat = ((i as f64) * 0.7).sin();
+            red.push(520.0 + 6.0 * beat);
+            ir.push(590.0 + 12.0 * beat);
+        }
+        let v = Spo2::from_paired(&red, &ir).expect("a pulsatile pair must score");
+        assert!((70.0..=100.0).contains(&v), "got {v}");
+    }
 
     /// A 20-sample window with DC = `dc` and p95−p5 amplitude ≈ `ac` (half low, half high).
     fn win(dc: f64, ac: f64) -> Vec<f64> {
