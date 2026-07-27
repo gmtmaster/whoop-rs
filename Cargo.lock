@@ -1552,13 +1552,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "whoop-metrics"
-version = "0.1.0"
-dependencies = [
- "physio-algo",
-]
-
-[[package]]
 name = "whoop-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1571,9 +1564,9 @@ dependencies = [
 name = "whoop-store"
 version = "0.1.0"
 dependencies = [
+ "physio-algo",
  "rusqlite",
  "thiserror 2.0.18",
- "whoop-metrics",
  "whoop-protocol",
 ]
 
@@ -1584,10 +1577,10 @@ dependencies = [
  "anyhow",
  "ble-btleplug",
  "clap",
+ "physio-algo",
  "serde_json",
  "tokio",
  "whoop-client",
- "whoop-metrics",
  "whoop-protocol",
  "whoop-store",
 ]
