@@ -9,8 +9,8 @@ use crate::stats::{amplitude, mean, median};
 const WINDOW_SECONDS: usize = 30;
 const MIN_SAMPLES_PER_WINDOW: usize = 10;
 /// Windows that must be pulsatile before a night is scored. Ratio-of-ratios reads the AC/DC ratio of a
-/// beat-to-beat waveform; a channel carrying a per-second baseline has no AC, and the few windows that
-/// do vary are quantisation steps. Below this the input is not a waveform and the night returns `None`.
+/// cardiac waveform (0.83-3.0 Hz at 50-180 bpm), but the 4.0 pair arrives at 1 Hz, so that band sits
+/// entirely above the 0.5 Hz Nyquist limit and is aliased away. Below this fraction the night is `None`.
 const MIN_PULSATILE_FRACTION: f64 = 0.5;
 const CURVE_A: f64 = 110.0;
 const CURVE_B: f64 = 25.0;

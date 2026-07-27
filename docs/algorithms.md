@@ -308,7 +308,7 @@ predecessor produced.
 | Algorithm | Issue |
 |---|---|
 | Resting HR | Reads ~10 bpm below a reference band. The bias is stable across independent halves and is NOT explained by wrist or sensor differences (two bands agree to within 2 bpm on the same statistic). Unchanged because the data says something is wrong, not what to change it to |
-| SpO2 from paired red/IR (4.0) | **Withheld on real hardware.** Ratio-of-ratios needs a beat-to-beat waveform; the 4.0 pair carries a 1 Hz baseline. Measured on two independent straps (2.1M samples, 25.6 and 3.8 days): 89.3% and 98.2% of 30 s windows had zero red amplitude, and the surviving few produced ~80%, which is not a plausible reading for either wearer. A pulsatility gate now returns None instead. The 5.0/MG path reads the strap's own value and is unaffected |
+| SpO2 from paired red/IR (4.0) | **Withheld: the sample rate forbids it.** The pair arrives at 1 Hz, so the Nyquist limit is 0.5 Hz while a cardiac waveform runs 0.83-3.0 Hz — the pulsatile component ratio-of-ratios reads is aliased away before decode. Confirmed on two straps (2.1M samples): 89.3% and 98.2% of 30 s windows had zero red amplitude, and the survivors produced ~80% for two healthy wearers. Restricting to in-bed windows makes it worse (95.7% flat), so it is not a sleep-only channel. A pulsatility gate returns None. The 5.0/MG path reads the strap's own value and is unaffected |
 | Rhythm Age (CosinorAge) | Has **never computed** on real data — needs 7 worn days of on-chip motion. Its activity scale carries an unvalidated conversion factor that only a concurrent reference accelerometer can settle |
 | 4.0 record decode | Implemented and unit-tested, never exercised against a real 4.0 offload |
 
