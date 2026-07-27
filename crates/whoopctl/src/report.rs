@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use whoop_metrics::{HrWatch, HrWatchState, HrvReadiness, Spo2};
+use physio_algo::{HrWatch, HrWatchState, HrvReadiness, Spo2};
 use whoop_protocol::{records, Family, Frame, HistoryRecord, PacketType, Record};
 
 use crate::cli::Cli;
@@ -176,7 +176,7 @@ pub(crate) fn report_metrics(records: &[Record], fam: Family, hr_watch: bool) {
         ),
         None => println!(
             "HRV-readiness: calibrating ({nights} night(s) of R-R; needs {})",
-            whoop_metrics::calibration::RECOVERY_SCORE.unlock
+            physio_algo::calibration::RECOVERY_SCORE.unlock
         ),
     }
 
@@ -300,7 +300,7 @@ pub(crate) fn report_sync(records: &[Record], out: &Path, wiped: bool) {
 #[cfg(test)]
 mod tests {
     use super::format_hr_watch;
-    use whoop_metrics::HrWatchState;
+    use physio_algo::HrWatchState;
 
     #[test]
     fn hr_watch_line_carries_no_clinical_terms() {

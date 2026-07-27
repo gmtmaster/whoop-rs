@@ -6,6 +6,6 @@ license.workspace = true
 
 [dependencies]
 whoop-protocol.workspace = true
-whoop-metrics.workspace = true
+physio-algo.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror.workspace = true

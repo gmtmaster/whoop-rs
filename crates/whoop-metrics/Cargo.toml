@@ -1,9 +1,0 @@
-[package]
-name = "whoop-metrics"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Compatibility shim: re-exports the derived-metric layer, now implemented in physio-algo."
-
-[dependencies]
-physio-algo.workspace = true

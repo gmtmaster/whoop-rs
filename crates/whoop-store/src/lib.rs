@@ -1,7 +1,7 @@
 //! Per-(person, strap) calibration store. Persists each drain's nightly metrics to SQLite keyed on the
 //! person wearing the strap AND the strap serial, so a new person or a new strap starts a fresh
 //! calibration period (you never calibrate against someone else's data). A metric's baseline finalizes
-//! once its (person, strap) reaches the WHOOP milestone from `whoop_metrics::calibration`. Nightly RMSSD is
+//! once its (person, strap) reaches the WHOOP milestone from `physio_algo::calibration`. Nightly RMSSD is
 //! gap-aware and artifact-corrected (successive differences pool only within time-contiguous, plausible
 //! R-R runs, dropping ectopic/missed-beat jumps). A per-strap
 //! linear fit (`reference ≈ scale·field + offset`) can also be finalized and persisted from paired columns.
@@ -9,7 +9,7 @@
 //! across two rows (the one beat-pair at the boundary is dropped). A physiological-day cutover is a TODO.
 
 use rusqlite::{params, Connection, OptionalExtension};
-use whoop_metrics::{calibration, stats, HrvReadiness, LinearFit};
+use physio_algo::{calibration, stats, HrvReadiness, LinearFit};
 use whoop_protocol::{HistoryRecord, Record};
 
 /// One calendar day's summary for a (person, strap), segmented from a drain.
@@ -210,7 +210,7 @@ fn segment(records: &[Record]) -> Vec<NightMetrics> {
     let mut by_day: std::collections::BTreeMap<u32, DayAcc> = std::collections::BTreeMap::new();
     for r in records {
         if let Record::History(h) = r {
-            by_day.entry(h.unix / whoop_metrics::SECS_PER_DAY).or_default().push(h);
+            by_day.entry(h.unix / physio_algo::SECS_PER_DAY).or_default().push(h);
         }
     }
     by_day.into_iter().map(|(day, acc)| acc.finish(day)).collect()
