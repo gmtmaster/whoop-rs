@@ -77,6 +77,22 @@ pub struct HistorySummary {
     pub signal_flags: Option<u8>,   // 5.0 v18 PPG SIGPROC bitfield (bit 4 = off-wrist)
     pub signal_quality: Option<u8>, // 5.0 v18 PPG confidence, 255 = clean
     pub dynamic_acceleration_g: Option<f32>, // 5.0 v18 on-chip gravity-removed motion magnitude (g); the ENMO signal
+    // 5.0 v18 optical front-end telemetry. Amplitudes are withheld when the band flags the second's
+    // beat detection as untrustworthy, which `optical_signal_poor` reports instead.
+    pub optical_baseline_a: Option<u8>, // 0 marks off-wrist
+    pub optical_baseline_b: Option<u8>,
+    pub optical_amp_a: Option<u8>,
+    pub optical_amp_b: Option<u8>,
+    pub optical_signal_poor: Option<bool>,
+    pub record_index: Option<u32>, // 5.0 v18 dense per-second emission counter, independent of the clock
+    pub temp_aux_1_raw: Option<u16>, // 5.0 v18 auxiliary thermal registers, deci-degrees C
+    pub temp_aux_2_raw: Option<u16>,
+    pub sleep_state_raw: Option<u8>, // 5.0 v18 whole packed byte; `sleep_state` is bits 4-5 of it
+    // 5.0 v18 fields carried every second whose meaning is unpinned, named for their inner offset.
+    pub raw_u8_28: Option<u8>,
+    pub raw_u8_29: Option<u8>,
+    pub raw_u16_30: Option<u16>,
+    pub raw_f32_105: Option<f32>,
 }
 
 impl From<records::HistoryRecord> for HistorySummary {
@@ -99,6 +115,19 @@ impl From<records::HistoryRecord> for HistorySummary {
             signal_flags: h.signal_flags,
             signal_quality: h.signal_quality,
             dynamic_acceleration_g: h.dynamic_acceleration_g,
+            optical_baseline_a: h.optical_baseline_a,
+            optical_baseline_b: h.optical_baseline_b,
+            optical_amp_a: h.optical_amp_a,
+            optical_amp_b: h.optical_amp_b,
+            optical_signal_poor: h.optical_signal_poor,
+            record_index: h.record_index,
+            temp_aux_1_raw: h.temp_aux_1_raw,
+            temp_aux_2_raw: h.temp_aux_2_raw,
+            sleep_state_raw: h.sleep_state_raw,
+            raw_u8_28: h.raw_u8_28,
+            raw_u8_29: h.raw_u8_29,
+            raw_u16_30: h.raw_u16_30,
+            raw_f32_105: h.raw_f32_105,
         }
     }
 }

@@ -46,6 +46,14 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
         optical_amp_a: u8_at(b, 100).filter(|_| !amps_sentinel(b)),
         optical_amp_b: u8_at(b, 101).filter(|_| !amps_sentinel(b)),
         optical_signal_poor: u8_at(b, 100).zip(u8_at(b, 101)).map(|_| amps_sentinel(b)),
+        record_index: u32_at(b, 3),
+        temp_aux_1_raw: u16_at(b, 61),
+        temp_aux_2_raw: u16_at(b, 63),
+        sleep_state_raw: u8_at(b, 73),
+        raw_u8_28: u8_at(b, 28),
+        raw_u8_29: u8_at(b, 29),
+        raw_u16_30: u16_at(b, 30),
+        raw_f32_105: f32_at(b, 105).filter(|v| v.is_finite()),
         ..Default::default()
     })
 }
@@ -216,6 +224,54 @@ mod tests {
         assert_eq!(decode(9.0), None); // above the 0..8 g band
         assert_eq!(decode(-1.0), None); // impossible negative
         assert!(decode(f32::NAN).is_none()); // non-finite
+    }
+
+    /// One real offloaded v18 second, pinning every per-second field the record carries. Inner 28 and
+    /// 29 are two separate bytes, not one 8.8 fixed-point rate: read as a u16 scaled by 256 the whole
+    /// part is just inner 29 and the fraction just inner 28, so the pairing adds nothing to either.
+    #[test]
+    fn v18_decodes_a_real_frame_end_to_end() {
+        const WIRE: &str = "aa01740001003fb12f128066b7760180fc546aeb710056011d0200000000000000002c0481555700\
+ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c020c000000000000000000\
+00000000000000000000000000000100adb18080000000c8d69bc00000000d27d7e3";
+        let wire: Vec<u8> = (0..WIRE.len() / 2)
+            .map(|i| u8::from_str_radix(&WIRE[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let r = v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap();
+
+        assert_eq!(r.unix, 1_783_954_560);
+        assert_eq!(r.record_index, Some(24_557_414));
+        assert_eq!(r.heart_rate, Some(86));
+        assert_eq!(r.rr_intervals, vec![541]);
+        assert_eq!(r.raw_u8_28, Some(129));
+        assert_eq!(r.raw_u8_29, Some(85));
+        assert_eq!(r.raw_u16_30, Some(87));
+        assert_eq!(r.temp_aux_1_raw, Some(337));
+        assert_eq!(r.temp_aux_2_raw, Some(345));
+        assert_eq!(r.skin_temp_raw, Some(3547));
+        assert_eq!(r.skin_temp_c, Some(35.47));
+        assert_eq!(r.sleep_state_raw, Some(0));
+        assert_eq!(r.sleep_state, Some(0));
+        assert_eq!(r.raw_f32_105, Some(-4.869_968_4));
+
+        // The 8.8 reading decomposes exactly back into the two bytes, on any record: no third value
+        // exists to recover, which is why neither byte is exposed as a rate.
+        let fixed_8_8 = (u16::from(r.raw_u8_29.unwrap()) * 256 + u16::from(r.raw_u8_28.unwrap())) as f32 / 256.0;
+        assert_eq!(fixed_8_8, 85.503_91);
+        assert_eq!(fixed_8_8.trunc() as u8, r.raw_u8_29.unwrap());
+        assert_eq!(((fixed_8_8.fract() * 256.0).round()) as u8, r.raw_u8_28.unwrap());
+    }
+
+    /// The auxiliary channels are ungated, but a truncated record must not invent them.
+    #[test]
+    fn v18_aux_fields_absent_on_a_short_record() {
+        let payload = vec![0u8; 40];
+        let wire = framing::encode(Family::Gen5, 47, 18, 0, &payload);
+        let r = v18(&framing::decode(Family::Gen5, &wire).unwrap()).unwrap();
+        assert_eq!(r.temp_aux_1_raw, None);
+        assert_eq!(r.sleep_state_raw, None);
+        assert_eq!(r.raw_f32_105, None);
+        assert_eq!(r.record_index, Some(0)); // inner 3 is within even a short record
     }
 
     #[test]

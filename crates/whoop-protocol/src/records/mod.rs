@@ -39,6 +39,23 @@ pub struct HistoryRecord {
     /// The record-level 128 sentinel on both amplitude channels: the band's own beat detection is
     /// unreliable for this second. Fires on both or neither, never one alone.
     pub optical_signal_poor: Option<bool>,
+    /// 5.0 v18 dense per-second emission counter, one step per unix second. Orders and de-duplicates
+    /// records independently of arrival, which no timestamp can do within a second.
+    pub record_index: Option<u32>,
+    /// 5.0 v18 auxiliary thermal registers in deci-degrees C, raw like [`Self::skin_temp_raw`] which is
+    /// centi-degrees. Both read below the skin channel worn, and all three converge off-wrist.
+    pub temp_aux_1_raw: Option<u16>,
+    pub temp_aux_2_raw: Option<u16>,
+    /// 5.0 v18 whole packed state byte at inner 73; [`Self::sleep_state`] is bits 4-5 of it.
+    pub sleep_state_raw: Option<u8>,
+    // 5.0 v18 fields carried every second whose meaning is unpinned. Named for their inner offset so
+    // the name claims nothing, and gated only on being readable so nothing real is filtered away.
+    // Inner 28/29 are a pair; reading them as one u16 scaled by 256 tracks the rate on some straps
+    // and not others, so neither byte is promoted here.
+    pub raw_u8_28: Option<u8>,
+    pub raw_u8_29: Option<u8>,
+    pub raw_u16_30: Option<u16>,
+    pub raw_f32_105: Option<f32>,
 }
 
 /// A raw 24 Hz optical buffer (v26 on 5.0/MG). One record = one strap second.
