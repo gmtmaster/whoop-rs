@@ -528,7 +528,7 @@ mod tests {
         let hr: Vec<HrSample> = (0..60).map(|i| HrSample { ts: start + i, bpm: 55 }).collect();
         let accel: Vec<AccelSample> =
             (0..30).map(|i| AccelSample { ts: start + i, x: 0.0, y: 0.0, z: 1.0 }).collect();
-        let input = SleepInput { start, end: start + 60, hr, rr: Vec::<RrRun>::new(), accel, resp: Vec::new() };
+        let input = SleepInput { start, end: start + 60, hr, rr: Vec::<RrRun>::new(), accel };
         let mut grav = input.accel.clone();
         grav.sort_by_key(|g| g.ts);
         features(input.start, input.end, &grav, &input.hr, &[], &Params::SHIPPED)

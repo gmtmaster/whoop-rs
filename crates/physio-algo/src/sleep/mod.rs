@@ -17,7 +17,7 @@ mod v2;
 
 use crate::hrv::HrvReadiness;
 
-pub use input::{AccelSample, HrSample, RespSample, RrRun, SleepInput, StepSample};
+pub use input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 pub use params::Params;
 pub use v2::{prepare as prepare_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, Prepared, DEEP_GATE_THRESH};
@@ -34,7 +34,6 @@ pub struct SleepStreams {
     pub hr: Vec<HrSample>,
     pub rr: Vec<RrRun>,
     pub accel: Vec<AccelSample>,
-    pub resp: Vec<RespSample>,
     pub steps: Vec<StepSample>,
     pub tz_offset_s: i64,
     pub wrist_off: Vec<(i64, i64)>,
@@ -82,7 +81,6 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             hr: streams.hr.clone(),
             rr: streams.rr.clone(),
             accel: streams.accel.clone(),
-            resp: streams.resp.clone(),
         };
         let segments = refine::refine(&v2::stage(&input), &streams.accel, &streams.steps);
         let efficiency = detect::efficiency(span.start, span.end, &segments);

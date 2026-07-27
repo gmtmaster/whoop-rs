@@ -40,7 +40,7 @@ fn golden_input() -> SleepInput {
         let rr_ms = 60_000 / bpm + rsa_wave(ph, i);
         rr.push(RrRun { ts, intervals: vec![rr_ms as u16] });
     }
-    SleepInput { start, end: start + dur, hr, rr, accel, resp: Vec::new() }
+    SleepInput { start, end: start + dur, hr, rr, accel }
 }
 
 #[test]
@@ -97,7 +97,6 @@ fn v2_degenerate_input_falls_back_to_single_light_block() {
         hr: Vec::new(),
         rr: Vec::new(),
         accel: vec![AccelSample { ts: start, x: 0.0, y: 0.0, z: 1.0 }],
-        resp: Vec::new(),
     };
     let segs = stage_v2(&input);
     assert_eq!(1, segs.len());

@@ -321,13 +321,6 @@ pub struct SleepAccelSample {
     pub z: f64,
 }
 
-/// One raw respiration-ADC sample at unix second `ts` (accepted for parity; V2 recovers RSA from R-R).
-#[derive(uniffi::Record, Clone)]
-pub struct SleepRespSample {
-    pub ts: i64,
-    pub raw: i32,
-}
-
 /// The protocol-free input bundle for one detected in-bed span (`[start, end]` unix seconds).
 #[derive(uniffi::Record, Clone)]
 pub struct SleepInput {
@@ -336,7 +329,6 @@ pub struct SleepInput {
     pub hr: Vec<SleepHrSample>,
     pub rr: Vec<SleepRrRun>,
     pub accel: Vec<SleepAccelSample>,
-    pub resp: Vec<SleepRespSample>,
 }
 
 impl From<SleepInput> for sleep::SleepInput {
@@ -347,7 +339,6 @@ impl From<SleepInput> for sleep::SleepInput {
             hr: i.hr.into_iter().map(|h| sleep::HrSample { ts: h.ts, bpm: h.bpm }).collect(),
             rr: i.rr.into_iter().map(|r| sleep::RrRun { ts: r.ts, intervals: r.intervals }).collect(),
             accel: i.accel.into_iter().map(|a| sleep::AccelSample { ts: a.ts, x: a.x, y: a.y, z: a.z }).collect(),
-            resp: i.resp.into_iter().map(|r| sleep::RespSample { ts: r.ts, raw: r.raw }).collect(),
         }
     }
 }
@@ -387,7 +378,6 @@ pub struct SleepStreams {
     pub hr: Vec<SleepHrSample>,
     pub rr: Vec<SleepRrRun>,
     pub accel: Vec<SleepAccelSample>,
-    pub resp: Vec<SleepRespSample>,
     pub steps: Vec<SleepStepSample>,
     pub tz_offset_s: i64,
     pub wrist_off: Vec<WristOffInterval>,
@@ -400,7 +390,6 @@ impl From<SleepStreams> for sleep::SleepStreams {
             hr: s.hr.into_iter().map(|h| sleep::HrSample { ts: h.ts, bpm: h.bpm }).collect(),
             rr: s.rr.into_iter().map(|r| sleep::RrRun { ts: r.ts, intervals: r.intervals }).collect(),
             accel: s.accel.into_iter().map(|a| sleep::AccelSample { ts: a.ts, x: a.x, y: a.y, z: a.z }).collect(),
-            resp: s.resp.into_iter().map(|r| sleep::RespSample { ts: r.ts, raw: r.raw }).collect(),
             steps: s
                 .steps
                 .into_iter()

@@ -70,7 +70,7 @@ fn load_night(dir: &Path) -> Option<Night> {
     if truth.is_empty() {
         return None; // an empty ground truth measures nothing
     }
-    Some(Night { input: SleepInput { start: w0, end: w1, hr, rr, accel, resp: Vec::new() }, w0, n_epochs, truth })
+    Some(Night { input: SleepInput { start: w0, end: w1, hr, rr, accel }, w0, n_epochs, truth })
 }
 
 fn load_dataset(ds: &str) -> Vec<Night> {

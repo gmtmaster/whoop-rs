@@ -67,7 +67,7 @@ fn load_fixture(dir: &Path) -> Fixture {
     }
 
     Fixture {
-        input: SleepInput { start: w0, end: w1, hr, rr, accel, resp: Vec::new() },
+        input: SleepInput { start: w0, end: w1, hr, rr, accel },
         w0,
         n_epochs,
         truth,

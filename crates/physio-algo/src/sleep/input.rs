@@ -29,14 +29,6 @@ pub struct AccelSample {
     pub z: f64,
 }
 
-/// One raw respiration-ADC sample. Accepted for signature parity; the V2 recipe recovers respiration
-/// regularity from the R-R stream (RSA) rather than this raw channel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RespSample {
-    pub ts: i64,
-    pub raw: i32,
-}
-
 /// One step-counter sample: a wrap-aware u16 `counter` and an optional activity class (1=walk, 2=run) at
 /// second `ts`. Motion-aware wake refinement reads the per-minute walk-class tick cadence from these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,5 +47,4 @@ pub struct SleepInput {
     pub hr: Vec<HrSample>,
     pub rr: Vec<RrRun>,
     pub accel: Vec<AccelSample>,
-    pub resp: Vec<RespSample>,
 }

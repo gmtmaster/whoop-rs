@@ -343,7 +343,7 @@ mod tests {
             hr.push(SleepHrSample { ts, bpm: bpm as u16 });
             rr.push(SleepRrRun { ts, intervals: vec![(60_000 / bpm) as u16] });
         }
-        let input = SleepInput { start, end: start + dur, hr, rr, accel, resp: Vec::new() };
+        let input = SleepInput { start, end: start + dur, hr, rr, accel };
         let segs = stage_sleep_refined(input, Vec::new());
         assert!(!segs.is_empty());
         assert_eq!(segs.first().unwrap().start, start);
