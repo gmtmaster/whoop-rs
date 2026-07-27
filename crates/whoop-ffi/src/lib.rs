@@ -870,6 +870,13 @@ pub fn data_range_oldest(frame: Vec<u8>) -> Option<u32> {
     response::data_range_scan_oldest(&frame)
 }
 
+/// Pages the strap has banked but not yet sent, from a GET_DATA_RANGE frame. Diagnostic: it reports how
+/// far a sync has to go and never gates one.
+#[uniffi::export]
+pub fn data_range_pages_behind(frame: Vec<u8>) -> Option<u32> {
+    response::data_range_pages_behind(&frame)
+}
+
 /// HR from a v26 optical PPG buffer (24 Hz autocorrelation).
 #[uniffi::export]
 pub fn ppg_hr(samples: Vec<PpgSample>) -> Vec<PpgEstimate> {

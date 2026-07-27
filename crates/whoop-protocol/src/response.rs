@@ -71,6 +71,27 @@ pub fn data_range_scan_oldest(frame: &[u8]) -> Option<u32> {
     oldest
 }
 
+/// The strap's history ring size in pages, and the anchor this scan keys on.
+const RING_CAPACITY_PAGES: u32 = 131_072;
+
+/// How many pages the strap has banked but not yet sent: the gap between its write and read cursors in
+/// a GET_DATA_RANGE frame, wrapping at the ring size. Anchors on the capacity word rather than a fixed
+/// offset, so the triplet is found by its own constant instead of a grid that varies by family.
+pub fn data_range_pages_behind(frame: &[u8]) -> Option<u32> {
+    let mut i = 12;
+    while i + 4 <= frame.len() {
+        if word_le(frame, i) == RING_CAPACITY_PAGES {
+            let (write, read) = (word_le(frame, i - 12), word_le(frame, i - 8));
+            // Both cursors index into the ring; anything past its end means this was not the triplet.
+            if write < RING_CAPACITY_PAGES && read < RING_CAPACITY_PAGES {
+                return Some(write.checked_sub(read).unwrap_or(write + RING_CAPACITY_PAGES - read));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// The command byte a COMMAND_RESPONSE replies to, plus its result/status code, for the live handshake
 /// (data-range-success gate, reboot/alarm readback). On 5/MG the status is payload byte 1; 4.0 exposes no
 /// fixed result offset, so `None`.
@@ -166,6 +187,33 @@ fn ascii_z(p: &[u8], start: usize) -> String {
 mod tests {
     use super::*;
     use crate::framing;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap()).collect()
+    }
+
+    /// Two real GET_DATA_RANGE replies from one drain: the strap 44 pages behind, then caught up.
+    #[test]
+    fn pages_behind_reads_real_frames() {
+        let behind = hex("aa014c00010032d124492211010100710000ce700000fa700000ce70000010000000000002008702\
+00006cfd1d003fbb9769f508000080fc546aeb71000080fc546aeb71000006ff546a3373000000000b1bc147");
+        let caught_up = hex("aa014c00010032d12472223601014071000022710000227100002271000010000000000002000000\
+000000001e00c5be9769850b00001a01556a7a7400001a01556a7a7400001e01556a7a74000000007fe9f471");
+        assert_eq!(data_range_pages_behind(&behind), Some(44));
+        assert_eq!(data_range_pages_behind(&caught_up), Some(0));
+    }
+
+    #[test]
+    fn pages_behind_wraps_and_needs_the_capacity_anchor() {
+        let mut f = vec![0u8; 40];
+        f[12..16].copy_from_slice(&7u32.to_le_bytes()); // write cursor, wrapped past the end
+        f[16..20].copy_from_slice(&131_000u32.to_le_bytes()); // read cursor, still near the top
+        f[24..28].copy_from_slice(&131_072u32.to_le_bytes()); // the anchor
+        assert_eq!(data_range_pages_behind(&f), Some(79));
+
+        f[24..28].copy_from_slice(&99u32.to_le_bytes()); // no capacity word -> no triplet
+        assert_eq!(data_range_pages_behind(&f), None);
+    }
 
     #[test]
     fn resp_status_surfaces_cmd_and_result() {
