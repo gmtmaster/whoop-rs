@@ -132,8 +132,8 @@ fn amps_sentinel(b: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    /// The amplitude sentinel is record-level: both bytes or neither. Real captures cannot show this
-    /// on their own — every frame we hold carries the two bytes equal — so the model is pinned here.
+    /// The amplitude sentinel is record-level: both bytes or neither. The two channels do vary apart
+    /// (64% of captured records), yet exactly one reading 128 has never occurred in 82,185 of them.
     #[test]
     fn amps_sentinel_needs_both_channels() {
         let mut b = [7u8; 110];
