@@ -38,6 +38,14 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
         // On-chip gravity-removed motion magnitude (g), 1 Hz; gated finite and in 0..8 g so a wrong
         // offset stores nothing. Feeds the circadian activity series (CosinorAge).
         dynamic_acceleration_g: f32_at(b, 33).filter(|v| v.is_finite() && (0.0..=8.0).contains(v)),
+        // Optical front-end telemetry. Baselines read 0 together when the strap is off the wrist;
+        // 128 on both amplitudes is a quality sentinel rather than a magnitude, so it is reported
+        // as `optical_signal_poor` and withheld from the amplitude channels.
+        optical_baseline_a: u8_at(b, 98).filter(|&v| v != 0),
+        optical_baseline_b: u8_at(b, 99).filter(|&v| v != 0),
+        optical_amp_a: u8_at(b, 100).filter(|_| !amps_sentinel(b)),
+        optical_amp_b: u8_at(b, 101).filter(|_| !amps_sentinel(b)),
+        optical_signal_poor: u8_at(b, 100).zip(u8_at(b, 101)).map(|_| amps_sentinel(b)),
         ..Default::default()
     })
 }
@@ -98,9 +106,32 @@ fn sign_extend_20(v: u32) -> i32 {
     ((v << 12) as i32) >> 12
 }
 
+/// The v18 optical amplitude sentinel: both channels reading 128 marks a second whose beat detection
+/// the band could not trust. It is record-level — the two bytes carry it together or not at all.
+fn amps_sentinel(b: &[u8]) -> bool {
+    matches!((u8_at(b, 100), u8_at(b, 101)), (Some(128), Some(128)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The amplitude sentinel is record-level: both bytes or neither. Real captures cannot show this
+    /// on their own — every frame we hold carries the two bytes equal — so the model is pinned here.
+    #[test]
+    fn amps_sentinel_needs_both_channels() {
+        let mut b = [7u8; 110];
+        b[100] = 128;
+        b[101] = 128;
+        assert!(amps_sentinel(&b), "both 128 is the sentinel");
+
+        b[101] = 30;
+        assert!(!amps_sentinel(&b), "one channel alone must not fire it");
+
+        b[100] = 30;
+        b[101] = 128;
+        assert!(!amps_sentinel(&b), "the other channel alone must not fire it either");
+    }
     use crate::family::Family;
     use crate::framing;
 
@@ -277,3 +308,4 @@ mod tests {
         assert!(v20_optical(&frame).is_none());
     }
 }
+

@@ -30,6 +30,15 @@ pub struct HistoryRecord {
     pub signal_flags: Option<u8>, // 5.0 v18 PPG SIGPROC status bitfield (bit 4 = off-wrist); empirical
     pub signal_quality: Option<u8>, // 5.0 v18 PPG confidence, 255 = clean; empirical
     pub dynamic_acceleration_g: Option<f32>, // 5.0 v18 on-chip gravity-removed motion magnitude (g, 0..8); empirical
+    // 5.0 v18 optical front-end telemetry. Two independent u8 baselines and two u8 amplitudes, NOT
+    // two u16s: the high byte steps without a low-byte carry, so a u16 read invents deltas.
+    pub optical_baseline_a: Option<u8>, // 0 marks off-wrist; magnitudes are device-specific
+    pub optical_baseline_b: Option<u8>,
+    pub optical_amp_a: Option<u8>, // 128 is a quality sentinel, not a reading; see optical_signal_poor
+    pub optical_amp_b: Option<u8>,
+    /// The record-level 128 sentinel on both amplitude channels: the band's own beat detection is
+    /// unreliable for this second. Fires on both or neither, never one alone.
+    pub optical_signal_poor: Option<bool>,
 }
 
 /// A raw 24 Hz optical buffer (v26 on 5.0/MG). One record = one strap second.

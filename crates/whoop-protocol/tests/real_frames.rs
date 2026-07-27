@@ -128,3 +128,46 @@ fn real_event_frames_decode_to_pinned_values() {
         }
     }
 }
+
+/// The v18 optical channels are two u8 baselines and two u8 amplitudes, not two u16s, and the 128 on
+/// the amplitude pair is a record-level quality sentinel rather than a magnitude.
+#[test]
+fn v18_optical_channels_are_paired_u8s_with_a_record_level_sentinel() {
+    let oracle = oracle();
+    let by_name = |n: &str| {
+        let f = oracle["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == n)
+            .unwrap_or_else(|| panic!("fixture {n} missing"));
+        match decode(&gen5_frame(f)) {
+            Some(Record::History(h)) => h,
+            other => panic!("{n}: expected a History record, got {other:?}"),
+        }
+    };
+
+    // Worn: both baselines present, both amplitudes real, quality good.
+    let worn = by_name("v18_real_whoop5_worn");
+    assert_eq!(worn.optical_baseline_a, Some(101));
+    assert_eq!(worn.optical_baseline_b, Some(111));
+    assert_eq!(worn.optical_amp_a, Some(30));
+    assert_eq!(worn.optical_amp_b, Some(30));
+    assert_eq!(worn.optical_signal_poor, Some(false));
+
+    // Off the wrist the baselines read 0 TOGETHER — 0 is the off-wrist mark here, not 128.
+    let off = by_name("v18_real_whoop5_offwrist");
+    assert_eq!(off.optical_baseline_a, None);
+    assert_eq!(off.optical_baseline_b, None);
+    assert_eq!(off.optical_signal_poor, Some(true));
+
+    // 128 on a BASELINE is an ordinary worn value, so it must not be mistaken for the sentinel: this
+    // frame carries baseline_b = 128 with a real heart rate.
+    let second = by_name("v18_real_whoop5_second_device");
+    assert_eq!(second.optical_baseline_b, Some(128));
+    assert_eq!(second.heart_rate, Some(57));
+    // Its amplitudes DO carry the sentinel, so they are withheld rather than reported as 128.
+    assert_eq!(second.optical_amp_a, None);
+    assert_eq!(second.optical_amp_b, None);
+    assert_eq!(second.optical_signal_poor, Some(true));
+}
