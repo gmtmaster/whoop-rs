@@ -54,8 +54,16 @@ pub fn v18(f: &Frame) -> Option<HistoryRecord> {
         raw_u8_29: u8_at(b, 29),
         raw_u16_30: u16_at(b, 30),
         raw_f32_105: f32_at(b, 105).filter(|v| v.is_finite()),
+        raw_u16_26: u16_at(b, 26),
+        unpinned: pack_unpinned(b),
         ..Default::default()
     })
+}
+
+/// The unpinned bytes gathered in [`UNPINNED_OFFSETS`] order, or None when the record is too short to
+/// carry them all — a partial pack would silently shift every slot.
+fn pack_unpinned(b: &[u8]) -> Option<Vec<u8>> {
+    super::UNPINNED_OFFSETS.iter().map(|&o| u8_at(b, o)).collect()
 }
 
 pub fn v26(f: &Frame) -> Option<PpgRecord> {
@@ -253,6 +261,13 @@ ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c02
         assert_eq!(r.sleep_state_raw, Some(0));
         assert_eq!(r.sleep_state, Some(0));
         assert_eq!(r.raw_f32_105, Some(-4.869_968_4));
+        assert_eq!(r.raw_u16_26, Some(1068));
+        // Packed in offset order, so slot i is UNPINNED_OFFSETS[i]'s byte.
+        let packed = r.unpinned.clone().unwrap();
+        assert_eq!(packed.len(), super::super::UNPINNED_OFFSETS.len());
+        for (slot, &off) in packed.iter().zip(super::super::UNPINNED_OFFSETS.iter()) {
+            assert_eq!(*slot, framing::decode(Family::Gen5, &wire).unwrap().inner()[off]);
+        }
 
         // The 8.8 reading decomposes exactly back into the two bytes, on any record: no third value
         // exists to recover, which is why neither byte is exposed as a rate.

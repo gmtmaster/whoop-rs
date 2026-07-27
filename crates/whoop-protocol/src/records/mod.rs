@@ -9,6 +9,11 @@ use crate::bytes::f32_at;
 use crate::family::Family;
 use crate::packet::Frame;
 
+/// Inner offsets of the v18 per-second bytes that carry information but have no established meaning,
+/// in the order [`HistoryRecord::unpinned`] packs them. Every other varying byte in the record is
+/// already a named field.
+pub const UNPINNED_OFFSETS: [usize; 13] = [2, 11, 12, 24, 51, 67, 68, 69, 70, 71, 72, 95, 97];
+
 /// A per-second summary record (v18 on 5.0/MG, v5/v24 on 4.0). Absent fields = not carried by that
 /// version; constructors set only what they carry and `..Default::default()` fills the rest with None.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -56,6 +61,12 @@ pub struct HistoryRecord {
     pub raw_u8_29: Option<u8>,
     pub raw_u16_30: Option<u16>,
     pub raw_f32_105: Option<f32>,
+    /// The widest-ranging unpinned channel: thousands of distinct values over a night, against tens
+    /// for the bytes beside it.
+    pub raw_u16_26: Option<u16>,
+    /// Every remaining per-second byte that carries information, packed in [`UNPINNED_OFFSETS`] order.
+    /// Opaque by design — the consumer stores it whole, and a later census unpacks it here.
+    pub unpinned: Option<Vec<u8>>,
 }
 
 /// A raw 24 Hz optical buffer (v26 on 5.0/MG). One record = one strap second.

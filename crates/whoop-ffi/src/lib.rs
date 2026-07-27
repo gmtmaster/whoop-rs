@@ -93,6 +93,9 @@ pub struct HistorySummary {
     pub raw_u8_29: Option<u8>,
     pub raw_u16_30: Option<u16>,
     pub raw_f32_105: Option<f32>,
+    pub raw_u16_26: Option<u16>,
+    /// Every remaining per-second byte that carries information, packed. Opaque: store it whole.
+    pub unpinned: Option<Vec<u8>>,
 }
 
 impl From<records::HistoryRecord> for HistorySummary {
@@ -128,6 +131,8 @@ impl From<records::HistoryRecord> for HistorySummary {
             raw_u8_29: h.raw_u8_29,
             raw_u16_30: h.raw_u16_30,
             raw_f32_105: h.raw_f32_105,
+            raw_u16_26: h.raw_u16_26,
+            unpinned: h.unpinned,
         }
     }
 }
