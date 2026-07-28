@@ -19,6 +19,7 @@ use crate::hrv::HrvReadiness;
 
 pub use input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 pub use params::Params;
+pub use detect::{detect_sessions, detect_sessions_with, DetectParams, DetectedSpan};
 pub use v2::{prepare as prepare_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, Prepared, DEEP_GATE_THRESH};
 pub use mainnight::{

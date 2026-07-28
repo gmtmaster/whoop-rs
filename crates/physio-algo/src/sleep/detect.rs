@@ -1,7 +1,8 @@
 //! In-bed span detection — the gravity-stillness spine that carves candidate sleep runs from a night's
 //! streams, before staging. A rolling stillness fraction over per-sample gravity deltas classifies each
-//! sample sleep/active; runs are built, short runs merged, and (only when gravity is sparse) HR-vouched
-//! gaps bridged. Pure and deterministic. Feeds the gate loop in [`super::analyze`].
+//! sample sleep/active, latched through [`DetectParams`] so opening a run takes more stillness than
+//! holding one; runs are built, short runs merged, and (only when gravity is sparse) HR-vouched gaps
+//! bridged. Pure and deterministic. Feeds the gate loop in [`super::analyze`].
 
 use std::collections::HashMap;
 
@@ -12,7 +13,6 @@ use crate::resting_hr;
 
 const GRAVITY_STILL_THRESHOLD_G: f64 = 0.01;
 const STILL_WINDOW_MIN: i64 = 15;
-const STILL_FRACTION: f64 = 0.70;
 const MAX_GAP_MIN: i64 = 20;
 const MERGE_MIN: i64 = 15;
 const DEFAULT_INTERVAL_S: f64 = 60.0;
@@ -42,6 +42,30 @@ const HR_DENSE_SPACING_S: i64 = 600;
 const MIN_SLEEP_MIN: i64 = 60;
 const MAX_MAIN_SLEEP_SPAN_S: i64 = 16 * 60 * 60;
 const NIGHT_CONTINUATION_GAP_MIN: i64 = 90;
+
+/// The two stillness fractions [`classify_still`] switches a sleep run on and off at. Splitting them
+/// gives the spine hysteresis: a run needs `still_enter` to open and stays open until the rolling
+/// fraction drops below `still_exit`, so it cannot chatter around one boundary.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetectParams {
+    pub still_enter: f64,
+    pub still_exit: f64,
+}
+
+impl DetectParams {
+    /// The thresholds [`detect_sessions`] runs, and so the window every new session is cut on.
+    pub const SHIPPED: DetectParams = DetectParams { still_enter: 0.80, still_exit: 0.65 };
+
+    /// The single-threshold spine that wrote every already-stored session. Kept so a stored-versus-fresh
+    /// comparison stays attributable to one detector after the enter/exit split.
+    pub const PRE_HYSTERESIS: DetectParams = DetectParams { still_enter: 0.70, still_exit: 0.70 };
+}
+
+impl Default for DetectParams {
+    fn default() -> Self {
+        DetectParams::SHIPPED
+    }
+}
 
 /// A contiguous run of one class over `[start, end]` wall-clock unix seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,8 +141,9 @@ fn hr_sleep_band_across(a: i64, b: i64, hr: &[HrSample], baseline: Option<f64>) 
     mean <= baseline * HR_SLEEP_BAND_MULT
 }
 
-/// Per-sample sleep flags from a rolling fraction of "still" samples (prefix-summed to O(n)).
-pub(super) fn classify_still(grav: &[AccelSample], deltas: &[f64]) -> Vec<bool> {
+/// Per-sample sleep flags from a rolling fraction of "still" samples (prefix-summed to O(n)), latched
+/// through [`DetectParams`]: opening needs `still_enter`, closing needs a drop below `still_exit`.
+pub(super) fn classify_still(grav: &[AccelSample], deltas: &[f64], p: &DetectParams) -> Vec<bool> {
     let n = grav.len();
     if n < 2 {
         return vec![false; n];
@@ -130,11 +155,13 @@ pub(super) fn classify_still(grav: &[AccelSample], deltas: &[f64]) -> Vec<bool> 
         still_prefix[i + 1] = still_prefix[i] + i64::from(deltas[i] < GRAVITY_STILL_THRESHOLD_G);
     }
     let mut flags = Vec::with_capacity(n);
+    let mut in_run = false;
     for i in 0..n {
         let lo = i.saturating_sub(half);
         let hi = (i + half + 1).min(n);
-        let still = still_prefix[hi] - still_prefix[lo];
-        flags.push(still as f64 / (hi - lo) as f64 >= STILL_FRACTION);
+        let frac = (still_prefix[hi] - still_prefix[lo]) as f64 / (hi - lo) as f64;
+        in_run = if in_run { frac >= p.still_exit } else { frac >= p.still_enter };
+        flags.push(in_run);
     }
     flags
 }
@@ -454,21 +481,42 @@ pub(super) fn efficiency(start: i64, end: i64, stages: &[StageSegment]) -> f64 {
 
 /// One accepted in-bed span with its session resting HR (computed for the daytime guard, reused downstream).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct DetectedSpan {
+pub struct DetectedSpan {
     pub start: i64,
     pub end: i64,
     pub resting_hr: Option<i32>,
 }
 
-/// Build the stillness spine, then run the gate loop, returning accepted sleep spans in start order. The
-/// gate order and the cross-run continuation chain are load-bearing; a dropped run never re-anchors the chain.
-pub(super) fn detect_sessions(
+/// [`detect_sessions_with`] under [`DetectParams::SHIPPED`] — the path the app runs.
+pub fn detect_sessions(
     hr: &[HrSample],
     accel: &[AccelSample],
     tz_offset_s: i64,
     wrist_off: &[(i64, i64)],
     band_sleep_state: &[(i64, i32)],
     sleep_hr_baseline: Option<f64>,
+) -> Vec<DetectedSpan> {
+    detect_sessions_with(
+        hr,
+        accel,
+        tz_offset_s,
+        wrist_off,
+        band_sleep_state,
+        sleep_hr_baseline,
+        &DetectParams::SHIPPED,
+    )
+}
+
+/// Build the stillness spine, then run the gate loop, returning accepted sleep spans in start order. The
+/// gate order and the cross-run continuation chain are load-bearing; a dropped run never re-anchors the chain.
+pub fn detect_sessions_with(
+    hr: &[HrSample],
+    accel: &[AccelSample],
+    tz_offset_s: i64,
+    wrist_off: &[(i64, i64)],
+    band_sleep_state: &[(i64, i32)],
+    sleep_hr_baseline: Option<f64>,
+    params: &DetectParams,
 ) -> Vec<DetectedSpan> {
     let mut grav = accel.to_vec();
     grav.sort_by_key(|g| g.ts);
@@ -483,7 +531,7 @@ pub(super) fn detect_sessions(
     let baseline = hr_baseline(&hr_s);
     let sparse = is_gravity_sparse(&grav, &hr_s);
     let deltas = gravity_deltas(&grav);
-    let flags = classify_still(&grav, &deltas);
+    let flags = classify_still(&grav, &deltas, params);
     let runs = build_runs(&grav, &flags, sparse, &hr_s, baseline);
     let runs = merge_periods(&runs);
     let runs = bridge_sparse_sleep(&runs, sparse, &hr_s, baseline);
@@ -624,6 +672,29 @@ mod tests {
         let runs = build_runs(&grav, &flags, false, &[], None);
         assert_eq!(runs.len(), 3);
         assert!(runs[0].is_sleep && !runs[1].is_sleep && runs[2].is_sleep);
+    }
+
+    /// Gravity timestamps one minute apart, so the stillness window spans exactly 15 samples.
+    fn minute_grid(n: usize) -> Vec<AccelSample> {
+        (0..n as i64).map(|i| a(i * 60, 0.0, 0.0, 1.0)).collect()
+    }
+
+    #[test]
+    fn hysteresis_opens_on_enter_and_holds_down_to_exit() {
+        let n = 90usize;
+        let grav = minute_grid(n);
+        // Four moving samples per 15 -> every interior window reads a still fraction of 11/15 = 0.733,
+        // which sits between the two thresholds and so behaves differently opening and holding.
+        let mid = |i: usize| f64::from([0usize, 4, 8, 12].contains(&(i % 15)));
+        let approach: Vec<f64> =
+            (0..n).map(|i| if i < 30 { 1.0 } else if i < 60 { mid(i) } else { 0.0 }).collect();
+        let leave: Vec<f64> =
+            (0..n).map(|i| if i < 30 { 0.0 } else if i < 60 { mid(i) } else { 1.0 }).collect();
+        let asleep_mid = |d: &[f64], p: &DetectParams| classify_still(&grav, d, p)[45];
+
+        assert!(asleep_mid(&approach, &DetectParams::PRE_HYSTERESIS)); // one threshold: it opened a run
+        assert!(!asleep_mid(&approach, &DetectParams::SHIPPED)); // now too weak to open one
+        assert!(asleep_mid(&leave, &DetectParams::SHIPPED)); // but still strong enough to hold one open
     }
 
     #[test]
@@ -876,7 +947,7 @@ mod tests {
         let mut grav = still_gravity(start, 40 * 60);
         grav.extend(still_gravity(start + 40 * 60 + 30 * 60, 40 * 60)); // 30-min gap
         let deltas = gravity_deltas(&grav);
-        let flags = classify_still(&grav, &deltas);
+        let flags = classify_still(&grav, &deltas, &DetectParams::SHIPPED);
         assert!(build_runs(&grav, &flags, false, &[], None).len() >= 2);
     }
 
