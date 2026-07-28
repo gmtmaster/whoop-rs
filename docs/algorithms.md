@@ -116,21 +116,39 @@ targeting the habitual midsleep (circular mean over >= 14 days, else 03:30 local
 across the 30-220 bpm lag band, pick the fundamental, report bpm + confidence. Fills only seconds the strap
 banked no HR for; never overrides a stored HR.
 
-## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_analyze_raw`, `hrv_windowed_avg*`, `hrv_readiness`
+## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_clean_*`, `hrv_analyze_raw`, `hrv_windowed_*`, `hrv_rolling_rmssd`, `hrv_rr_coverage`, `hrv_readiness`
 
-`hrv.rs`, the `HrvReadiness` type.
+`hrv.rs`, the `HrvReadiness` type. Every HRV statistic the app shows is here; the app holds no second copy.
 ```
-range_filter: keep 300-2000 ms
+range_filter: keep 300-2000 ms;  clean_rr = range then Malik ectopic (|beat - local median| > 20%,
+              centred 5-beat window);  clean_counts reports input / ranged / clean, ungated
 rmssd            = sqrt(mean((rr[i+1] - rr[i])^2))          (Task Force 1996)
-rmssd_gap_aware  = split on gaps > 3 x median RR, RMSSD per gap-free segment (no splice, no interpolate)
+rmssd_plain      = the same with no artifact rejection;  pnn50_plain = % |dNN| > 50 ms, every pair
 sdnn             = sample SD of NN, ddof = 1
-analyze_raw      = range + Malik-ectopic clean -> {rmssd, sdnn, mean_nn, pnn50, n_input, n_clean};
-                   20-beat floor + optional spot rejected-fraction gate (the full HrvResult)
-windowed_avg_hrv = mean of per-5-min-bucket gap-aware RMSSD over the session (the stored avgHrv)
-windowed_avg_deep= same, buckets whose centre lands in a deep (N3) span only
+gap-aware        = clean, remembering each survivor's index. A successive difference counts only when the
+                   two beats were ADJACENT in the source, so a dropped beat never splices its neighbours.
+                   Divides by the contiguous-pair count, not n-1
+report seam      = the strap re-reports part of its previous window each second, so beat-time runs ahead
+                   of the clock. Contiguity also breaks at a report whose CUMULATIVE beat-time leads the
+                   wall clock by more than SEAM_SLACK_MS (2 s). Beats are grouped one run per second
+rmssd_gap_aware  = the above over one night's per-report (unix, rr) runs
+analyze_raw      = clean -> {rmssd, sdnn, mean_nn, pnn50, n_input, n_clean}; 20-beat floor + optional spot
+                   rejected-fraction gate (0.35). Flat: no report grouping, so no seam break
+windowed_buckets = per-5-min tumbling bucket: clean-beat count + gap-aware RMSSD
+windowed_avg_hrv = mean of those bucket RMSSDs over the session (the stored avgHrv)
+windowed_avg_deep= same, buckets whose centre lands in a deep (N3) span only. The DISPLAYED nightly HRV
+rolling_rmssd    = trailing-window rmssd_plain per surviving beat, optional emit stride (the day chart)
+rr_coverage      = sum(rr) / elapsed ms. Over ~1.0 is impossible: beats double-counted or reports overlap
+duplicate_beat_count  = rows repeating an earlier (ts, rr) EXACTLY. Byte-identical re-inserts only
+overlapping_report_count = reports re-covering time already covered. THIS is the mechanism behind a
+                   coverage over 1.0; the exact-duplicate count is not
 readiness        = 7-night mean of ln(RMSSD) vs a smallest-worthwhile-change band (long mean +/- 0.5 SD)
                    -> primed / normal / suppressed + overreaching watch
 ```
+Measured on 85 nights from 5 wearers: the seam rule moves nightly RMSSD by a median -14.1% and leaves a
+strap that does not overlap-report bit-identical. The deep window reads a further median -12.1% below the
+whole night and yields nothing on 2 of 85 nights. `SEAM_SLACK_MS` is flat from 0 to 60 s and bit-identical
+across 1000-4000 ms. Reproduce with the `hrv_seam` and `hrv_window` examples.
 
 ## 4. Resting HR  ·  FFI `session_resting_hr`, `daily_resting_hr`
 

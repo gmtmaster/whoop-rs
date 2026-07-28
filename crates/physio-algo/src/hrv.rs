@@ -20,19 +20,25 @@ const MIN_NIGHTS: usize = crate::calibration::RECOVERY_SCORE.unlock as usize;
 const CV_TREND_WINDOW: usize = 28;
 const LONG_SD_FLOOR: f64 = 1e-9;
 /// A physiologically plausible R-R interval (ms); values outside are dropped before cleaning.
-const RR_MIN_MS: u16 = 300;
-const RR_MAX_MS: u16 = 2000;
+pub const RR_MIN_MS: u16 = 300;
+pub const RR_MAX_MS: u16 = 2000;
 /// Width (s) of the tumbling window the app pools per-bucket RMSSD over for its stored session avgHrv.
 const HRV_WINDOW_SECS: u64 = 300;
 /// A beat-to-beat R-R change beyond this (ms) is an artifact (ectopic/missed beat), not real variability,
 /// so its squared difference is dropped from RMSSD — the standard HRV artifact-correction step.
 const MAX_BEAT_DELTA_MS: f64 = 200.0;
 /// Malik ectopic rejection: a beat deviating over this fraction from its local median is dropped.
-const ECTOPIC_THRESHOLD: f64 = 0.20;
+pub const ECTOPIC_THRESHOLD: f64 = 0.20;
 /// Half-width (beats) of the centred median window; a 5-beat window at radius 2.
-const ECTOPIC_WINDOW_RADIUS: usize = 2;
+pub const ECTOPIC_WINDOW_RADIUS: usize = 2;
 /// Minimum clean NN intervals before a full [`HrvReadiness::analyze_raw`] result is trustworthy.
 pub const MIN_BEATS: usize = 20;
+/// Rejected-fraction ceiling for a SPOT reading: over this share dropped, [`HrvReadiness::analyze_raw`]
+/// refuses even when [`MIN_BEATS`] survive. The nightly path passes `None` and skips the gate.
+pub const SPOT_MAX_REJECTED_FRACTION: f64 = 0.35;
+/// Trailing-window width (s) for [`rolling_rmssd`]: the shortest short-term recording the Task Force
+/// recognises, so a window holds enough beats without smoothing away within-night swings.
+pub const ROLLING_WINDOW_SECS: i64 = 300;
 /// A successive |ΔNN| above this (ms) counts toward pNN50.
 const PNN50_THRESHOLD_MS: f64 = 50.0;
 
@@ -65,6 +71,33 @@ pub struct HrvAnalysis {
     pub pnn50: Option<f64>,
     pub n_input: u32,
     pub n_clean: u32,
+}
+
+/// One tumbling HRV bucket: its start (unix s), the clean beats inside it, and its gap-aware RMSSD.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HrvBucket {
+    pub start: u32,
+    pub clean_beats: u32,
+    pub rmssd: Option<f64>,
+}
+
+/// Counts from one cleaning pass: the input beats, the survivors of the range filter, and the survivors
+/// of range + Malik ectopic. Ungated, so a trace can report them where `analyze_raw` reports zero.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HrvCleanCounts {
+    pub n_input: u32,
+    pub n_ranged: u32,
+    pub n_clean: u32,
+}
+
+/// Stage-by-stage survivor counts for one R-R series: input, after the range filter, after Malik ectopic.
+pub fn clean_counts(rr_ms: &[u16]) -> HrvCleanCounts {
+    let ranged = HrvReadiness::range_filter(rr_ms);
+    HrvCleanCounts {
+        n_input: rr_ms.len() as u32,
+        n_ranged: ranged.len() as u32,
+        n_clean: HrvReadiness::clean_rr(rr_ms).len() as u32,
+    }
 }
 
 pub struct HrvReadiness;
@@ -130,6 +163,12 @@ impl HrvReadiness {
         Self::rmssd_runs(std::iter::once(rr_ms))
     }
 
+    /// Plain pNN50 (% of successive |dNN| > 50 ms) over an already-clean NN series, every pair counted.
+    /// The formula alone, with no cleaning and no contiguity mask. `None` for < 2 values.
+    pub fn pnn50_plain(nn: &[u16]) -> Option<f64> {
+        pnn50_from_clean(nn, &vec![true; nn.len()])
+    }
+
     /// Plain RMSSD without artifact filtering. Accepts u16 values.
     pub fn rmssd_plain(rr_ms: &[u16]) -> Option<f64> {
         if rr_ms.len() < 2 { return None; }
@@ -170,8 +209,10 @@ impl HrvReadiness {
     pub fn rmssd_gap_aware(beats: &[(u32, Vec<u16>)]) -> Option<f64> {
         let mut order: Vec<&(u32, Vec<u16>)> = beats.iter().collect();
         order.sort_by_key(|(t, _)| *t);
+        let reports: Vec<(u32, &[u16])> = order.iter().map(|(t, rr)| (*t, rr.as_slice())).collect();
         let flat: Vec<u16> = order.iter().flat_map(|(_, rr)| rr.iter().copied()).collect();
-        let (nn, contiguous) = clean_rr_gap_aware(&flat);
+        let breaks = report_seam_breaks(&reports);
+        let (nn, contiguous) = clean_rr_gap_aware_breaking(&flat, &breaks);
         rmssd_from_clean(&nn, &contiguous)
     }
 
@@ -195,31 +236,52 @@ impl HrvReadiness {
         })
     }
 
+    /// Every `HRV_WINDOW_SECS` bucket tumbling from `start` to `end`, each with its clean-beat count and
+    /// gap-aware RMSSD (`None` under two clean beats or with no surviving contiguous pair). The per-bucket
+    /// breakdown behind [windowed_avg_hrv]; a caller that tags buckets by sleep stage reads this.
+    pub fn windowed_buckets(start: u32, end: u32, beats: &[(u32, u16)]) -> Vec<HrvBucket> {
+        let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
+        if seg.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut t = start as u64;
+        while t < end as u64 {
+            let hi = t + HRV_WINDOW_SECS;
+            // Beats sharing a second came from one report. Group them so a report that re-reports
+            // time the previous one already covered breaks contiguity at its first beat.
+            let mut reports: Vec<(u32, Vec<u16>)> = Vec::new();
+            for &(ts, rr) in seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi) {
+                match reports.last_mut() {
+                    Some((rt, v)) if *rt == ts => v.push(rr),
+                    _ => reports.push((ts, vec![rr])),
+                }
+            }
+            let bucket: Vec<u16> = reports.iter().flat_map(|(_, rr)| rr.iter().copied()).collect();
+            let as_slices: Vec<(u32, &[u16])> = reports.iter().map(|(t, rr)| (*t, rr.as_slice())).collect();
+            let breaks = report_seam_breaks(&as_slices);
+            let (nn, contiguous) = clean_rr_gap_aware_breaking(&bucket, &breaks);
+            out.push(HrvBucket {
+                start: t as u32,
+                clean_beats: nn.len() as u32,
+                rmssd: if nn.len() >= 2 { rmssd_from_clean(&nn, &contiguous) } else { None },
+            });
+            t = hi;
+        }
+        out
+    }
+
     /// Common bucket-loop body shared by [windowed_avg_hrv] and [windowed_avg_hrv_deep].
-    /// The `bucket_filter` predicate gates each bucket's centre; it is called once per bucket.
+    /// The `bucket_filter` predicate gates each bucket's start; it is called once per bucket.
     fn windowed_avg_hrv_inner<F: Fn(u64) -> bool>(
         start: u32, end: u32, beats: &[(u32, u16)], bucket_filter: F,
     ) -> Option<f64> {
-        let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
-        if seg.is_empty() {
-            return None;
-        }
-        let (start, end) = (start as u64, end as u64);
         let (mut sum, mut n) = (0.0f64, 0usize);
-        let mut t = start;
-        while t < end {
-            let hi = t + HRV_WINDOW_SECS;
-            if bucket_filter(t) {
-                let bucket: Vec<u16> =
-                    seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi).map(|&(_, rr)| rr).collect();
-                let (nn, contiguous) = clean_rr_gap_aware(&bucket);
-                let val = if nn.len() >= 2 { rmssd_from_clean(&nn, &contiguous) } else { None };
-                if let Some(v) = val {
-                    sum += v;
-                    n += 1;
-                }
+        for b in Self::windowed_buckets(start, end, beats) {
+            if let (true, Some(v)) = (bucket_filter(b.start as u64), b.rmssd) {
+                sum += v;
+                n += 1;
             }
-            t = hi;
         }
         (n > 0).then(|| sum / n as f64)
     }
@@ -322,6 +384,28 @@ fn tail(xs: &[f64], n: usize) -> &[f64] {
 /// (no beat dropped between them). A splice from a dropped beat is where a successive-difference metric
 /// must skip. Index 0 is always false.
 fn clean_rr_gap_aware(rr: &[u16]) -> (Vec<u16>, Vec<bool>) {
+    clean_rr_gap_aware_breaking(rr, &[])
+}
+
+/// As [`clean_rr_gap_aware`], with `breaks[i]` marking a beat that does not follow beat `i-1` in time.
+/// The strap re-reports part of its previous window each second, so a report's first beat is not the
+/// successor of the last beat of the report before it. An empty mask means no breaks.
+fn clean_rr_gap_aware_breaking(rr: &[u16], breaks: &[bool]) -> (Vec<u16>, Vec<bool>) {
+    let (kept_orig, kept_val) = clean_rr_kept(rr);
+    let contiguous: Vec<bool> = (0..kept_val.len())
+        .map(|i| {
+            i > 0
+                && kept_orig[i] == kept_orig[i - 1] + 1
+                && !breaks.get(kept_orig[i]).copied().unwrap_or(false)
+        })
+        .collect();
+    (kept_val, contiguous)
+}
+
+/// Range filter then Malik ectopic rejection, returning each survivor's index in the INPUT alongside its
+/// value. The one cleaning pass; [`clean_rr_gap_aware_breaking`] turns the indices into a contiguity mask
+/// and [`rolling_rmssd`] uses them to keep each survivor paired with its timestamp.
+fn clean_rr_kept(rr: &[u16]) -> (Vec<usize>, Vec<u16>) {
     let mut ranged_idx: Vec<usize> = Vec::new();
     let mut ranged_val: Vec<u16> = Vec::new();
     for (i, &v) in rr.iter().enumerate() {
@@ -330,35 +414,143 @@ fn clean_rr_gap_aware(rr: &[u16]) -> (Vec<u16>, Vec<bool>) {
             ranged_val.push(v);
         }
     }
-    let (mut kept_orig, mut kept_val): (Vec<usize>, Vec<u16>) = (Vec::new(), Vec::new());
     if ranged_val.len() <= ECTOPIC_WINDOW_RADIUS {
-        (kept_orig, kept_val) = (ranged_idx, ranged_val);
-    } else {
-        for i in 0..ranged_val.len() {
-            let lo = i.saturating_sub(ECTOPIC_WINDOW_RADIUS);
-            let hi = (i + ECTOPIC_WINDOW_RADIUS).min(ranged_val.len() - 1);
-            let mut neighbours: Vec<f64> = Vec::with_capacity(hi - lo);
-            for (j, &v) in ranged_val.iter().enumerate().take(hi + 1).skip(lo) {
-                if j != i {
-                    neighbours.push(v as f64);
-                }
-            }
-            let keep = if neighbours.len() < 2 {
-                true
-            } else {
-                let med = median(&neighbours);
-                med <= 0.0 || (ranged_val[i] as f64 - med).abs() / med <= ECTOPIC_THRESHOLD
-            };
-            if keep {
-                kept_orig.push(ranged_idx[i]);
-                kept_val.push(ranged_val[i]);
+        return (ranged_idx, ranged_val);
+    }
+    let (mut kept_orig, mut kept_val): (Vec<usize>, Vec<u16>) = (Vec::new(), Vec::new());
+    for i in 0..ranged_val.len() {
+        let lo = i.saturating_sub(ECTOPIC_WINDOW_RADIUS);
+        let hi = (i + ECTOPIC_WINDOW_RADIUS).min(ranged_val.len() - 1);
+        let mut neighbours: Vec<f64> = Vec::with_capacity(hi - lo);
+        for (j, &v) in ranged_val.iter().enumerate().take(hi + 1).skip(lo) {
+            if j != i {
+                neighbours.push(v as f64);
             }
         }
+        let keep = if neighbours.len() < 2 {
+            true
+        } else {
+            let med = median(&neighbours);
+            med <= 0.0 || (ranged_val[i] as f64 - med).abs() / med <= ECTOPIC_THRESHOLD
+        };
+        if keep {
+            kept_orig.push(ranged_idx[i]);
+            kept_val.push(ranged_val[i]);
+        }
     }
-    let contiguous: Vec<bool> = (0..kept_val.len())
-        .map(|i| i > 0 && kept_orig[i] == kept_orig[i - 1] + 1)
-        .collect();
-    (kept_val, contiguous)
+    (kept_orig, kept_val)
+}
+
+/// Rolling trailing-window RMSSD (ms) over a timestamped R-R series, the trace a within-night chart
+/// plots. Cleans the WHOLE series once so an artifact never enters a window, then for each surviving beat
+/// emits `(ts, rmssd_plain)` over the beats in `(ts - window_s, ts]` that hold >= `min_beats` survivors.
+/// `step_s > 0` thins to one point per that many seconds of advance, measured against the last EMITTED
+/// point. Empty below `min_beats` inputs or a non-positive window. Input need not be sorted.
+pub fn rolling_rmssd(beats: &[(i64, u16)], window_s: i64, step_s: i64, min_beats: usize) -> Vec<(i64, f64)> {
+    if beats.len() < min_beats || window_s <= 0 {
+        return Vec::new();
+    }
+    let mut sorted: Vec<(i64, u16)> = beats.to_vec();
+    sorted.sort_by_key(|&(t, _)| t);
+    let vals: Vec<u16> = sorted.iter().map(|&(_, v)| v).collect();
+    let (kept_idx, kept_val) = clean_rr_kept(&vals);
+    if kept_val.len() < 2 {
+        return Vec::new();
+    }
+    let kept: Vec<(i64, u16)> = kept_idx.iter().map(|&i| (sorted[i].0, vals[i])).collect();
+    let mut out: Vec<(i64, f64)> = Vec::with_capacity(kept.len());
+    let mut lo = 0usize;
+    let mut last_emit: Option<i64> = None;
+    for hi in 0..kept.len() {
+        let t_end = kept[hi].0;
+        let t_start = t_end - window_s;
+        while lo < hi && kept[lo].0 <= t_start {
+            lo += 1;
+        }
+        if let Some(last) = last_emit {
+            if step_s > 0 && t_end - last < step_s {
+                continue;
+            }
+        }
+        let span: Vec<u16> = kept[lo..=hi].iter().map(|&(_, v)| v).collect();
+        if span.len() < min_beats {
+            continue;
+        }
+        if let Some(r) = HrvReadiness::rmssd_plain(&span) {
+            out.push((t_end, r));
+            last_emit = Some(t_end);
+        }
+    }
+    out
+}
+
+/// Total beat-time (sum of R-R, ms) over the wall-clock span of the same beats. Above ~1.0 is physically
+/// impossible: more beat-time than elapsed time means beats are double-counted or reports overlap.
+/// `0.0` for fewer than two timestamps, no intervals, or a non-positive span.
+pub fn rr_coverage(ts_sec: &[i64], rr_ms: &[f64]) -> f64 {
+    if ts_sec.len() < 2 || rr_ms.is_empty() {
+        return 0.0;
+    }
+    let (lo, hi) = (ts_sec.iter().min(), ts_sec.iter().max());
+    let (Some(&lo), Some(&hi)) = (lo, hi) else { return 0.0 };
+    let span_ms = (hi - lo) as f64 * 1000.0;
+    if span_ms <= 0.0 {
+        return 0.0;
+    }
+    rr_ms.iter().sum::<f64>() / span_ms
+}
+
+/// Rows that repeat an earlier `(ts, rr_ms)` exactly: `total - distinct(ts, rr_ms)`. Measures byte-identical
+/// re-inserts only. It cannot see the overlap that [`overlapping_report_count`] counts, where two reports
+/// cover the same seconds with DIFFERENT values, so a low count here does not mean [`rr_coverage`] is sound.
+pub fn duplicate_beat_count(ts_sec: &[i64], rr_ms: &[f64]) -> u32 {
+    let n = ts_sec.len().min(rr_ms.len());
+    let mut seen: std::collections::HashSet<(i64, u64)> = std::collections::HashSet::new();
+    let mut dups = 0u32;
+    for i in 0..n {
+        if !seen.insert((ts_sec[i], rr_ms[i].to_bits())) {
+            dups += 1;
+        }
+    }
+    dups
+}
+
+/// `(overlapping, total)` per-second reports, where an overlapping report's first beat re-reports time
+/// earlier reports already covered. This is the mechanism behind an [`rr_coverage`] above 1.0; the same
+/// test drives the contiguity break in [`HrvReadiness::rmssd_gap_aware`].
+pub fn overlapping_report_count(reports: &[(u32, Vec<u16>)]) -> (u32, u32) {
+    let as_slices: Vec<(u32, &[u16])> = reports.iter().map(|(t, rr)| (*t, rr.as_slice())).collect();
+    let breaks = report_seam_breaks(&as_slices);
+    let mut flat = 0usize;
+    let mut overlapping = 0u32;
+    for (_, rr) in reports {
+        if !rr.is_empty() && breaks.get(flat).copied().unwrap_or(false) {
+            overlapping += 1;
+        }
+        flat += rr.len();
+    }
+    (overlapping, reports.len() as u32)
+}
+
+/// Marks each report's first beat that re-reports time already accounted for. The strap emits the last
+/// few beats every second, so beat-time runs ahead of the clock; a report starting past the wall time is
+/// repeating beats and its first difference is not a real successive pair. Whole-second timestamps make
+/// a per-report test too noisy, so the comparison is cumulative.
+fn report_seam_breaks(reports: &[(u32, &[u16])]) -> Vec<bool> {
+    // Report times are whole seconds, so beat-time sits up to a second ahead of the clock without any
+    // re-reporting. Only a lead beyond that is the strap repeating itself.
+    const SEAM_SLACK_MS: u64 = 2_000;
+    let mut out = Vec::new();
+    let Some(&(t0, _)) = reports.first() else { return out };
+    let mut covered_ms: u64 = 0;
+    for &(t, rr) in reports {
+        let elapsed_ms = u64::from(t.saturating_sub(t0)) * 1000;
+        for (j, _) in rr.iter().enumerate() {
+            out.push(j == 0 && covered_ms > elapsed_ms + SEAM_SLACK_MS);
+        }
+        covered_ms += rr.iter().map(|&v| u64::from(v)).sum::<u64>();
+    }
+    out
 }
 
 /// OLS slope of the rolling 7-night coefficient-of-variation series over the trailing `CV_TREND_WINDOW`.
@@ -412,6 +604,57 @@ mod tests {
         let series = HrvReadiness::nightly_rmssd(&hist);
         assert_eq!(series.len(), 2);
         assert!(series.iter().all(|v| v.is_some()));
+    }
+
+    /// A stream shaped like the strap's: one report a second, each carrying more beat-time than a second,
+    /// so beat-time runs ahead of the clock and the later reports are re-reporting.
+    fn overlapping_stream() -> Vec<(u32, Vec<u16>)> {
+        (1u32..=12).map(|t| (t, vec![830u16, 830])).collect()
+    }
+
+    #[test]
+    fn rmssd_gap_aware_skips_the_seam_once_beat_time_runs_ahead() {
+        // 3.56 s of beats a second: the lead clears the slack immediately, so every seam is dropped and
+        // only the 60 ms in-report steps count. Flattened, the -180 ms seams would dominate.
+        let reports: Vec<(u32, Vec<u16>)> =
+            (1u32..=12).map(|t| (t, vec![800u16, 860, 920, 980])).collect();
+        let got = HrvReadiness::rmssd_gap_aware(&reports).unwrap();
+        assert!((got - 60.0).abs() < 1e-9, "got {got}");
+    }
+
+    #[test]
+    fn rmssd_gap_aware_keeps_seams_when_beat_time_tracks_the_clock() {
+        // One beat a second at ~1000 ms: nothing is re-reported, so no seam may be dropped and every
+        // successive pair counts.
+        let reports: Vec<(u32, Vec<u16>)> =
+            (1u32..=12).map(|t| (t, vec![if t % 2 == 0 { 1020u16 } else { 980 }])).collect();
+        let got = HrvReadiness::rmssd_gap_aware(&reports).unwrap();
+        assert!((got - 40.0).abs() < 1e-9, "got {got}");
+    }
+
+    #[test]
+    fn report_seam_breaks_only_after_the_lead_exceeds_the_slack() {
+        let stream = overlapping_stream();
+        let refs: Vec<(u32, &[u16])> = stream.iter().map(|(t, v)| (*t, v.as_slice())).collect();
+        let breaks = report_seam_breaks(&refs);
+        // 1660 ms a second against 1000: the lead passes the 2 s slack partway in, never before.
+        assert!(!breaks[0], "the first report can never be a re-report");
+        assert!(breaks.iter().any(|&b| b), "a sustained overrun must eventually break");
+        let first = breaks.iter().position(|&b| b).unwrap();
+        assert!(first >= 6, "broke too early at index {first}");
+    }
+
+    #[test]
+    fn windowed_avg_hrv_skips_the_seam_within_a_bucket() {
+        // Same overrunning shape, inside one 5-min bucket.
+        let mut beats: Vec<(u32, u16)> = Vec::new();
+        for t in 10u32..=40 {
+            for v in [800u16, 860, 920, 980] {
+                beats.push((t, v));
+            }
+        }
+        let got = HrvReadiness::windowed_avg_hrv(10, 41, &beats).unwrap();
+        assert!((got - 60.0).abs() < 1e-9, "got {got}");
     }
 
     #[test]
@@ -541,6 +784,103 @@ mod tests {
         let beats: Vec<(u32, u16)> = vec![(100, 800), (100, 810)];
         let got = HrvReadiness::windowed_avg_hrv_deep(100, 400, &beats, &[]);
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn pnn50_plain_counts_every_pair_over_the_threshold() {
+        // Alternating 700/800: every |d| = 100 > 50, so 100 %. A 10 ms alternation clears none.
+        assert_eq!(HrvReadiness::pnn50_plain(&alternating(20, 700, 800)), Some(100.0));
+        assert_eq!(HrvReadiness::pnn50_plain(&alternating(20, 800, 810)), Some(0.0));
+        // Half the pairs over the threshold.
+        let two_of_three = HrvReadiness::pnn50_plain(&[800, 900, 890, 990]).unwrap();
+        assert!((two_of_three - 200.0 / 3.0).abs() < 1e-9, "got {two_of_three}");
+        assert_eq!(HrvReadiness::pnn50_plain(&[800]), None);
+    }
+
+    #[test]
+    fn rolling_rmssd_tracks_the_alternation_not_the_beat_period() {
+        // ±10 ms alternation on a ~800 ms period: the curve settles near 10, nowhere near 800.
+        let series: Vec<(i64, u16)> =
+            (0..30).map(|i| (i, if i % 2 == 0 { 800u16 } else { 810 })).collect();
+        let out = rolling_rmssd(&series, 60, 0, 8);
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|&(_, v)| v < 100.0));
+        assert!((out.last().unwrap().1 - 10.0).abs() < 3.0, "got {:?}", out.last());
+    }
+
+    #[test]
+    fn rolling_rmssd_emits_from_the_first_full_window_and_thins_on_a_stride() {
+        // One point per beat once the trailing window holds min_beats survivors: ts 100..109 → 107..109.
+        let steady: Vec<(i64, u16)> = (0..10).map(|i| (100 + i, 800u16)).collect();
+        let out = rolling_rmssd(&steady, 300, 0, 8);
+        assert_eq!((out.first().unwrap().0, out.last().unwrap().0), (107, 109));
+        // A stride emits fewer points, each at least step_s after the previous EMITTED one.
+        let long: Vec<(i64, u16)> =
+            (0..60).map(|i| (1000 + i, if i % 2 == 0 { 800u16 } else { 810 })).collect();
+        let dense = rolling_rmssd(&long, 30, 0, 8);
+        let thinned = rolling_rmssd(&long, 30, 10, 8);
+        assert!(thinned.len() < dense.len());
+        assert!(thinned.windows(2).all(|w| w[1].0 - w[0].0 >= 10));
+    }
+
+    #[test]
+    fn rolling_rmssd_cleans_artifacts_and_refuses_a_degenerate_call() {
+        // A 50 ms beat is out of range: it must never reach a window, so a steady series stays flat.
+        let mut series: Vec<(i64, u16)> = (0..20).map(|i| (i, 800u16)).collect();
+        series.push((100, 50));
+        assert!(rolling_rmssd(&series, 300, 0, 8).iter().all(|&(_, v)| v < 5.0));
+        // Two clusters 1000 s apart: a 60 s window never spans both, so no cross-cluster jump appears.
+        let mut split: Vec<(i64, u16)> = (0..25).map(|i| (i, 800u16)).collect();
+        split.extend((0..25).map(|i| (1000 + i, 820u16)));
+        let out = rolling_rmssd(&split, 60, 0, 8);
+        assert!(!out.is_empty() && out.iter().all(|&(_, v)| v < 30.0));
+        // Too few beats, and a non-positive window, both yield nothing rather than a fabricated point.
+        assert!(rolling_rmssd(&[], 300, 0, 8).is_empty());
+        assert!(rolling_rmssd(&[(0, 800)], 300, 0, 8).is_empty());
+        assert!(rolling_rmssd(&steady_ten(), 0, 0, 8).is_empty());
+    }
+
+    fn steady_ten() -> Vec<(i64, u16)> {
+        (0..10).map(|i| (i, 800u16)).collect()
+    }
+
+    #[test]
+    fn rr_coverage_is_beat_time_over_elapsed_time() {
+        // 5 × 1000 ms of beat-time across a 4 s span → 1.25.
+        let ts: Vec<i64> = vec![100, 101, 102, 103, 104];
+        assert!((rr_coverage(&ts, &[1000.0; 5]) - 1.25).abs() < 1e-9);
+        // Every beat stored twice on the same second: 6000 ms over 2 s → 3.0, the impossible-value signal.
+        let dup: Vec<i64> = vec![100, 100, 101, 101, 102, 102];
+        assert!((rr_coverage(&dup, &[1000.0; 6]) - 3.0).abs() < 1e-9);
+        assert_eq!(rr_coverage(&[], &[]), 0.0);
+        assert_eq!(rr_coverage(&[100], &[1000.0]), 0.0);
+        assert_eq!(rr_coverage(&[100, 100], &[1000.0, 1000.0]), 0.0); // zero span
+    }
+
+    #[test]
+    fn duplicate_beat_count_sees_exact_repeats_only() {
+        assert_eq!(duplicate_beat_count(&[100, 101, 102], &[1000.0, 1010.0, 1020.0]), 0);
+        assert_eq!(duplicate_beat_count(&[100, 100, 101], &[1000.0, 1000.0, 1010.0]), 1);
+        assert_eq!(duplicate_beat_count(&[100, 100, 100], &[1000.0; 3]), 2);
+        // Same second, different value: distinct beats, so the exact-repeat counter sees nothing --
+        // which is exactly the overlap it cannot detect.
+        assert_eq!(duplicate_beat_count(&[100, 100], &[1000.0, 1010.0]), 0);
+    }
+
+    #[test]
+    fn overlapping_report_count_sees_the_overlap_duplicates_miss() {
+        // 3.56 s of beat-time a second: reports re-report, and every value is distinct.
+        let over: Vec<(u32, Vec<u16>)> = (1u32..=12).map(|t| (t, vec![800u16, 860, 920, 980])).collect();
+        let (overlapping, total) = overlapping_report_count(&over);
+        assert_eq!(total, 12);
+        assert!(overlapping > 0, "a sustained overrun must be counted");
+        let ts: Vec<i64> = over.iter().flat_map(|(t, rr)| rr.iter().map(|_| *t as i64)).collect();
+        let ms: Vec<f64> = over.iter().flat_map(|(_, rr)| rr.iter().map(|&v| v as f64)).collect();
+        assert_eq!(duplicate_beat_count(&ts, &ms), 0, "no exact repeats, yet coverage is over 1");
+        assert!(rr_coverage(&ts, &ms) > 1.0);
+        // One beat a second at ~1000 ms: nothing is re-reported, so nothing is flagged.
+        let tracking: Vec<(u32, Vec<u16>)> = (1u32..=12).map(|t| (t, vec![1000u16])).collect();
+        assert_eq!(overlapping_report_count(&tracking), (0, 12));
     }
 
     #[test]
