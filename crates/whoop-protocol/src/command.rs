@@ -28,6 +28,9 @@ pub const RUN_HAPTICS_PATTERN: u8 = 79;
 pub const GET_ALL_HAPTICS_PATTERN: u8 = 80;
 pub const START_RAW_DATA: u8 = 81;
 pub const STOP_RAW_DATA: u8 = 82;
+pub const GET_BODY_LOCATION_AND_STATUS: u8 = 84;
+/// Raw optical collection on/off, payload `[revision, state]`. Session-scoped, writes no flash config.
+pub const SEND_OPTICAL_DATA: u8 = 107;
 pub const SELECT_WRIST: u8 = 123;
 pub const GET_EXTENDED_BATTERY_INFO: u8 = 98;
 pub const RESET_FUEL_GAUGE: u8 = 99;

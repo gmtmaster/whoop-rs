@@ -211,20 +211,23 @@ impl<T: BleTransport> WhoopClient<T> {
         Ok(out)
     }
 
-    /// Enable R22 + the raw-data feature flag, start the raw AFE stream, and kick a history backfill
-    /// (type-43 rides that window) — capturing every frame for `secs`, then stop the stream. No ACK, so
-    /// nothing is trimmed. Opens the notify stream before START_RAW (race fix).
+    /// Switch the strap's optical collection on, capture every frame for `secs`, then switch it back off
+    /// and kick a history backfill so the buffers it banked come across. No ACK, so nothing is trimmed.
+    /// Opens the notify stream before the switch (race fix).
+    ///
+    /// The deep buffers ride this one command: the strap answers by enabling its on-demand R20 request
+    /// and an optical collection source, then emits v20 (25 Hz, 6 optical channels) and v21 (100 Hz IMU)
+    /// 1:1 — mostly banked as HISTORICAL_DATA, some live as REALTIME_RAW_DATA. Nothing persists, so the
+    /// off write in `optical_collection` fully reverses it.
     pub async fn raw_stream<F: FnMut(Frame)>(&mut self, secs: u64, on_frame: F) -> Result<(), Error> {
-        self.enable_r22().await?;
-        let flag = config::feature_frame(self.next_seq(), &config::Flag { name: "enable_raw_data_w_ecg", value: b'2' });
-        let _ = self.write_cmd(&flag).await;
         let notifications = self.transport.notifications().await?;
-        self.send_raw(command::START_RAW_DATA, &[]).await?;
+        self.optical_collection(true).await?;
         let cmd_write = uuids::characteristic(self.family, Channel::CmdWrite);
         let mut offload = Offload::new(self.family);
         let _ = self.transport.write(cmd_write, &offload.start_frame(), true).await;
         let result = self.collect_frames(notifications, secs, on_frame).await;
-        let _ = self.send_raw(command::STOP_RAW_DATA, &[]).await;
+        // Leave the strap as we found it — collection costs battery and fills the strap's backlog.
+        let _ = self.optical_collection(false).await;
         result
     }
 
@@ -302,6 +305,24 @@ impl<T: BleTransport> WhoopClient<T> {
     /// Warm-reboot the strap (opcode 29; stored data kept). Caller confirms; never automatic.
     pub async fn reboot(&self) -> Result<(), Error> {
         let frame = framing::command(self.family, self.next_seq(), command::REBOOT_STRAP, &[]);
+        self.write_cmd(&frame).await
+    }
+
+    /// Switch the strap's raw optical collection on or off (opcode 107, payload `[revision, state]`).
+    /// Session-scoped: it writes no persistent config, and the off form reverses it in full. While on,
+    /// the strap produces the v20/v21 deep buffers; leaving it on costs battery and grows the backlog,
+    /// so every caller pairs it with the off write.
+    pub async fn optical_collection(&self, on: bool) -> Result<(), Error> {
+        self.send_raw(command::SEND_OPTICAL_DATA, &[0x01, u8::from(on)]).await
+    }
+
+    /// Tell the strap which wrist it is worn on (opcode 123, payload `[revision, 0 left / 1 right]`).
+    /// A persistent device-config write, so it stays out of the blind path and lives here; the caller
+    /// confirms. The payload shape is inferred from the firmware's revision + wrist-value checks, so a
+    /// strap that rejects it answers with a result code rather than changing anything.
+    pub async fn select_wrist(&self, right: bool) -> Result<(), Error> {
+        let payload = [0x01, u8::from(right)];
+        let frame = framing::command(self.family, self.next_seq(), command::SELECT_WRIST, &payload);
         self.write_cmd(&frame).await
     }
 
@@ -525,6 +546,52 @@ mod tests {
         let writes = handle.writes();
         assert_eq!(framing::decode(Family::Gen5, &writes[0].1).unwrap().cmd(), command::RUN_HAPTIC_PATTERN_MAVERICK);
         assert_eq!(framing::decode(Family::Gen5, &writes[1].1).unwrap().cmd(), command::REBOOT_STRAP);
+    }
+
+    /// Wrist-select is FORBIDDEN on the blind path (persistent config) yet reachable through its own
+    /// method, and the side rides the second payload byte.
+    #[tokio::test]
+    async fn select_wrist_is_gated_to_its_own_method() {
+        let mock = MockTransport::new(Vec::new());
+        let handle = mock.clone();
+        let client = WhoopClient::new(mock, Family::Gen5);
+
+        assert!(client.send_raw(command::SELECT_WRIST, &[0x01, 1]).await.is_err());
+        client.select_wrist(true).await.unwrap();
+        client.select_wrist(false).await.unwrap();
+
+        let writes = handle.writes();
+        assert_eq!(writes.len(), 2);
+        let sent = |i: usize| {
+            let f = framing::decode(Family::Gen5, &writes[i].1).unwrap();
+            (f.cmd(), f.payload()[1])
+        };
+        assert_eq!(sent(0), (command::SELECT_WRIST, 1));
+        assert_eq!(sent(1), (command::SELECT_WRIST, 0));
+    }
+
+    /// The capture switches optical collection on, then off, and writes no persistent config on the way.
+    #[tokio::test]
+    async fn raw_stream_toggles_optical_collection_without_persistent_writes() {
+        let mock = MockTransport::new(Vec::new());
+        let handle = mock.clone();
+        let mut client = WhoopClient::new(mock, Family::Gen5);
+        client.raw_stream(0, |_| {}).await.unwrap();
+
+        let sent: Vec<(u8, Vec<u8>)> = handle
+            .writes()
+            .iter()
+            .filter_map(|(_, bytes)| framing::decode(Family::Gen5, bytes).ok())
+            .map(|f| (f.cmd(), f.payload().to_vec()))
+            .collect();
+
+        let optical: Vec<u8> =
+            sent.iter().filter(|(c, _)| *c == command::SEND_OPTICAL_DATA).map(|(_, p)| p[1]).collect();
+        assert_eq!(optical, vec![0x01, 0x00], "on at the start, off at the end");
+        assert!(
+            !sent.iter().any(|(c, _)| matches!(*c, command::SET_CONFIG | command::SET_DEVICE_CONFIG)),
+            "a capture must not write flash config"
+        );
     }
 
     #[tokio::test]

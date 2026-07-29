@@ -12,7 +12,7 @@ use clap::Parser;
 use ble_btleplug::{scan_whoops, BtleplugTransport};
 use whoop_client::{capture_line, WhoopClient};
 use whoop_protocol::bytes::to_hex;
-use whoop_protocol::{Family, Record};
+use whoop_protocol::{command, response, Family, Record};
 
 mod cli;
 mod report;
@@ -45,6 +45,17 @@ async fn connect(cli: &Cli) -> Result<WhoopClient<BtleplugTransport>> {
     let mut client = make_client(cli);
     client.connect_and_bond().await?;
     Ok(client)
+}
+
+/// Read GET_BODY_LOCATION_AND_STATUS and print the strap's own wear block. The location/status codes
+/// are unmapped, so the raw bytes are what a wrist write is judged against.
+async fn print_body_location(client: &mut WhoopClient<BtleplugTransport>, when: &str) -> Result<()> {
+    let frames = client.probe(command::GET_BODY_LOCATION_AND_STATUS, &[0x00], 2).await?;
+    match frames.iter().find_map(response::body_location) {
+        Some(b) => println!("body location ({when}): sub={} location={} status={}", b.sub, b.location, b.status),
+        None => println!("body location ({when}): no reply in {} frames", frames.len()),
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -161,6 +172,22 @@ async fn main() -> Result<()> {
                 println!("  {name}: {n}");
             }
             println!("saved to {}", out.display());
+            client.disconnect().await.ok();
+        }
+        Cmd::Wrist { set } => {
+            let side = match set.as_deref() {
+                None => None,
+                Some("left") => Some(false),
+                Some("right") => Some(true),
+                Some(other) => anyhow::bail!("wrist must be left or right, got {other}"),
+            };
+            let mut client = connect(&cli).await?;
+            print_body_location(&mut client, "before").await?;
+            if let Some(right) = side {
+                client.select_wrist(right).await?;
+                println!("sent SELECT_WRIST {}", if right { "right" } else { "left" });
+                print_body_location(&mut client, "after").await?;
+            }
             client.disconnect().await.ok();
         }
         Cmd::R22on => {

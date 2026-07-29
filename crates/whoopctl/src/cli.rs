@@ -81,12 +81,18 @@ pub(crate) enum Cmd {
     /// Connect, bond, read history (keep-only, never trims), and compute derived metrics: SpO2 (4.0
     /// paired red/IR, or the 5.0/MG v26 channel ranking) and HRV-readiness from the R-R.
     Metrics,
-    /// Enable R22, start the raw AFE stream, and capture type-43 REALTIME_RAW_DATA frames (SpO2 red/IR hunt).
+    /// Switch optical collection on and capture the v20/v21 deep buffers it produces, then switch it off.
     Raw {
         #[arg(long, default_value_t = 20)]
         secs: u64,
         #[arg(long, default_value = "raw-stream.jsonl")]
         out: PathBuf,
+    },
+    /// Read the strap's body-location/status block, and with `--set left|right` write the wrist first.
+    Wrist {
+        /// Which wrist the strap is worn on. Omit to read only.
+        #[arg(long)]
+        set: Option<String>,
     },
     /// Enable the R22 deep-data streams (16 SET_CONFIG flags; reversible).
     R22on,

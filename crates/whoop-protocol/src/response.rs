@@ -103,6 +103,26 @@ pub fn resp_status(f: &Frame) -> (u8, Option<ResultCode>) {
     (f.cmd(), result)
 }
 
+/// The strap's own wear state from a GET_BODY_LOCATION_AND_STATUS reply: the subcommand echo, the
+/// body-location code (the wrist the strap believes it is on) and a status byte. Kept out of
+/// [`CommandResponse`] so the FFI surface is unchanged; the codes themselves are unmapped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BodyLocation {
+    pub sub: u8,
+    pub location: u8,
+    pub status: u8,
+}
+
+/// Read a GET_BODY_LOCATION_AND_STATUS reply. Payload-relative bytes 2/3/4; `None` when the frame
+/// answers a different command or is too short.
+pub fn body_location(f: &Frame) -> Option<BodyLocation> {
+    if f.cmd() != command::GET_BODY_LOCATION_AND_STATUS {
+        return None;
+    }
+    let p = f.payload();
+    Some(BodyLocation { sub: u8_at(p, 2)?, location: u8_at(p, 3)?, status: u8_at(p, 4)? })
+}
+
 pub fn decode(f: &Frame) -> Option<CommandResponse> {
     let p = f.payload();
     let cmd = f.cmd();
