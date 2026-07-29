@@ -128,9 +128,13 @@ sdnn             = sample SD of NN, ddof = 1
 gap-aware        = clean, remembering each survivor's index. A successive difference counts only when the
                    two beats were ADJACENT in the source, so a dropped beat never splices its neighbours.
                    Divides by the contiguous-pair count, not n-1
-report seam      = the strap re-reports part of its previous window each second, so beat-time runs ahead
-                   of the clock. Contiguity also breaks at a report whose CUMULATIVE beat-time leads the
-                   wall clock by more than SEAM_SLACK_MS (2 s). Beats are grouped one run per second
+report seam      = a guard for a stream holding more beat-time than the clock had. Contiguity breaks at
+                   a report whose CUMULATIVE beat-time leads the wall clock by more than SEAM_SLACK_MS
+                   (2 s). Beats are grouped one run per second.
+                   NOT a strap behaviour: a raw capture decoded through the real codec has the 5.0
+                   sending 24,461 distinct seconds from 24,462 records at 0.89x beat-time, so it never
+                   re-reports its previous window. Two of five wearers' stored streams still run over
+                   1.0x (1.38x, 1.59x) for reasons not established, and this guard is what contains them
 rmssd_gap_aware  = the above over one night's per-report (unix, rr) runs
 analyze_raw      = clean -> {rmssd, sdnn, mean_nn, pnn50, n_input, n_clean}; 20-beat floor + optional spot
                    rejected-fraction gate (0.35). Flat: no report grouping, so no seam break
@@ -145,10 +149,18 @@ overlapping_report_count = reports re-covering time already covered. THIS is the
 readiness        = 7-night mean of ln(RMSSD) vs a smallest-worthwhile-change band (long mean +/- 0.5 SD)
                    -> primed / normal / suppressed + overreaching watch
 ```
-Measured on 85 nights from 5 wearers: the seam rule moves nightly RMSSD by a median -14.1% and leaves a
-strap that does not overlap-report bit-identical. The deep window reads a further median -12.1% below the
-whole night and yields nothing on 2 of 85 nights. `SEAM_SLACK_MS` is flat from 0 to 60 s and bit-identical
-across 1000-4000 ms. Reproduce with the `hrv_seam` and `hrv_window` examples.
+Measured on 85 nights from 5 wearers, on a corpus with the R-R duplication removed: the seam rule leaves
+the per-night median unmoved (+0.0%) and fires on 4 of 18 nights for the one wearer whose duplication was
+removed, 21 of 29 and 13 of 19 for the two whose over-1.0x streams have no known cause, and 0 of 17 for a
+wearer whose stream is already under 1.0x. On the same nights BEFORE de-duplication it read a median
+-14.1% and moved 16 of that wearer's 18 nights, so most of its apparent value was our own duplicate rows.
+The deep window reads a further median -13.9% below the whole night and yields nothing on 2 of 85 nights.
+`SEAM_SLACK_MS` is bit-identical from 1 s to 300 s. Reproduce with the `hrv_seam` and `hrv_window`
+examples and `tools/seam-slack-sweep.py`.
+
+The DISPLAYED nightly HRV is the deep window, and that is what agrees with WHOOP: over 15 nights paired
+to WHOOP's own published value, deep-only sits +0.6 ms from it (MAE 2.1, 12 of 15 inside +/-3 ms) and the
+whole night +6.7 ms (MAE 6.0, over on 14 of 15). One wearer, cross-wrist (WHOOP left, noop right).
 
 ## 4. Resting HR  ·  FFI `session_resting_hr`, `daily_resting_hr`
 

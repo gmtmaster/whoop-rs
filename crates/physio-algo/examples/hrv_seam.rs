@@ -65,11 +65,18 @@ fn main() {
     println!("{beats} beats, {seams} report seams ({:.1}% of all successive pairs)", 100.0 * seams as f64 / (beats - 1) as f64);
     println!("RMSSD before {:.1} ms   after {:.1} ms", median(&mut befores), median(&mut afters));
     println!();
-    println!("{:<14} {:>7} {:>10} {:>10}", "wearer", "nights", "before", "after");
+    // The per-night shift says whether the rule still fires for a wearer; two medians do not, because
+    // a median of a median hides which nights moved.
+    println!("{:<14} {:>7} {:>10} {:>10} {:>12} {:>8}", "wearer", "nights", "before", "after", "med shift", "moved");
     for (o, v) in &per_owner {
         let mut a: Vec<f64> = v.iter().map(|x| x.0).collect();
         let mut b: Vec<f64> = v.iter().map(|x| x.1).collect();
-        println!("{:<14} {:>7} {:>9.1} {:>10.1}", o, v.len(), median(&mut a), median(&mut b));
+        let mut s: Vec<f64> = v.iter().map(|x| 100.0 * (x.1 - x.0) / x.0).collect();
+        let moved = s.iter().filter(|x| x.abs() > 0.5).count();
+        println!(
+            "{:<14} {:>7} {:>9.1} {:>10.1} {:>11.1}% {:>5}/{}",
+            o, v.len(), median(&mut a), median(&mut b), median(&mut s), moved, v.len(),
+        );
     }
     let mut s = shifts.clone();
     println!(

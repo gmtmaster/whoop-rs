@@ -247,8 +247,20 @@ fn main() {
     let pairs = pair_nights(&staged, &published);
     let (mut ours_deep, mut ours_whole, mut theirs) = (Vec::new(), Vec::new(), Vec::new());
     let (mut dev_deep, mut dev_whole) = (Vec::new(), Vec::new());
+    // Every pair, so the window choice can be checked night by night instead of on a median.
+    println!("{:<12} {:>10} {:>10} {:>8} {:>12} {:>8}", "onset", "published", "deep-only", "diff", "whole-night", "diff");
     for &(i, j) in &pairs {
         let p = published[j].2;
+        let fmt = |v: Option<f64>| v.map_or("-".to_string(), |x| format!("{x:.1}"));
+        println!(
+            "{:<12} {:>10.1} {:>10} {:>8} {:>12} {:>8}",
+            staged[i].start,
+            p,
+            fmt(staged[i].deep),
+            staged[i].deep.map_or("-".to_string(), |v| format!("{:+.1}", v - p)),
+            fmt(staged[i].whole),
+            staged[i].whole.map_or("-".to_string(), |v| format!("{:+.1}", v - p)),
+        );
         if let Some(v) = staged[i].deep {
             ours_deep.push(v);
             theirs.push(p);
@@ -259,9 +271,13 @@ fn main() {
             dev_whole.push(v - p);
         }
     }
+    println!();
+    // The two windows are scored on different n: a night with no deep span still has a whole-night
+    // value, so reporting one count for both would overstate the deep column's sample.
     println!(
-        "vs WHOOP's own published nightly HRV: {} of {} staged nights paired within {} h",
-        ours_deep.len(), staged.len(), MATCH_SLACK_S / 3600,
+        "vs WHOOP's own published nightly HRV: {} of {} staged nights paired within {} h \
+         ({} carry a deep value, {} a whole-night one)",
+        pairs.len(), staged.len(), MATCH_SLACK_S / 3600, ours_deep.len(), ours_whole.len(),
     );
     println!(
         "median  published {:.1} ms   deep-only {:.1} ms   whole-night {:.1} ms",
