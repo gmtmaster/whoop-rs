@@ -26,9 +26,10 @@ pub use detect::{detect_sessions, detect_sessions_with, DetectParams, DetectedSp
 pub use v2::{prepare as prepare_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, Prepared, DEEP_GATE_THRESH};
 pub use mainnight::{
-    bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices, main_night_index,
-    main_night_selection, BridgedNightGroup, HistoryBlock, MainNightReason, MainNightSelection, NightBlock,
-    HABITUAL_MIN_DAYS,
+    bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices,
+    main_night_group_indices_scored, main_night_index, main_night_index_scored, main_night_selection,
+    main_night_selection_scored, BridgedNightGroup, HistoryBlock, MainNightReason, MainNightSelection, NightBlock,
+    ScoredNightBlock, HABITUAL_MIN_DAYS,
 };
 
 /// The stream bundle for one detection window: raw per-sample signals plus the wrist-off intervals, band

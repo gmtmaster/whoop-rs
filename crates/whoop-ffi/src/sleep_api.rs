@@ -6,6 +6,13 @@ pub(crate) fn to_night_blocks(blocks: &[MainNightBlock]) -> Vec<sleep::NightBloc
     blocks.iter().map(|b| sleep::NightBlock { start: b.start, end: b.end }).collect()
 }
 
+fn to_scored_blocks(blocks: &[MainNightScoredBlock]) -> Vec<sleep::ScoredNightBlock> {
+    blocks
+        .iter()
+        .map(|b| sleep::ScoredNightBlock { onset: b.onset, asleep_s: b.asleep_s, in_bed_s: b.in_bed_s })
+        .collect()
+}
+
 /// Detect + stage a night's streams: one call carves the in-bed spans and returns one session each.
 #[uniffi::export]
 pub fn analyze_sleep(streams: SleepStreams) -> Vec<SleepSession> {
@@ -37,6 +44,40 @@ pub fn main_night_selection(
         index: s.index as u32,
         reason: s.reason.into(),
         asleep_sec: s.asleep_sec,
+    })
+}
+
+/// The day's main night scored on DECODED stage time rather than the clock span.
+#[uniffi::export]
+pub fn main_night_index_scored(
+    blocks: Vec<MainNightScoredBlock>,
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<u32> {
+    sleep::main_night_index_scored(&to_scored_blocks(&blocks), offset_s, habitual_midsleep_sec).map(|i| i as u32)
+}
+
+/// The main-night group scored on DECODED stage time: one scorer, fed what the hypnogram holds instead
+/// of the clock span, so the stages path and the detected path cannot name different nights.
+#[uniffi::export]
+pub fn main_night_group_indices_scored(
+    blocks: Vec<MainNightScoredBlock>,
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<Vec<u32>> {
+    sleep::main_night_group_indices_scored(&to_scored_blocks(&blocks), offset_s, habitual_midsleep_sec)
+        .map(|v| v.into_iter().map(|i| i as u32).collect())
+}
+
+/// The scored main-night pick plus why it won; `asleep_sec` is the winner's decoded asleep time.
+#[uniffi::export]
+pub fn main_night_selection_scored(
+    blocks: Vec<MainNightScoredBlock>,
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<MainNightSel> {
+    sleep::main_night_selection_scored(&to_scored_blocks(&blocks), offset_s, habitual_midsleep_sec).map(|s| {
+        MainNightSel { index: s.index as u32, reason: s.reason.into(), asleep_sec: s.asleep_sec }
     })
 }
 

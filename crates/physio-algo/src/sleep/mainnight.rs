@@ -27,8 +27,26 @@ impl NightBlock {
     fn duration_s(&self) -> i64 {
         self.end - self.start
     }
+}
+
+/// One candidate scored on what its STAGES decoded: the effective onset plus the asleep and in-bed
+/// seconds the hypnogram holds. A [`NightBlock`] is this with both set to the clock span, so the two
+/// readings share one scorer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoredNightBlock {
+    pub onset: i64,
+    pub asleep_s: f64,
+    pub in_bed_s: f64,
+}
+
+impl ScoredNightBlock {
+    /// A block read off the clock alone: asleep and in-bed are both its span.
+    fn from_span(b: &NightBlock) -> Self {
+        let d = b.duration_s() as f64;
+        ScoredNightBlock { onset: b.start, asleep_s: d, in_bed_s: d }
+    }
     fn midpoint_sec(&self) -> i64 {
-        self.start + (self.end - self.start) / 2
+        self.onset + (self.in_bed_s / 2.0) as i64
     }
 }
 
@@ -163,19 +181,31 @@ pub fn bridged_night_groups(blocks: &[NightBlock], offset_s: i64) -> Vec<Bridged
 }
 
 /// Index of the day's main night by the learned-timing score (asleep minutes + alignment bonus). Highest
-/// wins; exact ties break toward the earlier onset. `None` only for an empty list.
+/// wins; exact ties break toward the earlier onset. `None` only for an empty list. Reads a block off the
+/// clock alone — [`main_night_index_scored`] is the same score over decoded stage time.
 pub fn main_night_index(blocks: &[NightBlock], offset_s: i64, habitual_midsleep_sec: Option<i64>) -> Option<usize> {
+    let scored: Vec<ScoredNightBlock> = blocks.iter().map(ScoredNightBlock::from_span).collect();
+    main_night_index_scored(&scored, offset_s, habitual_midsleep_sec)
+}
+
+/// The one main-night score: decoded asleep minutes plus the alignment bonus on the block's midpoint.
+/// Highest wins; exact ties break toward the earlier onset. `None` only for an empty list.
+pub fn main_night_index_scored(
+    blocks: &[ScoredNightBlock],
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<usize> {
     if blocks.is_empty() {
         return None;
     }
     let target = target_midsleep_sec(habitual_midsleep_sec);
-    let score = |b: &NightBlock| -> f64 {
-        b.duration_s() as f64 / 60.0 + alignment_bonus_minutes(local_sec_of_day(b.midpoint_sec(), offset_s), target)
+    let score = |b: &ScoredNightBlock| -> f64 {
+        b.asleep_s / 60.0 + alignment_bonus_minutes(local_sec_of_day(b.midpoint_sec(), offset_s), target)
     };
     let mut best = 0usize;
     for i in 1..blocks.len() {
         let (cs, bs) = (score(&blocks[i]), score(&blocks[best]));
-        let wins = if cs != bs { cs > bs } else { blocks[i].start < blocks[best].start };
+        let wins = if cs != bs { cs > bs } else { blocks[i].onset < blocks[best].onset };
         if wins {
             best = i;
         }
@@ -205,22 +235,62 @@ pub fn main_night_group_indices(
     Some(all[winner].indices.clone())
 }
 
-/// The main-night pick plus why it won, for UI explainability.
+/// The main-night group over blocks read off their DECODED stages: each candidate's span for bridging is
+/// `[onset, onset + in_bed_s]`, and a group scores as the SUM of its fragments' asleep and in-bed time, so
+/// an inter-fragment gap adds nothing. Indices ascending into the original list.
+pub fn main_night_group_indices_scored(
+    blocks: &[ScoredNightBlock],
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<Vec<usize>> {
+    if blocks.is_empty() {
+        return None;
+    }
+    let spans: Vec<NightBlock> = blocks
+        .iter()
+        .map(|b| NightBlock { start: b.onset, end: b.onset + b.in_bed_s as i64 })
+        .collect();
+    let all = bridged_night_groups(&spans, offset_s);
+    let summed: Vec<ScoredNightBlock> = all
+        .iter()
+        .map(|g| ScoredNightBlock {
+            onset: g.indices.iter().map(|&i| blocks[i].onset).min().expect("group indices non-empty: built from block groups"),
+            asleep_s: g.indices.iter().map(|&i| blocks[i].asleep_s).sum(),
+            in_bed_s: g.indices.iter().map(|&i| blocks[i].in_bed_s).sum(),
+        })
+        .collect();
+    let winner = main_night_index_scored(&summed, offset_s, habitual_midsleep_sec)?;
+    Some(all[winner].indices.clone())
+}
+
+/// The main-night pick plus why it won, for UI explainability. Reads a block off the clock alone;
+/// [`main_night_selection_scored`] is the same pick over decoded stage time.
 pub fn main_night_selection(
     blocks: &[NightBlock],
     offset_s: i64,
     habitual_midsleep_sec: Option<i64>,
 ) -> Option<MainNightSelection> {
-    let idx = main_night_index(blocks, offset_s, habitual_midsleep_sec)?;
+    let scored: Vec<ScoredNightBlock> = blocks.iter().map(ScoredNightBlock::from_span).collect();
+    main_night_selection_scored(&scored, offset_s, habitual_midsleep_sec)
+}
+
+/// The scored main-night pick plus why it won: `asleep_sec` is the winner's decoded asleep time, and
+/// "longest" ranks by that rather than by clock span.
+pub fn main_night_selection_scored(
+    blocks: &[ScoredNightBlock],
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<MainNightSelection> {
+    let idx = main_night_index_scored(blocks, offset_s, habitual_midsleep_sec)?;
     let chosen = blocks[idx];
-    let asleep_sec = chosen.duration_s();
+    let asleep_sec = chosen.asleep_s as i64;
     let reason = if blocks.len() == 1 {
         MainNightReason::OnlyBlock
     } else {
         let mut dur_idx = 0usize;
         for i in 1..blocks.len() {
             let (c, b) = (blocks[i], blocks[dur_idx]);
-            let wins = if c.duration_s() != b.duration_s() { c.duration_s() > b.duration_s() } else { c.start < b.start };
+            let wins = if c.asleep_s != b.asleep_s { c.asleep_s > b.asleep_s } else { c.onset < b.onset };
             if wins {
                 dur_idx = i;
             }
@@ -465,6 +535,43 @@ mod tests {
         let (afternoon, n2) = (at_hour(13), at_hour(1)); // 5h(300) vs 4h+90 bonus(330) -> timing flips
         let atu = main_night_selection(&[nb(afternoon, afternoon + 5 * 3600), nb(n2, n2 + 4 * 3600)], 0, Some(hab)).unwrap();
         assert_eq!((atu.index, atu.reason, atu.asleep_sec), (1, MainNightReason::AlignedToUsual, 4 * 3600));
+    }
+
+    fn snb(onset: i64, asleep_s: f64, in_bed_s: f64) -> ScoredNightBlock {
+        ScoredNightBlock { onset, asleep_s, in_bed_s }
+    }
+
+    /// The clock reading is the scored one with asleep = in-bed = the span, so a block staged as pure
+    /// wake still scores its whole duration; read off its stages it scores nothing.
+    #[test]
+    fn a_block_with_no_sleep_wins_on_the_clock_and_loses_on_its_stages() {
+        let (empty, real) = (at_hour(20) - 86_400, at_hour(2));
+        let clock = [nb(empty, empty + 8 * 3600), nb(real, real + 5 * 3600)];
+        assert_eq!(main_night_index(&clock, 0, None), Some(0)); // 480 min of clock beats 300
+        let staged = [
+            snb(empty, 0.0, 8.0 * 3600.0),          // eight hours, all of it wake
+            snb(real, 4.5 * 3600.0, 5.0 * 3600.0),  // five hours holding 4.5 h of sleep
+        ];
+        assert_eq!(main_night_index_scored(&staged, 0, None), Some(1));
+    }
+
+    /// The scored reading bridges on `[onset, onset + in_bed_s]` and sums a group's fragments, so a night
+    /// split by a short wake out-scores a lone nap without the gap counting as either term.
+    #[test]
+    fn a_scored_group_sums_its_fragments_and_excludes_the_gap() {
+        let f1 = at_hour(23) - 86_400;
+        let f2 = f1 + 3 * 3600 + 20 * 60; // 20 min out of bed after a 3 h fragment
+        let nap = at_hour(14);
+        let blocks = [
+            snb(f1, 2.9 * 3600.0, 3.0 * 3600.0),
+            snb(f2, 3.4 * 3600.0, 3.5 * 3600.0),
+            snb(nap, 1.9 * 3600.0, 2.0 * 3600.0),
+        ];
+        assert_eq!(main_night_group_indices_scored(&blocks, 0, None), Some(vec![0, 1]));
+        // The bare pick reports the winning FRAGMENT's own sleep; grouping is the caller's, above.
+        let sel = main_night_selection_scored(&blocks, 0, None).unwrap();
+        assert_eq!((sel.index, sel.asleep_sec), (1, (3.4 * 3600.0) as i64));
+        assert_eq!(sel.reason, MainNightReason::Longest);
     }
 
     #[test]

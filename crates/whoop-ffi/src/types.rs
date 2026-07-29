@@ -438,6 +438,14 @@ pub struct MainNightBlock {
     pub end: i64,
 }
 
+/// One candidate scored on what its stages DECODED: effective onset plus asleep and in-bed seconds.
+#[derive(uniffi::Record, Clone)]
+pub struct MainNightScoredBlock {
+    pub onset: i64,
+    pub asleep_s: f64,
+    pub in_bed_s: f64,
+}
+
 /// Why the main-night selector chose the block it chose (for UI explainability).
 #[derive(uniffi::Enum, Clone, Copy)]
 pub enum MainNightReason {
