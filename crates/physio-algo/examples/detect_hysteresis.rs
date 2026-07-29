@@ -379,7 +379,7 @@ fn main() {
             [0.50f64, 0.55, 0.60, 0.65, 0.70]
                 .iter()
                 .filter(move |&&exit| exit <= enter)
-                .map(move |&exit| DetectParams { still_enter: enter, still_exit: exit })
+                .map(move |&exit| DetectParams { still_enter: enter, still_exit: exit, ..DetectParams::SHIPPED })
         })
         .collect();
 

@@ -1,8 +1,9 @@
 //! In-bed span detection — the gravity-stillness spine that carves candidate sleep runs from a night's
 //! streams, before staging. A rolling stillness fraction over per-sample gravity deltas classifies each
 //! sample sleep/active, latched through [`DetectParams`] so opening a run takes more stillness than
-//! holding one; runs are built, short runs merged, and (only when gravity is sparse) HR-vouched gaps
-//! bridged. Pure and deterministic. [`detect_sessions`] is the module's exported entry and the one
+//! holding one; runs are built, short runs merged, a short HR-vouched mid-sleep wake absorbed, and
+//! (only when gravity is sparse) HR-vouched data gaps bridged. So one night reaches staging as one
+//! window. Pure and deterministic. [`detect_sessions`] is the module's exported entry and the one
 //! [`super::analyze`] runs; [`detect_sessions_with`] takes the thresholds, so a caller can score a
 //! window against the spine that wrote it rather than the current one.
 
@@ -41,26 +42,32 @@ const MORNING_REONSET_BAND_ASLEEP_FRAC: f64 = 0.6;
 const OFF_WRIST_HR_GAP_MIN: i64 = 20;
 const MAX_OFF_WRIST_SLEEP_FRACTION: f64 = 0.5;
 const HR_DENSE_SPACING_S: i64 = 600;
-const MIN_SLEEP_MIN: i64 = 60;
 const MAX_MAIN_SLEEP_SPAN_S: i64 = 16 * 60 * 60;
 const NIGHT_CONTINUATION_GAP_MIN: i64 = 90;
 
-/// The two stillness fractions [`classify_still`] switches a sleep run on and off at. Splitting them
-/// gives the spine hysteresis: a run needs `still_enter` to open and stays open until the rolling
-/// fraction drops below `still_exit`, so it cannot chatter around one boundary.
+/// The detector's swept thresholds. `still_enter`/`still_exit` are the two fractions
+/// [`classify_still`] switches a sleep run on and off at, latched so a run needs `still_enter` to open
+/// and holds until the rolling fraction drops below `still_exit`; `min_sleep_min` is the duration a
+/// candidate run must EXCEED to be kept; `wake_absorb_max_min` is the longest mid-sleep wake run
+/// [`absorb_short_wake`] folds back into the night when HR vouches for it (0 = never), so a stir
+/// reaches staging as one window rather than two half-nights normalised apart.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetectParams {
     pub still_enter: f64,
     pub still_exit: f64,
+    pub min_sleep_min: i64,
+    pub wake_absorb_max_min: i64,
 }
 
 impl DetectParams {
     /// The thresholds [`detect_sessions`] runs, and so the window every new session is cut on.
-    pub const SHIPPED: DetectParams = DetectParams { still_enter: 0.80, still_exit: 0.65 };
+    pub const SHIPPED: DetectParams =
+        DetectParams { still_enter: 0.80, still_exit: 0.65, min_sleep_min: 60, wake_absorb_max_min: 45 };
 
     /// The single-threshold spine that wrote every already-stored session. Kept so a stored-versus-fresh
     /// comparison stays attributable to one detector after the enter/exit split.
-    pub const PRE_HYSTERESIS: DetectParams = DetectParams { still_enter: 0.70, still_exit: 0.70 };
+    pub const PRE_HYSTERESIS: DetectParams =
+        DetectParams { still_enter: 0.70, still_exit: 0.70, min_sleep_min: 60, wake_absorb_max_min: 0 };
 }
 
 impl Default for DetectParams {
@@ -250,13 +257,13 @@ pub(super) fn merge_periods(periods: &[Period]) -> Vec<Period> {
     merged
 }
 
-/// Merge two adjacent sleep runs separated only by a `<= SPARSE_BRIDGE_GAP_MIN` gap when the intervening
-/// HR stays in the sleep band. No-op when `!sparse`, so the dense path is unchanged.
-pub(super) fn bridge_sparse_sleep(periods: &[Period], sparse: bool, hr: &[HrSample], baseline: Option<f64>) -> Vec<Period> {
-    if !sparse || periods.is_empty() {
+/// Merge two sleep runs left ADJACENT in the list by a data gap (never by a wake run) when the
+/// intervening HR stays in the sleep band. `max_gap_min <= 0` is a no-op.
+pub(super) fn bridge_sleep_gap(periods: &[Period], max_gap_min: i64, hr: &[HrSample], baseline: Option<f64>) -> Vec<Period> {
+    if max_gap_min <= 0 || periods.is_empty() {
         return periods.to_vec();
     }
-    let bridge_gap_s = SPARSE_BRIDGE_GAP_MIN * 60;
+    let bridge_gap_s = max_gap_min * 60;
     let mut out: Vec<Period> = Vec::new();
     for p in periods {
         if let Some(last) = out.last() {
@@ -271,6 +278,41 @@ pub(super) fn bridge_sparse_sleep(periods: &[Period], sparse: bool, hr: &[HrSamp
             }
         }
         out.push(*p);
+    }
+    out
+}
+
+/// Fold a short wake run wedged between two sleep runs back into the night when HR stays in the sleep
+/// band across it, so a mid-night stir does not split one night into two separately staged spans.
+/// `max_min <= 0` is a no-op.
+pub(super) fn absorb_short_wake(
+    periods: &[Period],
+    max_min: i64,
+    hr: &[HrSample],
+    baseline: Option<f64>,
+) -> Vec<Period> {
+    if max_min <= 0 || periods.len() < 3 {
+        return periods.to_vec();
+    }
+    let max_s = max_min * 60;
+    let mut out: Vec<Period> = Vec::new();
+    let mut i = 0usize;
+    while i < periods.len() {
+        let cur = periods[i];
+        let absorb = !cur.is_sleep
+            && i + 1 < periods.len()
+            && periods[i + 1].is_sleep
+            && out.last().is_some_and(|l| l.is_sleep)
+            && (cur.end - cur.start) <= max_s
+            && hr_sleep_band_across(cur.start, cur.end, hr, baseline);
+        if absorb {
+            let prev = out.pop().expect("out.last() was Some in the guard above");
+            out.push(Period { is_sleep: true, start: prev.start, end: periods[i + 1].end });
+            i += 2;
+            continue;
+        }
+        out.push(cur);
+        i += 1;
     }
     out
 }
@@ -536,9 +578,11 @@ pub fn detect_sessions_with(
     let flags = classify_still(&grav, &deltas, params);
     let runs = build_runs(&grav, &flags, sparse, &hr_s, baseline);
     let runs = merge_periods(&runs);
-    let runs = bridge_sparse_sleep(&runs, sparse, &hr_s, baseline);
+    // A data gap only splits sleep runs when gravity is sparse; a wake run splits them on either path.
+    let runs = bridge_sleep_gap(&runs, if sparse { SPARSE_BRIDGE_GAP_MIN } else { 0 }, &hr_s, baseline);
+    let runs = absorb_short_wake(&runs, params.wake_absorb_max_min, &hr_s, baseline);
 
-    let min_sleep_s = MIN_SLEEP_MIN * 60;
+    let min_sleep_s = params.min_sleep_min * 60;
     let continuation_gap_s = NIGHT_CONTINUATION_GAP_MIN * 60;
     let mut sessions: Vec<DetectedSpan> = Vec::new();
     let mut chain_prev_end: Option<i64> = None;
@@ -1005,6 +1049,34 @@ mod tests {
         assert!(detect(&hr_stream(s1, over, 50), &still_gravity(s1, over), 0, &[]).is_empty()); // 18h > 16h cap
         let (s2, ok) = (at_hour(21), 15 * 3600);
         assert_eq!(detect(&hr_stream(s2, ok, 50), &still_gravity(s2, ok), 0, &[]).len(), 1); // 15h <= cap
+    }
+
+    /// A night broken by one stir: `[still d1][active stir][still d2]`, the stir at `stir_bpm`.
+    fn stirred_night(d1: i64, stir: i64, stir_bpm: u16, d2: i64) -> (Vec<AccelSample>, Vec<HrSample>) {
+        let s1 = at_hour(23) - 86_400;
+        let (s_stir, s2) = (s1 + d1, s1 + d1 + stir);
+        let mut grav = still_gravity(s1, d1);
+        grav.extend(active_gravity(s_stir, stir));
+        grav.extend(still_gravity(s2, d2));
+        let mut hr = hr_stream(s1, d1, 50);
+        hr.extend(hr_stream(s_stir, stir, stir_bpm));
+        hr.extend(hr_stream(s2, d2, 50));
+        (grav, hr)
+    }
+
+    #[test]
+    fn short_hr_vouched_stir_is_absorbed_and_the_night_stays_one_span() {
+        let (four_h, three_h) = (4 * 3600, 3 * 3600);
+        let (g, h) = stirred_night(four_h, 30 * 60, 50, three_h);
+        let one = detect(&h, &g, 0, &[]);
+        assert_eq!(one.len(), 1, "a 30-min sleep-band stir is inside wake_absorb_max_min");
+        assert!(one[0].end - one[0].start > four_h + three_h, "the stir is inside the span");
+        // Longer than the absorb window: the night legitimately splits in two.
+        let (g, h) = stirred_night(four_h, 70 * 60, 50, three_h);
+        assert_eq!(detect(&h, &g, 0, &[]).len(), 2);
+        // Same width, but HR out of the sleep band: nothing vouches for it, so it splits.
+        let (g, h) = stirred_night(four_h, 30 * 60, 90, three_h);
+        assert_eq!(detect(&h, &g, 0, &[]).len(), 2);
     }
 
     #[test]
