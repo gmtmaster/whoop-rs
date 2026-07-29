@@ -4,7 +4,8 @@
 //!
 //! Stages each fixture night with the shipped recipe, then scores the same beats three ways: every 5-min
 //! bucket of the night, only buckets centred in deep sleep, and only buckets in the LAST deep run. Also
-//! reports how often a night yields no deep bucket at all, which is the coverage cost of the deep window.
+//! reports how often a night yields no deep bucket at all, which is the coverage cost of the deep window,
+//! and pairs the wearer with an export against WHOOP's own published nightly HRV for the same nights.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,11 +15,17 @@ use physio_algo::sleep::{
     params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun, SleepInput, SleepStage,
 };
 
-fn root() -> PathBuf {
+/// How far a staged night's start may sit from a published sleep onset and still be the same night.
+const MATCH_SLACK_S: i64 = 4 * 3600;
+
+fn fixtures() -> PathBuf {
     std::env::var("WHOOP_SLEEP_FIXTURES")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("ours")
+}
+
+fn root() -> PathBuf {
+    fixtures().join("ours")
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {
@@ -49,6 +56,68 @@ struct Owner {
     deep: Vec<f64>,
 }
 
+/// One staged night's identity and the two windowed values, for the pairing against the export.
+/// `start` is the night's REAL unix onset, read from the fixture name — the streams are rebased.
+struct Night {
+    owner: String,
+    start: i64,
+    whole: Option<f64>,
+    deep: Option<f64>,
+}
+
+/// Owner and real unix onset out of an `owner_device_day_onset` fixture directory name.
+fn night_id(dir: &Path) -> (String, i64) {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let owner = name.split('_').next().unwrap_or("?").to_string();
+    let onset = name.rsplit('_').next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    (owner, onset)
+}
+
+/// WHOOP's own published nightly HRV per wearer, keyed by the unix onset of the night it belongs to.
+fn published_hrv() -> Vec<(String, i64, f64)> {
+    let text = match fs::read_to_string(fixtures().join("whoop-hrv.json")) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let root: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for (owner, nights) in root.as_object().into_iter().flatten() {
+        for n in nights.as_array().into_iter().flatten() {
+            if let (Some(t), Some(h)) = (n["onset_unix"].as_i64(), n["hrv_ms"].as_f64()) {
+                out.push((owner.clone(), t, h));
+            }
+        }
+    }
+    out
+}
+
+/// Nearest-first 1:1 pairing of staged nights to published ones, inside [`MATCH_SLACK_S`].
+fn pair_nights(nights: &[Night], published: &[(String, i64, f64)]) -> Vec<(usize, usize)> {
+    let mut cand: Vec<(i64, usize, usize)> = Vec::new();
+    for (i, n) in nights.iter().enumerate() {
+        for (j, p) in published.iter().enumerate() {
+            let d = (n.start - p.1).abs();
+            if n.owner == p.0 && d <= MATCH_SLACK_S {
+                cand.push((d, i, j));
+            }
+        }
+    }
+    cand.sort();
+    let (mut used_n, mut used_p, mut out) = (Vec::new(), Vec::new(), Vec::new());
+    for (_, i, j) in cand {
+        if !used_n.contains(&i) && !used_p.contains(&j) {
+            used_n.push(i);
+            used_p.push(j);
+            out.push((i, j));
+        }
+    }
+    out.sort();
+    out
+}
+
 /// The last contiguous run of deep spans, the comparator a strap-style "last slow-wave sleep" uses.
 fn last_deep_run(deep: &[Span]) -> Vec<Span> {
     let mut last: Vec<Span> = Vec::new();
@@ -77,6 +146,7 @@ fn main() {
     let (mut nights, mut no_deep, mut deep_under_5min) = (0usize, 0usize, 0usize);
     let mut shifts: Vec<f64> = Vec::new();
     let mut per_owner: std::collections::BTreeMap<String, Owner> = std::collections::BTreeMap::new();
+    let mut staged: Vec<Night> = Vec::new();
 
     for d in &dirs {
         let hr: Vec<HrSample> = read_csv(&d.join("hr.csv"))
@@ -111,8 +181,8 @@ fn main() {
             rr.iter().flat_map(|r| r.intervals.iter().map(|&v| (r.ts as u32, v))).collect();
         let (s, e) = (start as u32, end as u32);
         nights += 1;
-        let owner = d.file_name().unwrap().to_string_lossy().split('_').next().unwrap_or("?").to_string();
-        let row = per_owner.entry(owner).or_default();
+        let (owner, onset) = night_id(d);
+        let row = per_owner.entry(owner.clone()).or_default();
         row.nights += 1;
         let deep_secs: u32 = deep.iter().map(|(a, b)| b - a).sum();
         if deep.is_empty() {
@@ -124,6 +194,7 @@ fn main() {
         }
         let w = HrvReadiness::windowed_avg_hrv(s, e, &beats);
         let dp = HrvReadiness::windowed_avg_hrv_deep(s, e, &beats, &deep);
+        staged.push(Night { owner, start: onset, whole: w, deep: dp });
         if let Some(v) = w {
             whole.push(v);
             row.whole.push(v);
@@ -166,4 +237,41 @@ fn main() {
             o, r.nights, r.no_deep, median(&mut r.whole), median(&mut r.deep),
         );
     }
+
+    let published = published_hrv();
+    println!();
+    if published.is_empty() {
+        println!("no whoop-hrv.json beside the fixtures — the published-HRV comparison is skipped");
+        return;
+    }
+    let pairs = pair_nights(&staged, &published);
+    let (mut ours_deep, mut ours_whole, mut theirs) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut dev_deep, mut dev_whole) = (Vec::new(), Vec::new());
+    for &(i, j) in &pairs {
+        let p = published[j].2;
+        if let Some(v) = staged[i].deep {
+            ours_deep.push(v);
+            theirs.push(p);
+            dev_deep.push(v - p);
+        }
+        if let Some(v) = staged[i].whole {
+            ours_whole.push(v);
+            dev_whole.push(v - p);
+        }
+    }
+    println!(
+        "vs WHOOP's own published nightly HRV: {} of {} staged nights paired within {} h",
+        ours_deep.len(), staged.len(), MATCH_SLACK_S / 3600,
+    );
+    println!(
+        "median  published {:.1} ms   deep-only {:.1} ms   whole-night {:.1} ms",
+        median(&mut theirs), median(&mut ours_deep), median(&mut ours_whole),
+    );
+    let mae = |v: &[f64]| v.iter().map(|x| x.abs()).sum::<f64>() / v.len().max(1) as f64;
+    let (mae_deep, mae_whole) = (mae(&dev_deep), mae(&dev_whole));
+    println!(
+        "per-night difference from published: deep-only median {:+.1} ms (MAE {:.1}), whole-night median {:+.1} ms (MAE {:.1})",
+        median(&mut dev_deep), mae_deep, median(&mut dev_whole), mae_whole,
+    );
+    println!("both wrists at once, not both methods on one wrist: WHOOP is worn left, noop right.");
 }

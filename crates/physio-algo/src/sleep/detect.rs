@@ -2,7 +2,9 @@
 //! streams, before staging. A rolling stillness fraction over per-sample gravity deltas classifies each
 //! sample sleep/active, latched through [`DetectParams`] so opening a run takes more stillness than
 //! holding one; runs are built, short runs merged, and (only when gravity is sparse) HR-vouched gaps
-//! bridged. Pure and deterministic. Feeds the gate loop in [`super::analyze`].
+//! bridged. Pure and deterministic. [`detect_sessions`] is the module's exported entry and the one
+//! [`super::analyze`] runs; [`detect_sessions_with`] takes the thresholds, so a caller can score a
+//! window against the spine that wrote it rather than the current one.
 
 use std::collections::HashMap;
 

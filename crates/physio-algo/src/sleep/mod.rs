@@ -5,7 +5,10 @@
 //! respiration term, and Viterbi transition smoothing.
 //!
 //! Inputs are protocol-free (see [`input`]). [`analyze`] runs the whole pipeline (detect → stage → refine)
-//! over a night's streams; [`stage_v2`] stages one already-detected `[start, end]` span. Pure + deterministic.
+//! over a night's streams, and each stage is exported on its own so a caller can run just one:
+//! [`detect_sessions`] (or [`detect_sessions_with`] under a chosen [`DetectParams`]) returns the in-bed
+//! windows without staging them, [`stage_v2`] stages one already-detected `[start, end]` span, and
+//! [`stage_refined`] adds the wake refinement. Pure + deterministic.
 
 mod common;
 mod detect;
