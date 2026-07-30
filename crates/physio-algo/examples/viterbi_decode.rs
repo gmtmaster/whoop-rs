@@ -22,14 +22,14 @@
 
 mod common;
 
-use common::{dirs_of, kappa4, read_csv, read_rr, read_steps, root, RefineCensus};
+use common::{dirs_of, kappa4, read_csv, read_rr, read_steps, root, stage_at, RefineCensus, TwoClass};
 
 use std::collections::BTreeMap;
 use std::fs;
 
 use physio_algo::sleep::{
     decode_v2, detect_sessions, emissions_v2, epoch_starts_v2, params::Params, prepare_v2, segments_v2,
-    AccelSample, HrSample, Prepared, SleepInput, SleepStage, StageSegment, StepSample,
+    AccelSample, HrSample, Prepared, SleepInput, SleepStage, StepSample,
 };
 
 const EPOCH_SEC: i64 = 30;
@@ -273,37 +273,6 @@ fn constrained_decode(em: &[[f64; 4]], t: &[[f64; 4]; 4], call: &[Option<bool>])
 }
 
 // ── scoreboards ───────────────────────────────────────────────────────────────────────────────────
-
-#[derive(Default, Clone, Copy)]
-struct TwoClass {
-    n: i64,
-    pred_wake: i64,
-    true_wake: i64,
-    hit: i64,
-}
-
-impl TwoClass {
-    fn add(&mut self, pred_wake: bool, true_wake: bool) {
-        self.n += 1;
-        self.pred_wake += i64::from(pred_wake);
-        self.true_wake += i64::from(true_wake);
-        self.hit += i64::from(pred_wake && true_wake);
-    }
-    fn wake_pct(&self) -> f64 {
-        100.0 * self.pred_wake as f64 / self.n.max(1) as f64
-    }
-    fn kappa(&self) -> f64 {
-        let n = self.n.max(1) as f64;
-        let (pw, tw) = (self.pred_wake as f64, self.true_wake as f64);
-        let agree = (self.hit as f64 + (n - pw - tw + self.hit as f64)) / n;
-        let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
-        if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
-    }
-}
-
-fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
-    segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
-}
 
 /// How a candidate produces a path. A matrix swap has two honest readings and they are not the same
 /// change: re-decoding pinned emissions is the decoder alone, while re-staging also moves the probe pass
@@ -633,7 +602,7 @@ fn section_gap(spans: &[Span], psg: &[(&str, Vec<PsgNight>, Vec<Prepared>)]) {
     println!("   emissions): it moves {} of {} continuous epochs ({:.1}%), and those moves are worth",
         moved_cont.0, moved_cont.1, 100.0 * moved_cont.0 as f64 / moved_cont.1.max(1) as f64);
     println!("   band kappa2 {:.3} -> {:.3} ({:+.3}), wake {:.1}% -> {:.1}%.", tc_argmax.kappa(),
-        tc_ship.kappa(), tc_ship.kappa() - tc_argmax.kappa(), tc_argmax.wake_pct(), tc_ship.wake_pct());
+        tc_ship.kappa(), tc_ship.kappa() - tc_argmax.kappa(), tc_argmax.pred_pct(), tc_ship.pred_pct());
 
     // What the smoothing already does to the short wake runs H2 is about.
     let (mut a_short, mut a_all, mut d_short, mut d_all) = (0usize, 0usize, 0usize, 0usize);
@@ -765,7 +734,7 @@ fn section_axes(spans: &[Span], psg: &[(&str, Vec<PsgNight>, Vec<Prepared>)], ba
             "   {:<34}{:>9.3}{:>8.1}%{:>9.3}{:>9.3}{:>9.3}{:>9.1}%",
             c.label,
             tc.kappa(),
-            tc.wake_pct(),
+            tc.pred_pct(),
             ks[0],
             ks[1],
             ks[2],
@@ -972,13 +941,13 @@ fn section_rescue(spans: &[Span], psg: &[(&str, Vec<PsgNight>, Vec<Prepared>)], 
         }
         match base {
             None => {
-                println!("   {:<34}{:>9.3}{:>8.1}%{:>9.3}{:>9.3}{:>9.3}", c.label, tc.kappa(), tc.wake_pct(),
+                println!("   {:<34}{:>9.3}{:>8.1}%{:>9.3}{:>9.3}{:>9.3}", c.label, tc.kappa(), tc.pred_pct(),
                     ks[0], ks[1], ks[2]);
                 base = Some((tc.kappa(), ks));
             }
             Some((bk, bks)) => println!(
                 "   {:<34}{:>9.3}{:>8.1}%{:>9.3}{:>9.3}{:>9.3}   d {:+.3} {:+.3} {:+.3} {:+.3}",
-                c.label, tc.kappa(), tc.wake_pct(), ks[0], ks[1], ks[2],
+                c.label, tc.kappa(), tc.pred_pct(), ks[0], ks[1], ks[2],
                 tc.kappa() - bk, ks[0] - bks[0], ks[1] - bks[1], ks[2] - bks[2]
             ),
         }

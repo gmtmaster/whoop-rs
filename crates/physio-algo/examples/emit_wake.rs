@@ -14,7 +14,9 @@
 
 mod common;
 
-use common::{dirs_of, kappa4, median, read_csv, read_rr, read_steps, stage_idx, RefineCensus};
+use common::{
+    dirs_of, kappa4, median, read_csv, read_rr, read_steps, stage_at, stage_idx, RefineCensus, TwoClass,
+};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -38,58 +40,16 @@ const PROPENSITY: &str = "propensity";
 const MOTION_GATE: &str = "motion gate";
 const BLIP_FILTER: &str = "blip filter";
 
-/// Two-class scoreboard against a wake/asleep reference. Raw accuracy rewards a config that rarely says
-/// wake, so kappa is the number to read and the reference's own wake rate is printed beside it.
-#[derive(Default, Clone, Copy)]
-struct TwoClass {
-    n: i64,
-    pred_wake: i64,
-    true_wake: i64,
-    hit: i64,
-}
-
-impl TwoClass {
-    fn add(&mut self, pred_wake: bool, true_wake: bool) {
-        self.n += 1;
-        self.pred_wake += i64::from(pred_wake);
-        self.true_wake += i64::from(true_wake);
-        self.hit += i64::from(pred_wake && true_wake);
-    }
-    fn pred_pct(&self) -> f64 {
-        100.0 * self.pred_wake as f64 / self.n.max(1) as f64
-    }
-    fn true_pct(&self) -> f64 {
-        100.0 * self.true_wake as f64 / self.n.max(1) as f64
-    }
-    fn recall(&self) -> f64 {
-        100.0 * self.hit as f64 / self.true_wake.max(1) as f64
-    }
-    fn precision(&self) -> f64 {
-        100.0 * self.hit as f64 / self.pred_wake.max(1) as f64
-    }
-    fn f1(&self) -> f64 {
-        let (r, p) = (self.recall(), self.precision());
-        if r + p <= 0.0 { 0.0 } else { 2.0 * r * p / (r + p) }
-    }
-    /// Cohen's kappa over the 2x2 table, which is accuracy with the base rate divided out.
-    fn kappa(&self) -> f64 {
-        let n = self.n.max(1) as f64;
-        let (pw, tw) = (self.pred_wake as f64, self.true_wake as f64);
-        let agree = (self.hit as f64 + (n - pw - tw + self.hit as f64)) / n;
-        let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
-        if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
-    }
-    fn row(&self, label: &str) {
-        println!(
-            "   {label:<40} {:>7.1}% {:>9.1}% {:>8.3} {:>9.1} {:>10.1} {:>7.1}",
-            self.pred_pct(),
-            self.true_pct(),
-            self.kappa(),
-            self.recall(),
-            self.precision(),
-            self.f1()
-        );
-    }
+fn row(tc: &TwoClass, label: &str) {
+    println!(
+        "   {label:<40} {:>7.1}% {:>9.1}% {:>8.3} {:>9.1} {:>10.1} {:>7.1}",
+        tc.pred_pct(),
+        tc.true_pct(),
+        tc.kappa(),
+        tc.recall(),
+        tc.precision(),
+        tc.f1()
+    );
 }
 
 fn header() {
@@ -158,10 +118,6 @@ fn continuous_spans(p: &Params) -> Vec<Span> {
         }
     }
     out
-}
-
-fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
-    segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
 }
 
 /// One recipe under test: the coefficients, the blip width the candidate post-pass drops (0 = off), and
@@ -248,8 +204,8 @@ fn section_refinement(spans: &[Span], p: &Params) {
     println!("{}", census.line("the over-call comparison"));
     println!("   the refinement moves {moved_sec} band seconds\n");
     header();
-    raw.row("stage_v2 only (every prior A-Z number)");
-    ref_.row("stage_v2 + refine_wake (the app's path)");
+    row(&raw, "stage_v2 only (every prior A-Z number)");
+    row(&ref_, "stage_v2 + refine_wake (the app's path)");
     println!(
         "\n   over-call ratio {:.2}x unrefined -> {:.2}x refined",
         raw.pred_pct() / raw.true_pct(),
@@ -260,8 +216,8 @@ fn section_refinement(spans: &[Span], p: &Params) {
     // is the same comparison over the spans the gate accepted, which is the refinement's own effect.
     println!("\n   the same comparison over the {} spans the gate accepted:", census.refined);
     header();
-    raw_dense.row("stage_v2, gate-accepted spans only");
-    ref_dense.row("+ refine_wake, gate-accepted spans only");
+    row(&raw_dense, "stage_v2, gate-accepted spans only");
+    row(&ref_dense, "+ refine_wake, gate-accepted spans only");
     println!(
         "   over-call ratio {:.2}x -> {:.2}x on those spans",
         raw_dense.pred_pct() / raw_dense.true_pct(),
@@ -302,9 +258,9 @@ fn section_where(spans: &[Span], p: &Params) {
     }
     println!();
     header();
-    head.row("head: span open -> first strap-asleep second");
-    interior.row("interior: inside the strap's asleep run");
-    tail.row("tail: after the last strap-asleep second");
+    row(&head, "head: span open -> first strap-asleep second");
+    row(&interior, "interior: inside the strap's asleep run");
+    row(&tail, "tail: after the last strap-asleep second");
     println!("   (head and tail sit outside the strap's asleep run by construction, so the reference reads");
     println!("    100% there and their kappa is meaningless — only our own column says anything.)");
     println!(
@@ -471,7 +427,7 @@ fn section_sweep(ns: &[Night], preps: &[Prepared], shipped: &Params) -> Vec<Reci
     let mut best: Vec<(f64, String, &'static str, Params, i64)> = Vec::new();
     for r in wake_candidates(shipped) {
         let (tc, _) = ours_score(ns, preps, &r);
-        tc.row(&r.label);
+        row(&tc, &r.label);
         best.push((tc.kappa(), r.label, r.family, r.p, r.blip_sec));
     }
     println!("\n   stage fractions over all 92 nights (wake / light / deep / REM), WHOOP export = 6.1 / 49.0 / 20.1 / 24.8");
@@ -626,7 +582,7 @@ fn section_cycle(ns: &[Night], preps: &[Prepared], shipped: &Params) -> Vec<Reci
     let cands = cycle_candidates(shipped);
     for r in &cands {
         let (tc, _) = ours_score(ns, preps, r);
-        tc.row(&r.label);
+        row(&tc, &r.label);
     }
     println!("\n   stage fractions over all 92 nights (wake / light / deep / REM), WHOOP export = 6.1 / 49.0 / 20.1 / 24.8");
     for r in &cands {

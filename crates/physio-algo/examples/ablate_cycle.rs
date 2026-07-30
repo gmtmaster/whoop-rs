@@ -24,10 +24,6 @@ use physio_algo::sleep::{
 
 const DATASETS: [&str; 5] = ["dreamt", "aauwss", "sleep-accel", "killa5", "strap"];
 
-fn fixtures_root() -> PathBuf {
-    common::fixtures_root()
-}
-
 struct Night {
     input: SleepInput,
     w0: i64,
@@ -67,7 +63,7 @@ fn load_night(dir: &Path) -> Option<Night> {
 }
 
 fn load_dataset(ds: &str) -> Vec<Night> {
-    let root = fixtures_root().join(ds);
+    let root = common::fixtures_root().join(ds);
     let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();

@@ -23,11 +23,14 @@
 
 mod common;
 
-use common::{dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, RefineCensus};
+use common::{
+    dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, stage_at,
+    RefineCensus, TwoClass,
+};
 
 use physio_algo::sleep::{
     detect_sessions, params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun,
-    SleepInput, SleepStage, StageSegment, StepSample,
+    SleepInput, SleepStage, StepSample,
 };
 
 const BAND_ASLEEP: i32 = 2;
@@ -84,42 +87,6 @@ fn load() -> Vec<Block> {
         });
     }
     out
-}
-
-#[derive(Default, Clone, Copy)]
-struct TwoClass {
-    n: i64,
-    pred_wake: i64,
-    true_wake: i64,
-    hit: i64,
-}
-
-impl TwoClass {
-    fn add(&mut self, pred_wake: bool, true_wake: bool) {
-        self.n += 1;
-        self.pred_wake += i64::from(pred_wake);
-        self.true_wake += i64::from(true_wake);
-        self.hit += i64::from(pred_wake && true_wake);
-    }
-    fn pred_pct(&self) -> f64 {
-        100.0 * self.pred_wake as f64 / self.n.max(1) as f64
-    }
-    fn true_pct(&self) -> f64 {
-        100.0 * self.true_wake as f64 / self.n.max(1) as f64
-    }
-    fn recall(&self) -> f64 {
-        100.0 * self.hit as f64 / self.true_wake.max(1) as f64
-    }
-    fn precision(&self) -> f64 {
-        100.0 * self.hit as f64 / self.pred_wake.max(1) as f64
-    }
-    fn kappa(&self) -> f64 {
-        let n = self.n.max(1) as f64;
-        let (pw, tw) = (self.pred_wake as f64, self.true_wake as f64);
-        let agree = (self.hit as f64 + (n - pw - tw + self.hit as f64)) / n;
-        let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
-        if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
-    }
 }
 
 /// The derived series in the same `(ts, magnitude)` shape the on-chip column arrives in, so it can be
@@ -191,16 +158,12 @@ fn score(blocks: &[Block], p: &Params, which: Motion, census: &mut RefineCensus)
             // The refinement reads posture, so it gets the real stream whichever arm this is.
             let out = census.refine(&segs, &real, &steps);
             for &(ts, code) in b.band.iter().filter(|(t, _)| *t >= s.start && *t < s.end) {
-                let Some(g) = at(&out, ts) else { continue };
+                let Some(g) = stage_at(&out, ts) else { continue };
                 tc.add(g == SleepStage::Wake, code != BAND_ASLEEP);
             }
         }
     }
     tc
-}
-
-fn at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
-    segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
 }
 
 fn row(label: &str, tc: &TwoClass) {

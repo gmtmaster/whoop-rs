@@ -31,12 +31,8 @@ const RUN_MIN_MINUTES: i64 = 90;
 /// A scored non-wake stretch this long fixes PSG onset, matching the staging rule.
 const ONSET_RUN_EPOCHS: usize = 10;
 
-fn fixtures_root() -> PathBuf {
-    common::fixtures_root()
-}
-
 fn subdirs(ds: &str) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(fixtures_root().join(ds))
+    let mut dirs: Vec<PathBuf> = fs::read_dir(common::fixtures_root().join(ds))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();

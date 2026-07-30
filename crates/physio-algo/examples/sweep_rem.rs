@@ -28,10 +28,6 @@ const SETS: [&str; 3] = ["sleep-accel", "dreamt", "aauwss"];
 const REM: usize = 3;
 const WAKE: usize = 0;
 
-fn fixtures_root() -> PathBuf {
-    common::fixtures_root()
-}
-
 struct Night {
     input: SleepInput,
     w0: i64,
@@ -70,7 +66,7 @@ fn load_night(dir: &Path) -> Option<Night> {
 }
 
 fn load(ds: &str) -> Vec<Night> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(fixtures_root().join(ds))
+    let mut dirs: Vec<PathBuf> = fs::read_dir(common::fixtures_root().join(ds))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();

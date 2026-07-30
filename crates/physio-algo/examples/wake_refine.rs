@@ -20,12 +20,12 @@ mod common;
 
 use common::{
     dirs_of, median, night_id, pair_nearest, read_accel, read_band, read_hr, read_meta, read_rr, read_steps,
-     Export, RefineCensus,
+    stage_at, Export, RefineCensus, TwoClass,
 };
 
 use physio_algo::sleep::{
     detect_sessions, epoch_starts_v2, motion_density, params::Params, prepare_v2, refine_wake_with,
-    stage_v2_prepared, AccelSample, Prepared, RefineParams, SleepInput, SleepStage, StageSegment, StepSample,
+    stage_v2_prepared, AccelSample, Prepared, RefineParams, SleepInput, SleepStage, StepSample,
     MIN_DENSE_FRACTION,
 };
 
@@ -44,52 +44,15 @@ fn pre_h() -> RefineParams {
 
 // ── the band reference ────────────────────────────────────────────────────────────────────────────
 
-/// Two-class scoreboard against the band's wake/asleep call. Print kappa, never accuracy: the reference
-/// calls ~90% of these seconds asleep and a config that rarely says wake cannot be wrong about wake.
-#[derive(Default, Clone, Copy)]
-struct TwoClass {
-    n: i64,
-    pred_wake: i64,
-    true_wake: i64,
-    hit: i64,
-}
-
-impl TwoClass {
-    fn add(&mut self, pred_wake: bool, true_wake: bool) {
-        self.n += 1;
-        self.pred_wake += i64::from(pred_wake);
-        self.true_wake += i64::from(true_wake);
-        self.hit += i64::from(pred_wake && true_wake);
-    }
-    fn pred_pct(&self) -> f64 {
-        100.0 * self.pred_wake as f64 / self.n.max(1) as f64
-    }
-    fn true_pct(&self) -> f64 {
-        100.0 * self.true_wake as f64 / self.n.max(1) as f64
-    }
-    fn recall(&self) -> f64 {
-        100.0 * self.hit as f64 / self.true_wake.max(1) as f64
-    }
-    fn precision(&self) -> f64 {
-        100.0 * self.hit as f64 / self.pred_wake.max(1) as f64
-    }
-    fn kappa(&self) -> f64 {
-        let n = self.n.max(1) as f64;
-        let (pw, tw) = (self.pred_wake as f64, self.true_wake as f64);
-        let agree = (self.hit as f64 + (n - pw - tw + self.hit as f64)) / n;
-        let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
-        if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
-    }
-    fn row(&self, label: &str) {
-        println!(
-            "   {label:<44} {:>7.1}% {:>8.1}% {:>8.3} {:>8.1} {:>10.1}",
-            self.pred_pct(),
-            self.true_pct(),
-            self.kappa(),
-            self.recall(),
-            self.precision()
-        );
-    }
+fn row(tc: &TwoClass, label: &str) {
+    println!(
+        "   {label:<44} {:>7.1}% {:>8.1}% {:>8.3} {:>8.1} {:>10.1}",
+        tc.pred_pct(),
+        tc.true_pct(),
+        tc.kappa(),
+        tc.recall(),
+        tc.precision()
+    );
 }
 
 fn header() {
@@ -145,10 +108,6 @@ fn continuous_spans(p: &Params) -> Vec<Span> {
     out
 }
 
-fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
-    segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
-}
-
 // ── 1  the pass reproduced ────────────────────────────────────────────────────────────────────────
 
 fn section_reproduce(spans: &[Span], p: &Params) {
@@ -184,14 +143,14 @@ fn section_reproduce(spans: &[Span], p: &Params) {
     println!("{}", census.line("the refinement"));
     println!("   band seconds moved: {moved_old} under the pre-H rule, {moved_new} under the shipped one\n");
     header();
-    raw.row("stage_v2, all spans");
-    old.row("+ refine_wake pre-H, all spans");
-    new.row("+ refine_wake SHIPPED, all spans (the app)");
+    row(&raw, "stage_v2, all spans");
+    row(&old, "+ refine_wake pre-H, all spans");
+    row(&new, "+ refine_wake SHIPPED, all spans (the app)");
     println!("\n   the same rows over the {} spans the gate accepted — the pass's own effect:", census.refined);
     header();
-    raw_d.row("stage_v2, gate-accepted");
-    old_d.row("+ refine_wake pre-H, gate-accepted");
-    new_d.row("+ refine_wake SHIPPED, gate-accepted");
+    row(&raw_d, "stage_v2, gate-accepted");
+    row(&old_d, "+ refine_wake pre-H, gate-accepted");
+    row(&new_d, "+ refine_wake SHIPPED, gate-accepted");
     println!(
         "   over-call ratio {:.2}x unrefined -> {:.2}x pre-H -> {:.2}x shipped",
         raw_d.pred_pct() / raw_d.true_pct(),

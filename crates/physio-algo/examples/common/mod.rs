@@ -133,6 +133,57 @@ pub fn pre_retune(base: &Params) -> Params {
     }
 }
 
+/// Two-class scoreboard against a wake/asleep reference. Read [`TwoClass::kappa`], never accuracy: these
+/// references call ~90% of their seconds asleep and a config that rarely says wake cannot be wrong about
+/// wake. Presentation stays with each harness, which prints different columns.
+#[derive(Default, Clone, Copy)]
+pub struct TwoClass {
+    pub n: i64,
+    pub pred_wake: i64,
+    pub true_wake: i64,
+    pub hit: i64,
+}
+
+impl TwoClass {
+    pub fn add(&mut self, pred_wake: bool, true_wake: bool) {
+        self.n += 1;
+        self.pred_wake += i64::from(pred_wake);
+        self.true_wake += i64::from(true_wake);
+        self.hit += i64::from(pred_wake && true_wake);
+    }
+    /// The share of seconds WE call wake.
+    pub fn pred_pct(&self) -> f64 {
+        100.0 * self.pred_wake as f64 / self.n.max(1) as f64
+    }
+    /// The share the REFERENCE calls wake. Print it beside `pred_pct`, or a ratio has no denominator.
+    pub fn true_pct(&self) -> f64 {
+        100.0 * self.true_wake as f64 / self.n.max(1) as f64
+    }
+    pub fn recall(&self) -> f64 {
+        100.0 * self.hit as f64 / self.true_wake.max(1) as f64
+    }
+    pub fn precision(&self) -> f64 {
+        100.0 * self.hit as f64 / self.pred_wake.max(1) as f64
+    }
+    pub fn f1(&self) -> f64 {
+        let (r, p) = (self.recall(), self.precision());
+        if r + p <= 0.0 { 0.0 } else { 2.0 * r * p / (r + p) }
+    }
+    /// Cohen's kappa over the 2x2 table, which is accuracy with the base rate divided out.
+    pub fn kappa(&self) -> f64 {
+        let n = self.n.max(1) as f64;
+        let (pw, tw) = (self.pred_wake as f64, self.true_wake as f64);
+        let agree = (self.hit as f64 + (n - pw - tw + self.hit as f64)) / n;
+        let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
+        if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
+    }
+}
+
+/// The stage covering `ts` in a tiled hypnogram, or `None` past its end.
+pub fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
+    segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
+}
+
 /// The upper-middle order statistic, sorting in place. NOT the same as [`median_avg`] on an even count,
 /// and published figures were taken under each, so the two are not interchangeable.
 pub fn median(v: &mut [f64]) -> f64 {
