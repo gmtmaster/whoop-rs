@@ -218,7 +218,12 @@ fn main() {
         println!("{label:<30} {k:>6.3} {rem:>8.1} {rerr:>10.2} {lerr:>11.1}");
     };
     println!("\n{:<30} {:>6} {:>8} {:>10} {:>11}", "variant", "kappa", "REM %", "|REM err|", "|lat err|");
-    show("shipped (step at 12%)", &shipped);
+    show("shipped (onset guard)", &shipped);
+    // The window-anchored step the shipped guard replaced, so this sweep still shows what it bought.
+    show(
+        "pre-F1 window step at 12%",
+        &Params { cycle_rem_onset_minutes: 0.0, cycle_rem_early_penalty: 3.0, ..shipped },
+    );
 
     println!("\n-- onset-anchored guard: K x minutes --");
     for k in [1.0f64, 2.0, 3.0, 4.0, 6.0] {

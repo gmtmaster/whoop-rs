@@ -33,12 +33,21 @@ pub struct Params {
     /// Stage base rates, in probability (logged before use), in [deep, rem, light, awake] order.
     pub base_rate: [f64; 4],
     /// Sleep-cycle prior: deep scale + the fraction of the night it decays over; REM scale, the early
-    /// fraction it is suppressed in, and the size of that suppression.
+    /// fraction it is suppressed in (read only when the guard is window-anchored), and the size of that
+    /// suppression.
     pub cycle_deep_scale: f64,
     pub cycle_deep_decay: f64,
     pub cycle_rem_scale: f64,
     pub cycle_rem_early_frac: f64,
     pub cycle_rem_early_penalty: f64,
+    /// Zero keeps the early-REM suppression a step below `cycle_rem_early_frac` of the session; a
+    /// positive value grades the same magnitude to zero over that many minutes past detected onset.
+    pub cycle_rem_onset_minutes: f64,
+    /// Ceiling on the REM ramp's time-of-night input, so the prior stops growing past this fraction.
+    pub cycle_rem_ramp_cap: f64,
+    /// Measure time-of-night from detected sleep onset instead of from the window start, so bedtime
+    /// latency stops shifting every epoch's position in the night. Costs a second staging pass.
+    pub cycle_clock_from_onset: bool,
     /// Sticky transition matrix (rows = from, cols = to) in [deep, rem, light, awake] order.
     pub transition: [[f64; 4]; 4],
 }
@@ -68,7 +77,10 @@ impl Params {
         cycle_deep_decay: 0.55,
         cycle_rem_scale: 1.0,
         cycle_rem_early_frac: 0.12,
-        cycle_rem_early_penalty: 3.0,
+        cycle_rem_early_penalty: 4.0,
+        cycle_rem_onset_minutes: 60.0,
+        cycle_rem_ramp_cap: 1.0,
+        cycle_clock_from_onset: false,
         transition: [
             [0.76, 0.012, 0.216, 0.012],
             [0.00333, 0.92, 0.06667, 0.01],

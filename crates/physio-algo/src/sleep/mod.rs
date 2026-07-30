@@ -7,8 +7,9 @@
 //! Inputs are protocol-free (see [`input`]). [`analyze`] runs the whole pipeline (detect → stage → refine)
 //! over a night's streams, and each stage is exported on its own so a caller can run just one:
 //! [`detect_sessions`] (or [`detect_sessions_with`] under a chosen [`DetectParams`]) returns the in-bed
-//! windows without staging them, [`stage_v2`] stages one already-detected `[start, end]` span, and
-//! [`stage_refined`] adds the wake refinement. Pure + deterministic.
+//! windows without staging them, [`stage_v2`] stages one already-detected `[start, end]` span,
+//! [`refine_wake`] runs the wake refinement over a staging the caller already has, and
+//! [`stage_refined`] is the two together. Pure + deterministic.
 
 mod common;
 mod detect;
@@ -25,6 +26,7 @@ pub use params::Params;
 pub use detect::{detect_sessions, detect_sessions_with, DetectParams, DetectedSpan};
 pub use v2::{prepare as prepare_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, Prepared, DEEP_GATE_THRESH};
+pub use refine::refine as refine_wake;
 pub use mainnight::{
     bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices,
     main_night_group_indices_scored, main_night_index, main_night_index_scored, main_night_selection,

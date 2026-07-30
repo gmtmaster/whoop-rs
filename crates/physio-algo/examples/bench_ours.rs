@@ -114,8 +114,8 @@ fn main() {
     }
 
     let shipped = Params::SHIPPED;
-    let mut no_step = shipped;
-    no_step.cycle_rem_early_penalty = 0.0;
+    let mut no_guard = shipped;
+    no_guard.cycle_rem_early_penalty = 0.0;
     let mut no_ramp = shipped;
     no_ramp.cycle_rem_scale = 0.0;
     let pre = Params {
@@ -145,7 +145,7 @@ fn main() {
         "{:<14} {:>26} {:>10} {:>26} {:>9}",
         "variant", "predicted % w/l/d/r", "1st REM", "on labelled: pred/band wake%", "rec/prec"
     );
-    for (name, p) in [("shipped", &shipped), ("no step", &no_step), ("no ramp", &no_ramp), ("pre-retune", &pre)] {
+    for (name, p) in [("shipped", &shipped), ("no guard", &no_guard), ("no ramp", &no_ramp), ("pre-retune", &pre)] {
         let prep: Vec<Prepared> = nights.iter().map(|n| prepare_v2(&n.input, p)).collect();
         let mut frac = [0i64; 4];
         // A second count over only the band-labelled epochs, so predicted and band wake share a denominator.

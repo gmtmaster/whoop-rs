@@ -14,6 +14,11 @@ use super::params::Params;
 use super::input::{AccelSample, HrSample, SleepInput};
 use super::{SleepStage, StageSegment};
 
+/// Consecutive non-wake epochs that mark sleep onset for the onset-anchored priors.
+const SUSTAINED_ONSET_EPOCHS: usize = 10;
+/// One epoch in minutes, the unit the onset-anchored REM guard grades over.
+const EPOCH_MIN: f64 = 0.5;
+
 // Stage indices for the emission/transition arrays: order [deep, rem, light, awake].
 const DEEP: usize = 0;
 const REM: usize = 1;
@@ -364,12 +369,61 @@ fn resp_regularity(beats: &[(f64, f64)]) -> Option<f64> {
     }
 }
 
-/// Soft sleep-cycle prior: deep concentrated early (decays), REM suppressed in the first ~12% then rising.
-fn cycle_prior(c: f64, p: &Params) -> [f64; 4] {
+/// Where the time-of-night priors are measured from. `Probe` is the first pass of a two-pass staging: it
+/// has no labels yet, so the early-REM guard is off and cannot bias the onset it is looking for.
+#[derive(Clone, Copy)]
+enum Anchor {
+    Probe,
+    /// Read from the window, which is what a one-pass staging has.
+    Window,
+    /// Read from the epoch sleep began at.
+    Onset(usize),
+}
+
+/// Soft sleep-cycle prior: deep concentrated early (decays), REM raised through the night less `guard`.
+fn cycle_prior(c: f64, guard: f64, p: &Params) -> [f64; 4] {
     let mut pr = [0.0; 4];
     pr[DEEP] = p.cycle_deep_scale * (1.0 - c / p.cycle_deep_decay).max(0.0);
-    pr[REM] = p.cycle_rem_scale * c - if c < p.cycle_rem_early_frac { p.cycle_rem_early_penalty } else { 0.0 };
+    pr[REM] = p.cycle_rem_scale * c.min(p.cycle_rem_ramp_cap) - guard;
     pr
+}
+
+/// Time-of-night for the cycle prior. `clock` is a fraction of the WINDOW, so rebasing the pair against
+/// the onset epoch's own value re-expresses it as a fraction of the sleep period in the same units.
+fn cycle_clock(c: f64, feats: &[Epoch], anchor: Anchor, p: &Params) -> f64 {
+    let Anchor::Onset(o) = anchor else { return c };
+    if !p.cycle_clock_from_onset {
+        return c;
+    }
+    let c0 = feats[o].clock;
+    if c0 >= 1.0 { c } else { ((c - c0) / (1.0 - c0)).clamp(0.0, 1.0) }
+}
+
+/// The early-REM suppression for one epoch. Zero `cycle_rem_onset_minutes` keeps the step at a fraction
+/// of the session; a positive one grades the same magnitude to zero over that many minutes past onset,
+/// clamped so a pre-onset epoch is never penalised harder than onset itself.
+fn rem_guard(idx: usize, c: f64, anchor: Anchor, p: &Params) -> f64 {
+    match anchor {
+        Anchor::Probe => 0.0,
+        Anchor::Onset(o) if p.cycle_rem_onset_minutes > 0.0 => {
+            let minutes = (idx as f64 - o as f64) * EPOCH_MIN;
+            p.cycle_rem_early_penalty * (1.0 - minutes / p.cycle_rem_onset_minutes).clamp(0.0, 1.0)
+        }
+        _ if c < p.cycle_rem_early_frac => p.cycle_rem_early_penalty,
+        _ => 0.0,
+    }
+}
+
+/// First epoch of the earliest run of at least `SUSTAINED_ONSET_EPOCHS` consecutive non-wake labels.
+fn sustained_onset(labels: &[SleepStage]) -> Option<usize> {
+    let mut run = 0usize;
+    for (i, l) in labels.iter().enumerate() {
+        run = if *l == SleepStage::Wake { 0 } else { run + 1 };
+        if run == SUSTAINED_ONSET_EPOCHS {
+            return Some(i + 1 - SUSTAINED_ONSET_EPOCHS);
+        }
+    }
+    None
 }
 
 /// Motion-quiescent: movement was OBSERVED and was none, with peak jerk at/below the night floor × the
@@ -456,6 +510,17 @@ fn stage_epochs(feats: &[Epoch], p: &Params) -> Vec<SleepStage> {
     if feats.is_empty() {
         return Vec::new();
     }
+    // An onset-anchored prior needs a staging to find the onset, so stage once without one first.
+    if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
+        let probe = viterbi(&emissions(feats, p, Anchor::Probe), &p.transition);
+        let anchor = Anchor::Onset(sustained_onset(&probe).unwrap_or(0));
+        return viterbi(&emissions(feats, p, anchor), &p.transition);
+    }
+    viterbi(&emissions(feats, p, Anchor::Window), &p.transition)
+}
+
+/// Per-epoch log-emissions under `p`, with the time-of-night priors read from `anchor`.
+fn emissions(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<[f64; 4]> {
     let blp = p.base_log_prior();
     let zhr = ZScore::build(&feats.iter().map(|f| f.hr).collect::<Vec<_>>());
     let zhv = ZScore::build(&feats.iter().map(|f| f.hr_var).collect::<Vec<_>>());
@@ -485,7 +550,7 @@ fn stage_epochs(feats: &[Epoch], p: &Params) -> Vec<SleepStage> {
     };
 
     let mut seq: Vec<[f64; 4]> = Vec::with_capacity(feats.len());
-    for f in feats {
+    for (i, f) in feats.iter().enumerate() {
         let zhrv = zhr.apply(f.hr);
         let zhvv = zhv.apply(f.hr_var);
         let zmvv = zmv.apply(f.move_frac);
@@ -499,7 +564,7 @@ fn stage_epochs(feats: &[Epoch], p: &Params) -> Vec<SleepStage> {
         em[LIGHT] = blp[LIGHT];
         em[AWAKE] = p.awake_motion * zmvv + awake_cardiac + blp[AWAKE];
 
-        let pr = cycle_prior(f.clock, p);
+        let pr = cycle_prior(cycle_clock(f.clock, feats, anchor, p), rem_guard(i, f.clock, anchor, p), p);
         for (s, p) in pr.iter().enumerate() {
             em[s] += p;
         }
@@ -513,7 +578,7 @@ fn stage_epochs(feats: &[Epoch], p: &Params) -> Vec<SleepStage> {
         }
         seq.push(em);
     }
-    viterbi(&seq, &p.transition)
+    seq
 }
 
 #[cfg(test)]
@@ -549,6 +614,52 @@ mod tests {
         let feats = half_blind_epochs();
         assert!(motion_quiescent(&feats[0], &Params::SHIPPED), "an observed still wrist is quiescent");
         assert!(!motion_quiescent(&feats[1], &Params::SHIPPED), "an absent accelerometer cannot assert stillness");
+    }
+
+    #[test]
+    fn sustained_onset_is_the_first_epoch_of_the_first_long_non_wake_run() {
+        let w = SleepStage::Wake;
+        let l = SleepStage::Light;
+        // A 9-epoch run is too short; the 10-epoch run that follows it is the onset.
+        let mut labels = vec![w; 3];
+        labels.extend(vec![l; 9]);
+        labels.push(w);
+        labels.extend(vec![l; 10]);
+        assert_eq!(Some(13), sustained_onset(&labels));
+        assert_eq!(None, sustained_onset(&[l; SUSTAINED_ONSET_EPOCHS - 1]));
+    }
+
+    #[test]
+    fn the_onset_anchored_guard_grades_from_onset_not_from_the_window() {
+        let p = Params::SHIPPED;
+        assert!(p.cycle_rem_onset_minutes > 0.0, "the shipped guard is onset-anchored");
+        let onset = 40usize;
+        let full = p.cycle_rem_early_penalty;
+        // Full magnitude at onset, nothing at onset + the grading width, and never negative before onset.
+        assert_eq!(full, rem_guard(onset, 0.9, Anchor::Onset(onset), &p));
+        let past = onset + (p.cycle_rem_onset_minutes / EPOCH_MIN) as usize;
+        assert_eq!(0.0, rem_guard(past, 0.9, Anchor::Onset(onset), &p));
+        assert_eq!(full, rem_guard(0, 0.9, Anchor::Onset(onset), &p));
+        // A window anchor keeps the old step, and the probe pass carries no guard at all.
+        assert_eq!(full, rem_guard(0, 0.01, Anchor::Window, &p));
+        assert_eq!(0.0, rem_guard(0, 0.9, Anchor::Window, &p));
+        assert_eq!(0.0, rem_guard(0, 0.01, Anchor::Probe, &p));
+    }
+
+    #[test]
+    fn the_onset_anchored_clock_rebases_only_when_asked() {
+        let feats = half_blind_epochs();
+        let shipped = Params::SHIPPED;
+        let from_onset = Params { cycle_clock_from_onset: true, ..shipped };
+        let c0 = feats[0].clock;
+        assert_eq!(0.75, cycle_clock(0.75, &feats, Anchor::Onset(0), &shipped), "off by default");
+        assert_eq!(0.75, cycle_clock(0.75, &feats, Anchor::Window, &from_onset), "no anchor, no rebase");
+        assert_eq!(
+            (0.75 - c0) / (1.0 - c0),
+            cycle_clock(0.75, &feats, Anchor::Onset(0), &from_onset),
+            "rebased onto the onset epoch's own fraction"
+        );
+        assert_eq!(0.0, cycle_clock(0.0, &feats, Anchor::Onset(1), &from_onset), "clamped below onset");
     }
 
     #[test]

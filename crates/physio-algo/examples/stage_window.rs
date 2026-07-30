@@ -414,6 +414,16 @@ fn section_window_channels() {
         ..shipped
     };
 
+    // F3: the same prior read from detected sleep onset instead of from the window start, which is the
+    // one change that can move the clock channel without switching it off.
+    let from_onset = Params { cycle_clock_from_onset: true, ..shipped };
+    let onset_guard = Params {
+        cycle_clock_from_onset: true,
+        cycle_rem_early_penalty: 4.0,
+        cycle_rem_onset_minutes: 60.0,
+        ..shipped
+    };
+
     println!("\n   config                                 nights  shared   moved  median/night   band agreement");
     println!("                                                                                  full / trimmed");
     for (label, p) in [
@@ -422,6 +432,8 @@ fn section_window_channels() {
         ("- deep percentile gate", &no_gate),
         ("- motion (median jerk + its z)", &no_motion),
         ("cardiac z-scores ONLY", &cardiac_only),
+        ("clock from ONSET (F3)", &from_onset),
+        ("clock + guard from ONSET (F3+F1)", &onset_guard),
     ] {
         let w = window_effect(&ns, p);
         println!(

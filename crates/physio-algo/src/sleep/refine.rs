@@ -22,7 +22,7 @@ const MIN_DENSE_MINUTE_COVERAGE_FRACTION: f64 = 0.80;
 
 /// Reclassify non-burst minutes of eligible wake segments to light. `segments` must tile one contiguous
 /// window in order. Byte-identical passthrough when empty, degenerate, or the density gate declines.
-pub(super) fn refine(segments: &[StageSegment], grav: &[AccelSample], steps: &[StepSample]) -> Vec<StageSegment> {
+pub fn refine(segments: &[StageSegment], grav: &[AccelSample], steps: &[StepSample]) -> Vec<StageSegment> {
     let (Some(first), Some(last)) = (segments.first(), segments.last()) else { return segments.to_vec() };
     let (window_start, window_end) = (first.start, last.end);
     if window_end <= window_start || !is_motion_dense(window_start, window_end, grav, steps) {

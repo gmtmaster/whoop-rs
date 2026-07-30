@@ -306,11 +306,10 @@ fn main() {
     shipped_no_step.cycle_rem_early_penalty = 0.0;
     let mut pre_no_step = pre;
     pre_no_step.cycle_rem_early_penalty = 0.0;
-    // The proposed guard: same magnitude, graded to zero over 60 minutes past a detected onset.
-    let mut shipped_934 = shipped;
-    shipped_934.cycle_rem_onset_minutes = 60.0;
-    let mut pre_934 = pre;
-    pre_934.cycle_rem_onset_minutes = 60.0;
+    // The window-anchored step the shipped guard replaced. Kept as an explicit config, not as the
+    // default, so the evidence for the change outlives the change.
+    let shipped_pre_guard = Params { cycle_rem_onset_minutes: 0.0, cycle_rem_early_penalty: 3.0, ..shipped };
+    let pre_pre_guard = Params { cycle_rem_onset_minutes: 0.0, cycle_rem_early_penalty: 3.0, ..pre };
 
     println!("--- the units claim, from PSG truth only ---");
     for ds in PSG {
@@ -334,8 +333,8 @@ fn main() {
         );
         println!("{:<22} {:>6} {:>26} {:>12} {:>10} {:>8}", "recipe", "kappa", "% w/l/d/r", "1stREM med", "min", "changed");
         for (label, base_p, alts) in [
-            ("shipped", &shipped, [("shipped, no step", &shipped_no_step), ("shipped + onset guard", &shipped_934)]),
-            ("pre-retune", &pre, [("pre-retune, no step", &pre_no_step), ("pre-retune + onset guard", &pre_934)]),
+            ("shipped", &shipped, [("shipped, no guard", &shipped_no_step), ("shipped, pre-F1 window step", &shipped_pre_guard)]),
+            ("pre-retune", &pre, [("pre-retune, no guard", &pre_no_step), ("pre-retune, window step", &pre_pre_guard)]),
         ] {
             let (r, base) = score(&nights, base_p, None);
             println!(
