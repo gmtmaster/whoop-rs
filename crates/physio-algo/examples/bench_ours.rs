@@ -120,6 +120,9 @@ fn main() {
     let shipped = Params::SHIPPED;
     let mut no_guard = shipped;
     no_guard.cycle_rem_early_penalty = 0.0;
+    // The window-anchored step the shipped onset guard replaced. Kept as an explicit config so the
+    // first-REM reading the change was measured against still has a row here.
+    let pre_guard = Params { cycle_rem_onset_minutes: 0.0, cycle_rem_early_penalty: 3.0, ..shipped };
     let mut no_ramp = shipped;
     no_ramp.cycle_rem_scale = 0.0;
     let pre = Params {
@@ -146,10 +149,16 @@ fn main() {
     owners.dedup();
 
     println!(
-        "{:<14} {:>26} {:>10} {:>26} {:>9}",
+        "{:<19} {:>26} {:>10} {:>26} {:>9}",
         "variant", "predicted % w/l/d/r", "1st REM", "on labelled: pred/band wake%", "rec/prec"
     );
-    for (name, p) in [("shipped", &shipped), ("no guard", &no_guard), ("no ramp", &no_ramp), ("pre-retune", &pre)] {
+    for (name, p) in [
+        ("shipped", &shipped),
+        ("pre-F1 window step", &pre_guard),
+        ("no guard", &no_guard),
+        ("no ramp", &no_ramp),
+        ("pre-retune", &pre),
+    ] {
         let prep: Vec<Prepared> = nights.iter().map(|n| prepare_v2(&n.input, p)).collect();
         let mut frac = [0i64; 4];
         // A second count over only the band-labelled epochs, so predicted and band wake share a denominator.
@@ -182,7 +191,7 @@ fn main() {
         let all_lab: i64 = frac_lab.iter().sum();
         let pct = |v: i64| 100.0 * v as f64 / all as f64;
         println!(
-            "{:<14} {:>6.1}{:>6.1}{:>6.1}{:>7.1} {:>7.1} min {:>10.1}{:>9.1}{:>9.1} {:>9.1}",
+            "{:<19} {:>6.1}{:>6.1}{:>6.1}{:>7.1} {:>7.1} min {:>10.1}{:>9.1}{:>9.1} {:>9.1}",
             name,
             pct(frac[0]), pct(frac[1]), pct(frac[2]), pct(frac[3]),
             median(&mut lat),

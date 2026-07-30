@@ -15,6 +15,9 @@
 //!
 //! The fixture carries `startTs` (the immutable primary key), not `startTsAdjusted`, so an edited
 //! row's open edge here is its DETECTED onset, not the one the app displays.
+//!
+//! This harness never stages, so the wake refinement is out of scope by construction rather than by
+//! choice: every figure is a window bound, and `refine_wake` rewrites labels inside a fixed span.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,24 +1,29 @@
 //! End-to-end scoring of the sleep flow over continuous wear blocks, with the strap's own sleep_state
-//! as the reference at every stage. Runs the real path: detect -> window -> stage.
+//! as the reference at every stage. Runs the whole shipped chain: detect -> window -> stage -> refine.
 //!
 //!   cargo run --release -p physio-algo --example flow_az
 //!
 //! Stage A/B  detection: does a span exist for each run the strap called asleep, and where are its edges
 //! Stage C    selection: is one strap run split across spans, or one span covering several runs
-//! Stage E-I  staging: stage fractions inside the spans, against the strap's wake/asleep call
+//! Stage E-I  staging: the wake fraction inside the spans, against the strap's wake/asleep call
 //!
 //! Blocks are cut on wear, not on labels, so nothing here tells the detector where to look.
 //!
-//! STAGE FIGURES HERE ARE `stage_v2` ONLY, not the app's `stage_v2` + `refine_wake`. The refined wake
-//! figures live in `emit_wake`; this harness exists to place every stage of the flow beside the others
-//! on one reference, so both of its stage rows are the unrefined path and say so.
+//! The wake row is printed on BOTH paths: `stage_v2` alone, which is what every A-Z number before the
+//! refinement was exported was measured on, and `stage_v2` + `refine_wake`, which is what `analyze`
+//! runs. The refined figure carries its own census, so a span the density gate declined cannot be
+//! pooled into it.
+
+mod common;
+
+use common::RefineCensus;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
     detect_sessions, params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun,
-    SleepInput, SleepStage,
+    SleepInput, SleepStage, StepSample,
 };
 
 fn root() -> PathBuf {
@@ -53,6 +58,7 @@ struct Block {
     hr: Vec<HrSample>,
     rr: Vec<RrRun>,
     accel: Vec<AccelSample>,
+    steps: Vec<StepSample>,
     band: Vec<(i64, i32)>,
 }
 
@@ -78,7 +84,12 @@ fn load(dir: &Path) -> Option<Block> {
         }
     }
     let band = read_csv(&dir.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
-    Some(Block { stored, hr, rr, accel, band })
+    // `-1` in column 3 means the activity class was not decoded, which is not "still".
+    let steps = read_csv(&dir.join("steps.csv"))
+        .iter()
+        .map(|r| StepSample { ts: r[0] as i64, counter: r[1] as u16, activity_class: (r[2] >= 0.0).then(|| r[2] as u8) })
+        .collect();
+    Some(Block { stored, hr, rr, accel, steps, band })
 }
 
 /// Contiguous stretches the strap itself called asleep, at least `min_min` long, tolerating a 5-minute
@@ -138,7 +149,9 @@ fn main() {
     let (mut head, mut tail) = (Vec::new(), Vec::new());
     let (mut stored_tail, mut fresh_tail, mut edited_tail) = (Vec::new(), Vec::new(), Vec::new());
     let (mut pred_wake, mut pred_all) = (0i64, 0i64);
+    let (mut ref_wake, mut ref_all) = (0i64, 0i64);
     let (mut band_wake, mut band_all) = (0i64, 0i64);
+    let mut census = RefineCensus::default();
     let mut blocks = 0;
 
     for d in &dirs {
@@ -225,6 +238,11 @@ fn main() {
                 continue;
             }
             let segs = stage_v2_prepared(&prepare_v2(&input, &params), &params);
+            // The same staging refined, counting which side of the density gate this span fell on, so
+            // the refined row below is the app's path or is reported as a mixture.
+            let mut probe = RefineCensus::default();
+            let refined = probe.refine(&segs, &input.accel, &steps_in(&b.steps, s.start, s.end));
+            census.absorb(&probe);
             for &(ts, st) in b.band.iter().filter(|(t, _)| *t >= s.start && *t < s.end) {
                 let stage = segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage);
                 if let Some(stage) = stage {
@@ -232,6 +250,10 @@ fn main() {
                     pred_wake += i64::from(stage == SleepStage::Wake);
                     band_all += 1;
                     band_wake += i64::from(st != 2);
+                }
+                if let Some(stage) = refined.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage) {
+                    ref_all += 1;
+                    ref_wake += i64::from(stage == SleepStage::Wake);
                 }
             }
         }
@@ -291,4 +313,16 @@ fn main() {
         100.0 * band_wake as f64 / band_all.max(1) as f64,
         pred_all
     );
+    println!(
+        "     the same + refine_wake (the app): ours {:.1}%  vs strap {:.1}%  over {} epochs",
+        100.0 * ref_wake as f64 / ref_all.max(1) as f64,
+        100.0 * band_wake as f64 / band_all.max(1) as f64,
+        ref_all
+    );
+    println!("{}", census.line("the refined wake fraction"));
+}
+
+/// One span's slice of the strap's step stream, which is what the refinement's density gate reads.
+fn steps_in(steps: &[StepSample], start: i64, end: i64) -> Vec<StepSample> {
+    steps.iter().filter(|s| s.ts >= start && s.ts < end).cloned().collect()
 }

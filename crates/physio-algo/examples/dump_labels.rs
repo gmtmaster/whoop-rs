@@ -5,7 +5,9 @@
 //!
 //! One row per night: fixture id, recipe, then one character per epoch (w/l/d/r).
 //!
-//! `stage_v2` ONLY — the labels dumped are the unrefined staging, not what the app displays.
+//! `stage_v2` ONLY, and it is the right path for a dump off THIS set: `ours` gravity is held forward
+//! across dropouts, so the refinement's posture check reads artificially stable here and its wake would
+//! be optimistic. An aligner wanting the app's wake labels needs `continuous` and the density gate.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,0 +1,3091 @@
+# Sleep A-Z figure manifest: every number the documents quote, paired with the command that prints it.
+#
+# Read by `az_sweep.py`. One `[[run]]` per harness (its example, its dataset, why it exists); one
+# `[[figure]]` per quoted number (which run prints it, which document and section carries it, the
+# documented value, and the regex that extracts the actual one - capture group 1 IS the value).
+#
+# A figure with no `pattern` is UNREPRODUCIBLE: no committed command regenerates it. That is reported,
+# never passed, because a number nobody can regenerate is how this project accumulated facts that later
+# turned out to be wrong. Say WHY in `note`.
+#
+# Adding a figure to a document means adding it here in the same pass. The sweep is then one command.
+
+[meta]
+version = "1.0.0"
+cargo_root = "whoop-rs"
+# The de-duplicated corpus. Do NOT rebuild it expecting these numbers: the raw root has been rebuilt
+# from newer backups (2,140.5 h against the pinned 2,113 h), so a rebuild is a DIFFERENT corpus.
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+
+# ─────────────────────────────────────────── the runs ───────────────────────────────────────────
+
+[[run]]
+id = "hrv_seam"
+example = "hrv_seam"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "A"
+what = "the R-R report-seam rule, per wearer"
+
+[[run]]
+id = "hrv_window"
+example = "hrv_window"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "A"
+what = "whole-night vs deep-only vs last-deep HRV, and every published WHOOP pair"
+
+[[run]]
+id = "detect_hysteresis"
+example = "detect_hysteresis"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "B"
+what = "the 25-cell enter/exit sweep on two references, both named configs, the staging churn"
+
+[[run]]
+id = "select_bridge"
+example = "select_bridge"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "C"
+what = "nine sections: cardinality, bridging, selection, split cost, the absorb sweep, both paths"
+
+[[run]]
+id = "persist_window"
+example = "persist_window"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "D"
+what = "the stored window against fresh detection, split by who wrote each row"
+
+[[run]]
+id = "window_effect"
+example = "window_effect"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "E"
+what = "the window sensitivity itself, on both paths"
+
+[[run]]
+id = "stage_window"
+example = "stage_window"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "E"
+what = "grid origins, grid phase, the ablation, and the two main-night scorers"
+
+[[run]]
+id = "emit_wake"
+example = "emit_wake"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "F"
+what = "the wake over-call on the app's path, the region split, six levers, the PSG ledger"
+
+[[run]]
+id = "viterbi_decode"
+example = "viterbi_decode"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "G"
+what = "the decoder against three oracles and four references, the matrix and base rates measured"
+
+[[run]]
+id = "flow_az"
+example = "flow_az"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "B-I"
+what = "every stage of the flow beside the others on one reference"
+
+[[run]]
+id = "bench_ours"
+example = "bench_ours"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "I"
+what = "stage fractions and first-REM over all 92 nights"
+
+[[run]]
+id = "sweep_rem"
+example = "sweep_rem"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "F"
+what = "the REM guard's K x minutes grid and the ramp ceiling, on PSG truth"
+
+[[run]]
+id = "verify_934"
+example = "verify_934"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "F"
+what = "the guard per cohort, against the pre-F1 window step, with the units claim"
+
+[[run]]
+id = "ablate_cycle"
+example = "ablate_cycle"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "-"
+what = "the cycle prior ablated against PSG truth. No A-Z figure is quoted from it"
+
+[[run]]
+id = "dump_labels"
+example = "dump_labels"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "-"
+what = "per-epoch labels for an external aligner. No A-Z figure is quoted from it"
+
+[[run]]
+id = "tune_v2"
+example = "tune_v2"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "-"
+skip = "a coordinate-descent search, not a measurement; no A-Z figure is quoted from it"
+
+[[run]]
+id = "verify_backup"
+example = "verify_backup"
+fixtures = "sleep-benchmark/fixtures_multi_clean"
+step = "-"
+skip = "reads a backup slices directory, not the fixture root; no A-Z figure is quoted from it"
+
+# ───────────────────────────────── A: streams reach storage ─────────────────────────────────
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "david, clean median shift"
+documented = "0.0%"
+pattern = '^david\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+]?[\d.]+)%'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "david, nights moved"
+documented = "4/18"
+pattern = '^david\s+\d+\s+[\d.]+\s+[\d.]+\s+[-+]?[\d.]+%\s+(\d+/\d+)'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "killa, nights moved"
+documented = "0/17"
+pattern = '^killa\s+\d+\s+[\d.]+\s+[\d.]+\s+[-+]?[\d.]+%\s+(\d+/\d+)'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "user-69-7e79, clean median shift"
+documented = "-21.7%"
+pattern = '^user-69-7e79\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+]?[\d.]+)%'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "user-f1e5, clean median shift"
+documented = "-4.8%"
+pattern = '^user-f1e5\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+]?[\d.]+)%'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "all 85 nights, clean median shift"
+documented = "+0.0%"
+pattern = 'per-night shift: median ([-+][\d.]+)%'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the seam rule on the clean corpus vs the doubled one"
+label = "all 85 nights, clean p10"
+documented = "-29.2%"
+pattern = 'per-night shift: median [-+][\d.]+%\s+p10 ([-+][\d.]+)%'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the corpus"
+label = "beats in the clean ours corpus"
+documented = "2853257"
+pattern = '^(\d+) beats,'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the window choice"
+label = "median avgHrv, whole-night"
+documented = "61.5"
+pattern = 'whole-night ([\d.]+) ms \(n=85\)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the window choice"
+label = "median avgHrv, deep-only"
+documented = "43.3"
+pattern = 'deep-only ([\d.]+) ms \(n=83\)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the window choice"
+label = "median avgHrv, last-deep"
+documented = "63.1"
+pattern = 'last-deep ([\d.]+) ms \(n=75\)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the window choice"
+label = "per-night whole->deep shift, median"
+documented = "-13.9%"
+pattern = 'whole->deep shift: median ([-+][\d.]+)%'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "deep-window coverage"
+label = "nights with no deep span"
+documented = "2"
+pattern = 'deep-window coverage: (\d+) of 85 nights have no deep span'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "deep-window coverage"
+label = "no-deep rate"
+documented = "2.4%"
+pattern = 'no deep span \(([\d.]+)%\)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "median published"
+documented = "24.0"
+pattern = 'median  published ([\d.]+) ms'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "median deep-only, clean"
+documented = "25.8"
+pattern = 'median  published [\d.]+ ms   deep-only ([\d.]+) ms'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "median whole-night, clean"
+documented = "31.6"
+pattern = 'median  published [\d.]+ ms   deep-only [\d.]+ ms   whole-night ([\d.]+) ms'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "deep-only difference from published, median"
+documented = "+0.6"
+pattern = 'deep-only median ([-+][\d.]+) ms'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "deep-only MAE"
+documented = "2.1"
+pattern = 'deep-only median [-+][\d.]+ ms \(MAE ([\d.]+)\)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "whole-night difference from published, median"
+documented = "+6.7"
+pattern = 'whole-night median ([-+][\d.]+) ms'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "whole-night MAE"
+documented = "6.0"
+pattern = 'whole-night median [-+][\d.]+ ms \(MAE ([\d.]+)\)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "staged nights paired within 4 h"
+documented = "16"
+pattern = 'published nightly HRV: (\d+) of 85 staged nights paired'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "A7/F2 - RMSSD tracks beat-time excess"
+label = "david whole-night RMSSD"
+documented = "31.6"
+pattern = '^david\s+18\s+1\s+([\d.]+)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "A7/F2 - RMSSD tracks beat-time excess"
+label = "david deep-only RMSSD"
+documented = "25.8"
+pattern = '^david\s+18\s+1\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "A7/F2 - RMSSD tracks beat-time excess"
+label = "david-4.0 whole-night / deep-only RMSSD"
+documented = "34.9"
+pattern = '^david-4\.0\s+2\s+0\s+([\d.]+)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "A7/F2 - RMSSD tracks beat-time excess"
+label = "user-69-7e79 whole-night RMSSD"
+documented = "105.3"
+pattern = '^user-69-7e79\s+29\s+1\s+([\d.]+)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "A7/F2 - RMSSD tracks beat-time excess"
+label = "user-f1e5 whole-night RMSSD"
+documented = "73.1"
+pattern = '^user-f1e5\s+19\s+0\s+([\d.]+)'
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "deep-only inside +-3 ms on N of 15"
+documented = "12 of 15"
+note = "counted by hand off the printed per-night table; the harness prints no such tally"
+
+[[figure]]
+run = "hrv_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "against WHOOP's OWN published nightly HRV"
+label = "whole-night 'over on N of 16'"
+documented = "14 of 16"
+note = "counted by hand and AMBIGUOUS: 15 of 16 pairs are positive; 14 are over by more than 3 ms"
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "SEAM_SLACK_MS sensitivity"
+label = "1 s to 300 s bit-identical on every wearer"
+documented = "flat"
+note = "tools/seam-slack-sweep.py patches a private const, rebuilds and restores; not part of this sweep"
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "rrInterval.seq, live-flush split exposure"
+label = "0 split seconds, 0 beats lost under the per-second arrival model"
+documented = "0 / 0"
+note = "the documented path `whoop-rs/tools/rr-live-split-exposure.py` DOES NOT EXIST; the script is at whoop/tools/"
+
+# ───────────────────────────────── B: detection finds the nights ─────────────────────────────────
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "opens before strap-asleep, median, before 0.70/0.70"
+documented = "+19.3"
+pattern = '^0\.70/0\.70\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "opens before strap-asleep, median, after 0.80/0.65"
+documented = "+15.9"
+pattern = '^0\.80/0\.65\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "p90, before 0.70/0.70"
+documented = "+30.6"
+pattern = '^0\.70/0\.70\s+\d+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "p90, after 0.80/0.65"
+documented = "+27.1"
+pattern = '^0\.80/0\.65\s+\d+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "max, before 0.70/0.70"
+documented = "+78.2"
+pattern = '^0\.70/0\.70\s+\d+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "max, after 0.80/0.65"
+documented = "+75.9"
+pattern = '^0\.80/0\.65\s+\d+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "min open error, after 0.80/0.65 (never negative)"
+documented = "+7.8"
+pattern = '^0\.80/0\.65\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([-\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "mean absolute open error, after 0.80/0.65"
+documented = "20.6"
+pattern = '^0\.80/0\.65\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "strap asleep after we close, median, after 0.80/0.65"
+documented = "+1.0"
+pattern = '^0\.80/0\.65\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+[\d.]+\s+\d+\s+([-\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "band, 16 blocks / 27 runs"
+label = "strap asleep after we close, max, after 0.80/0.65"
+documented = "+8.9"
+pattern = '^0\.80/0\.65\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+[\d.]+\s+\d+\s+[-\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "paired on the 15 runs solo under both configs"
+label = "paired median, shipped"
+documented = "+15.9"
+pattern = '^shipped\s+15\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "paired on the 15 runs solo under both configs"
+label = "paired p90, shipped"
+documented = "+27.1"
+pattern = '^shipped\s+15\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "paired on the 15 runs solo under both configs"
+label = "paired max, shipped"
+documented = "+75.9"
+pattern = '^shipped\s+15\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "paired on the 15 runs solo under both configs"
+label = "runs opening later"
+documented = "15"
+pattern = '(\d+) runs solo under both: \d+ open later'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "median, before"
+documented = "+19.8"
+pattern = '^pre-hysteresis\s+98\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "median, after"
+documented = "+14.2"
+pattern = '^shipped\s+98\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "p90, before"
+documented = "+76.0"
+pattern = '^pre-hysteresis\s+98\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "p90, after"
+documented = "+72.1"
+pattern = '^shipped\s+98\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "max, after"
+documented = "+160.3"
+pattern = '^shipped\s+98\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "mean absolute error, before"
+documented = "37.3"
+pattern = '^pre-hysteresis\s+98\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "mean absolute error, after"
+documented = "36.7"
+pattern = '^shipped\s+98\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "nights within +-15 min, after"
+documented = "38"
+pattern = '^shipped\s+98\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+[\d.]+\s+(\d+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "opens into the unscored lead-in, after"
+documented = "28"
+pattern = '^shipped\s+98\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+[\d.]+\s+\d+\s+(\d+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "nights opening late (any), after"
+documented = "23"
+pattern = '^shipped\s+98\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+(\d+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "PSG onset, 98 nights"
+label = "nights opening late by >15 min, after"
+documented = "12"
+pattern = '^shipped\s+98\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+(\d+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "why 0.80/0.65 and not further"
+label = "band median at enter 0.90"
+documented = "+14.3"
+pattern = '^0\.90/0\.65\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "why 0.80/0.65 and not further"
+label = "0.85 min open error (first late run)"
+documented = "-10.0"
+pattern = '^0\.85/0\.65\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([-\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "why 0.80/0.65 and not further"
+label = "exit 0.70 runs closed >15 min early"
+documented = "2"
+pattern = '^0\.80/0\.70\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+[\d.]+\s+\d+\s+[-\d.]+\s+[\d.]+\s+(\d+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "why 0.80/0.65 and not further"
+label = "exit 0.70 max close overshoot"
+documented = "33.6"
+pattern = '^0\.80/0\.70\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[-\d.]+\s+\d+\s+\d+\s+[\d.]+\s+\d+\s+[-\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "why 0.80/0.65 and not further"
+label = "exit 0.60 open-edge p90 (worse than baseline)"
+documented = "+32.1"
+pattern = '^0\.80/0\.60\s+\d+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "RE-VERIFIED: the two staging lines that move"
+label = "interior epochs relabelled, pre-hysteresis"
+documented = "13.3%"
+pattern = 'pre-hysteresis   interior epochs relabelled by staging on our window: ([\d.]+)%'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "RE-VERIFIED: the two staging lines that move"
+label = "interior epochs relabelled, shipped"
+documented = "12.5%"
+pattern = 'shipped          interior epochs relabelled by staging on our window: ([\d.]+)%'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "still true and re-verified"
+label = "E's quote of the detector-sensitive churn, shipped"
+documented = "12.5%"
+pattern = 'shipped          interior epochs relabelled by staging on our window: ([\d.]+)%'
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "still true and re-verified"
+label = "E's quote of the churn denominator"
+documented = "16625"
+pattern = 'shipped          interior epochs relabelled by staging on our window: [\d.]+% of (\d+)'
+
+# ───────────────────────────────── C: selection and bridging ─────────────────────────────────
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "2026-07-13, epochs relabelled by splitting"
+documented = "32.5%"
+pattern = '2026-07-13\S*\s+7\.5 h group of 2 spans: \d+ of \d+ shared epochs relabelled \(([\d.]+)%\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "2026-07-15, epochs relabelled by splitting"
+documented = "13.0%"
+pattern = '2026-07-15\S*\s+10\.0 h group of 2 spans: \d+ of \d+ shared epochs relabelled \(([\d.]+)%\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "both nights pooled"
+documented = "21.2%"
+pattern = '2 multi-span groups, \d+ of \d+ shared epochs staged differently \(([\d.]+)%\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "2026-07-13 agreement, staged whole"
+documented = "88.8%"
+pattern = 'staged as one ([\d.]+)%, staged as fragments [\d.]+%  \(n=845\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "2026-07-13 agreement, as fragments"
+documented = "88.5%"
+pattern = 'staged as one [\d.]+%, staged as fragments ([\d.]+)%  \(n=845\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "2026-07-15 agreement, staged whole"
+documented = "86.8%"
+pattern = 'staged as one ([\d.]+)%, staged as fragments [\d.]+%  \(n=1168\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "what a split costs (section 7)"
+label = "2026-07-15 agreement, as fragments"
+documented = "80.5%"
+pattern = 'staged as one [\d.]+%, staged as fragments ([\d.]+)%  \(n=1168\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, stage_v2 all spans, accuracy"
+documented = "79.46%"
+pattern = 'absorb 0 \(before\), stage_v2, all 36 spans\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, stage_v2 all spans, kappa2"
+documented = "0.120"
+pattern = 'absorb 0 \(before\), stage_v2, all 36 spans\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, stage_v2 all spans, epochs"
+documented = "586582"
+pattern = 'absorb 0 \(before\), stage_v2, all 36 spans\s+(\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, stage_v2 all spans, accuracy"
+documented = "79.82%"
+pattern = 'absorb 45 \(shipped\), stage_v2, all 34 spans\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, stage_v2 all spans, kappa2"
+documented = "0.165"
+pattern = 'absorb 45 \(shipped\), stage_v2, all 34 spans\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, stage_v2 all spans, epochs"
+documented = "592801"
+pattern = 'absorb 45 \(shipped\), stage_v2, all 34 spans\s+(\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, stage_v2 gate-accepted, accuracy"
+documented = "79.06%"
+pattern = 'absorb 0 \(before\), stage_v2, 30 dense spans\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, stage_v2 gate-accepted, kappa2"
+documented = "0.116"
+pattern = 'absorb 0 \(before\), stage_v2, 30 dense spans\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, stage_v2 gate-accepted, accuracy"
+documented = "79.44%"
+pattern = 'absorb 45 \(shipped\), stage_v2, 28 dense spans\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, stage_v2 gate-accepted, kappa2"
+documented = "0.162"
+pattern = 'absorb 45 \(shipped\), stage_v2, 28 dense spans\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, + refine_wake (the app), accuracy"
+documented = "81.88%"
+pattern = 'absorb 0 \(before\), \+ refine_wake \(the app\)\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 0, + refine_wake (the app), kappa2"
+documented = "0.115"
+pattern = 'absorb 0 \(before\), \+ refine_wake \(the app\)\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, + refine_wake (the app), accuracy"
+documented = "81.62%"
+pattern = 'absorb 45 \(shipped\), \+ refine_wake \(the app\)\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, + refine_wake (the app), kappa2"
+documented = "0.130"
+pattern = 'absorb 45 \(shipped\), \+ refine_wake \(the app\)\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, PAIRED seconds stage_v2, accuracy"
+documented = "79.65%"
+pattern = 'absorb 45 \(shipped\), PAIRED seconds, stage_v2\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, PAIRED seconds stage_v2, kappa2"
+documented = "0.147"
+pattern = 'absorb 45 \(shipped\), PAIRED seconds, stage_v2\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, PAIRED + refine_wake, accuracy"
+documented = "81.89%"
+pattern = 'absorb 45 \(shipped\), PAIRED seconds, \+ refine_wake\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "absorb 45, PAIRED + refine_wake, kappa2"
+documented = "0.112"
+pattern = 'absorb 45 \(shipped\), PAIRED seconds, \+ refine_wake\s+\d+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "the absorb's worth, stage_v2 all spans, accuracy delta"
+documented = "+0.36"
+pattern = 'stage_v2, all spans \(how it shipped\)     accuracy ([-+][\d.]+) pp'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "the absorb's worth, stage_v2 all spans, kappa2 delta"
+documented = "+0.045"
+pattern = 'stage_v2, all spans \(how it shipped\)     accuracy [-+][\d.]+ pp   kappa2 ([-+][\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "the absorb's worth, + refine_wake, accuracy delta"
+documented = "-0.26"
+pattern = '\+ refine_wake, dense spans               accuracy ([-+][\d.]+) pp'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "the absorb's worth, + refine_wake, kappa2 delta"
+documented = "+0.016"
+pattern = '\+ refine_wake, dense spans               accuracy [-+][\d.]+ pp   kappa2 ([-+][\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "the absorb's worth, PAIRED + refine_wake, kappa2 delta"
+documented = "-0.002"
+pattern = '\+ refine_wake, PAIRED seconds            accuracy [-+][\d.]+ pp   kappa2 ([-+][\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "gate census, absorb 45: spans refined"
+documented = "28"
+pattern = 'absorb 45 \(shipped\): (\d+) of 34 spans REFINED'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "section 9, on the path the app runs"
+label = "gate census, absorb 45: spans declined"
+documented = "6"
+pattern = 'absorb 45 \(shipped\): \d+ of 34 spans REFINED \(\d+ moved\), (\d+) DECLINED'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 0: spans"
+documented = "36"
+pattern = '^\s+0\s+(\d+)\s+27/27'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 0: splits"
+documented = "1"
+pattern = '^\s+0\s+\d+\s+27/27\s+(\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 0: spans over no strap sleep"
+documented = "1"
+pattern = '^\s+0\s+\d+\s+27/27\s+\d+\s+\d+\s+(\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 0: strap-asleep caught"
+documented = "97.6%"
+pattern = '^\s+0\s+\d+\s+27/27\s+\d+\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 45: spans"
+documented = "34"
+pattern = '^\s+\*\s+45\s+(\d+)\s+27/27'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 45: splits"
+documented = "0"
+pattern = '^\s+\*\s+45\s+\d+\s+27/27\s+(\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 45: strap-asleep caught"
+documented = "98.2%"
+pattern = '^\s+\*\s+45\s+\d+\s+27/27\s+\d+\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "absorb 45: open edge max"
+documented = "+75.9"
+pattern = '^\s+\*\s+45\s+\d+\s+27/27\s+\d+\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+% \(\s*\d+ min\)\s+\+[\d.]+\s+\+[\d.]+\s+\+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "cardinality after the fix (section 3)"
+label = "strap runs split across >1 span"
+documented = "0"
+pattern = 'one strap run over >1 span : (\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "cardinality after the fix (section 3)"
+label = "spans over >1 strap run"
+documented = "5"
+pattern = 'one span over >1 strap run : (\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "bridging in both directions (section 4)"
+label = "gaps left that the strap slept through"
+documented = "0"
+pattern = 'left a gap the strap slept through : (\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "bridging in both directions (section 4)"
+label = "gaps joined"
+documented = "0"
+pattern = 'gaps joined (\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "a ceiling on the bridge thresholds (section 4)"
+label = "narrowest gap left, so the empty band is (0, N)"
+documented = "133"
+pattern = 'narrowest left (\d+) min'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "local days"
+documented = "31"
+pattern = '(\d+) local days, \d+ where the pick left'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "days where the pick left strap-sleep out"
+documented = "2"
+pattern = '\d+ local days, (\d+) where the pick left'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "strap-asleep inside the selected group"
+documented = "98.3%"
+pattern = 'strap-asleep inside the selected group: [\d.]+ h of [\d.]+ h detected \(([\d.]+)%\)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "hours kept"
+documented = "146.5"
+pattern = 'strap-asleep inside the selected group: ([\d.]+) h'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "hours detected"
+documented = "149.0"
+pattern = 'strap-asleep inside the selected group: [\d.]+ h of ([\d.]+) h detected'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "pick reason onlyBlock"
+documented = "28"
+pattern = 'pick reason: onlyBlock (\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "main-night selection (section 6)"
+label = "pick reason longest"
+documented = "3"
+pattern = 'pick reason: onlyBlock \d+ · longest (\d+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the local-day offset (section 6)"
+label = "days at +2 h"
+documented = "32"
+pattern = 'offset sensitivity: at \+2 h (\d+) days'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the open edge with no run dropped (section 5)"
+label = "shipped, opening run of a group, median"
+documented = "+17.1"
+pattern = 'shipped        opening run of a group n=\d+  median \+([\d.]+) min'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the open edge with no run dropped (section 5)"
+label = "shipped, p90"
+documented = "+27.7"
+pattern = 'shipped        opening run of a group n=\d+  median \+[\d.]+ min, p90 \+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the open edge with no run dropped (section 5)"
+label = "shipped, max"
+documented = "+75.9"
+pattern = 'shipped        opening run of a group n=\d+  median \+[\d.]+ min, p90 \+[\d.]+, max \+([\d.]+)'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "CORRECTED at C (B4)"
+label = "pre-hysteresis, bridged-group open edge, median"
+documented = "+20.4"
+pattern = 'pre-hysteresis opening run of a group n=\d+  median \+([\d.]+) min'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "B3, the nap-length distribution"
+label = "band asleep runs at tol 300 s"
+documented = "205"
+pattern = '^    300\s+(\d+)'
+
+# ───────────────────────────────── D: the persisted window ─────────────────────────────────
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the blind number reproduced first"
+label = "stored blind, median"
+documented = "+5.1"
+pattern = 'STORED, blind                n=26  median   \+([\d.]+) min'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the blind number reproduced first"
+label = "stored blind, p90"
+documented = "+75.2"
+pattern = 'STORED, blind                n=26  median   \+[\d.]+ min  p90   \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the blind number reproduced first"
+label = "stored blind, max"
+documented = "+127.6"
+pattern = 'STORED, blind                n=26  median   \+[\d.]+ min  p90   \+[\d.]+  max  \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the blind number reproduced first"
+label = "stored blind, >15 min early"
+documented = "7"
+pattern = 'STORED, blind                n=26  median   \+[\d.]+ min  p90   \+[\d.]+  max  \+[\d.]+  >15 min early (\d+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the blind number reproduced first"
+label = "fresh under PRE_HYSTERESIS, p90"
+documented = "+6.8"
+pattern = 'FRESH                        n=26  median   \+0\.0 min  p90    \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the blind number reproduced first"
+label = "fresh under PRE_HYSTERESIS, max"
+documented = "+9.0"
+pattern = 'FRESH                        n=26  median   \+0\.0 min  p90    \+[\d.]+  max    \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "split by userEdited"
+label = "detected rows, median"
+documented = "-3.9"
+pattern = 'STORED, detected rows        n=14  median   ([-+][\d.]+) min'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "split by userEdited"
+label = "detected rows, p90"
+documented = "+5.1"
+pattern = 'STORED, detected rows        n=14  median   [-+][\d.]+ min  p90    \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "split by userEdited"
+label = "detected rows, max"
+documented = "+7.6"
+pattern = 'STORED, detected rows        n=14  median   [-+][\d.]+ min  p90    \+[\d.]+  max    \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "split by userEdited"
+label = "hand-edited rows, median"
+documented = "+63.2"
+pattern = 'STORED, hand-edited rows     n=12  median  \+([\d.]+) min'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "split by userEdited"
+label = "hand-edited rows, p90"
+documented = "+82.0"
+pattern = 'STORED, hand-edited rows     n=12  median  \+[\d.]+ min  p90   \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "split by userEdited"
+label = "hand-edited rows, >15 min early"
+documented = "7"
+pattern = 'STORED, hand-edited rows     n=12  median  \+[\d.]+ min  p90   \+[\d.]+  max  \+[\d.]+  >15 min early (\d+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "persistence reproduces detection"
+label = "PRE_HYSTERESIS end, median"
+documented = "+0.0"
+pattern = 'PRE_HYSTERESIS\n   end   n=14  median \+([\d.]+) min'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "persistence reproduces detection"
+label = "PRE_HYSTERESIS end, worst |delta|"
+documented = "0.7"
+pattern = 'PRE_HYSTERESIS\n   end   n=14  median \+[\d.]+ min  p90 \+[\d.]+  max \|Δ\| ([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "persistence reproduces detection"
+label = "SHIPPED end, median"
+documented = "+1.1"
+pattern = 'SHIPPED\n   end   n=14  median \+([\d.]+) min'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "persistence reproduces detection"
+label = "SHIPPED start, median"
+documented = "+2.5"
+pattern = 'SHIPPED\n   end   n=14[^\n]*\n   start n=14  median \+([\d.]+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the picker fingerprint"
+label = "whole-minute ends, edited vs detected"
+documented = "10 of 11 edited, 1 of 25 detected"
+pattern = 'end on a whole minute       : (\d+ of \d+ edited, \d+ of \d+ detected)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
+step = "D"
+section = "rule 8 matrix, continuous sessions.csv"
+label = "rows over the band-carrying blocks, hand-edited"
+documented = "11"
+pattern = 'userEdited = 1              : (\d+)'
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "all four recorded candidates are gone"
+label = "the seven stored ends as clock times"
+documented = "03:50, 04:00, 05:23, 05:23, 05:30, 05:35, 07:00"
+note = "the harness prints each early close's magnitude and provenance, not its wall-clock end"
+
+# ───────────────────────────────── E: the staging window ─────────────────────────────────
+
+[[figure]]
+run = "window_effect"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "REPRODUCED first, unchanged"
+label = "window sensitivity, stage_v2"
+documented = "5.3%"
+pattern = 'stage_v2, every night\s+\d+\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "window_effect"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "REPRODUCED first, unchanged"
+label = "epochs relabelled"
+documented = "839"
+pattern = 'stage_v2, every night\s+\d+\s+\d+\s+(\d+)'
+
+[[figure]]
+run = "window_effect"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "REPRODUCED first, unchanged"
+label = "shared epochs"
+documented = "15804"
+pattern = 'stage_v2, every night\s+\d+\s+(\d+)'
+
+[[figure]]
+run = "window_effect"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "REPRODUCED first, unchanged"
+label = "median per night"
+documented = "5.0%"
+pattern = 'stage_v2, every night\s+\d+\s+\d+\s+\d+\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "window_effect"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "REPRODUCED first, unchanged"
+label = "window sensitivity, + refine_wake"
+documented = "5.2%"
+pattern = '\+ refine_wake \(the app\), dense\s+\d+\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the epoch grid's ORIGIN"
+label = "ours grid offset into the window"
+documented = "20 s"
+pattern = 'ours \(92 nights\): window start % 30 -> stager grid offset \["(\d+) s x92"\]'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the epoch grid's ORIGIN"
+label = "continuous distinct grid offsets"
+documented = "24"
+pattern = 'continuous \(34 detected spans, real unix seconds\): (\d+) distinct grid offsets'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the epoch grid's ORIGIN"
+label = "continuous median epoch overlap"
+documented = "22"
+pattern = 'median epoch overlap with a span-anchored reference grid: (\d+) s of 30'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "stage_v2 median labels moved"
+documented = "7.80%"
+pattern = 'stage_v2: median ([\d.]+)% of labels move'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "stage_v2 worst shift"
+documented = "9.37%"
+pattern = 'stage_v2: median [\d.]+% of labels move, worst ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "+ refine_wake median labels moved"
+documented = "8.71%"
+pattern = '\+ refine_wake: median ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "+ refine_wake worst shift"
+documented = "10.25%"
+pattern = '\+ refine_wake: median [\d.]+%, worst ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "per night, median worst shift"
+documented = "11.87%"
+pattern = 'per night, worst shift: median ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "per night, worst night"
+documented = "15.63%"
+pattern = 'per night, worst shift: median [\d.]+%, worst night ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "band agreement across 30 phases, low"
+documented = "83.88%"
+pattern = 'band agreement across all 30 phases: ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "band agreement across 30 phases, high"
+documented = "84.72%"
+pattern = 'band agreement across all 30 phases: [\d.]+% to ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "refined agreement across 30 phases, low"
+documented = "85.75%"
+pattern = 'the same refined: ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "refined agreement across 30 phases, high"
+documented = "86.43%"
+pattern = 'the same refined: [\d.]+% to ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "no phase is privileged: shift 20 s labels moved"
+documented = "7.52%"
+pattern = '^\s+20 s\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "no phase is privileged: shift 20 s agreement"
+documented = "84.09%"
+pattern = '^\s+20 s\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "unshifted agreement"
+documented = "84.63%"
+pattern = '^\s+0 s\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "grid PHASE sensitivity"
+label = "stagings in the sweep, all refined"
+documented = "682"
+pattern = 'grid-phase sweep, 30 shifts x the nights: (\d+) of \d+ spans REFINED'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, stage_v2 moved"
+documented = "5.3%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, median per night"
+documented = "5.0%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, agreement full"
+documented = "84.66%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, agreement trimmed"
+documented = "83.89%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, + refine_wake moved"
+documented = "5.2%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, + refine_wake agreement full"
+documented = "86.80%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "SHIPPED, + refine_wake agreement trimmed"
+documented = "86.47%"
+pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+[\d.]+%\s+[\d.]+% / ([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "- clock prior, stage_v2 moved"
+documented = "1.7%"
+pattern = '^   - clock prior[^\n]*?\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "- clock prior, + refine_wake moved"
+documented = "1.5%"
+pattern = '^   - clock prior[^\n]*?\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "- deep percentile gate, stage_v2 moved"
+documented = "6.1%"
+pattern = '^   - deep percentile gate\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "- deep percentile gate, + refine_wake moved"
+documented = "6.0%"
+pattern = '^   - deep percentile gate\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "- motion, stage_v2 moved"
+documented = "5.6%"
+pattern = '^   - motion[^\n]*?\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "- motion, agreement full (the accuracy paradox row)"
+documented = "94.67%"
+pattern = '^   - motion[^\n]*?\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "cardiac z-scores ONLY, stage_v2 moved"
+documented = "2.1%"
+pattern = '^   cardiac z-scores ONLY\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the ablation"
+label = "cardiac z-scores ONLY, + refine_wake moved"
+documented = "1.9%"
+pattern = '^   cardiac z-scores ONLY\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3's onset-anchored clock, REJECTED"
+label = "window sensitivity with clock from onset"
+documented = "5.3%"
+pattern = '^   clock from ONSET \(F3\)\s+\d+\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the two main-night scorers (section 4)"
+label = "local days"
+documented = "31"
+pattern = '(\d+) local days, \d+ with more than one candidate span'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the two main-night scorers (section 4)"
+label = "multi-candidate days"
+documented = "3"
+pattern = '\d+ local days, (\d+) with more than one candidate span'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the two main-night scorers (section 4)"
+label = "days the two scorers pick differently"
+documented = "0"
+pattern = 'days the two scorers pick differently: (\d+)'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the two main-night scorers (section 4)"
+label = "detected spans >= 45 min the strap called asleep for 0 s"
+documented = "5"
+pattern = 'detected spans >= 45 min the strap called asleep for 0 s: (\d+)'
+
+[[figure]]
+run = "stage_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "E"
+section = "the two main-night scorers (section 4)"
+label = "the four backup days where the scorers split (73.7/62.8, 325.7/444.4, 246.5/334.5, 0.0/263.0)"
+documented = "4 of 31 backup days"
+note = "pinned by noop-tan MainNightScorerParityTest, not by a Rust harness: cd noop-wt-tan/android && ./gradlew.bat :app:testFullDebugUnitTest --tests '*MainNightScorerParityTest'"
+
+# ───────────────────────────────── F: emissions and the cycle prior ─────────────────────────────────
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "every A-Z wake figure was the wrong code path"
+label = "detected spans"
+documented = "34"
+pattern = '^   (\d+) detected spans, \d+ step rows'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "every A-Z wake figure was the wrong code path"
+label = "step rows"
+documented = "697471"
+pattern = '^   \d+ detected spans, (\d+) step rows'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "every A-Z wake figure was the wrong code path"
+label = "spans the gate accepts"
+documented = "28"
+pattern = 'the over-call comparison: (\d+) of 34 spans REFINED'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "every A-Z wake figure was the wrong code path"
+label = "spans the gate declines"
+documented = "6"
+pattern = 'the over-call comparison: \d+ of 34 spans REFINED \(\d+ moved\), (\d+) DECLINED'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "every A-Z wake figure was the wrong code path"
+label = "declines on gravity"
+documented = "6"
+pattern = 'the over-call comparison:[^\n]*?DECLINED by the density gate \((\d+) on gravity'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "every A-Z wake figure was the wrong code path"
+label = "band seconds the refinement moves"
+documented = "24039"
+pattern = 'the refinement moves (\d+) band seconds'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "stage_v2 only, wake%"
+documented = "18.1%"
+pattern = 'stage_v2 only \(every prior A-Z number\)\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "stage_v2 only, strap wake%"
+documented = "9.5%"
+pattern = 'stage_v2 only \(every prior A-Z number\)\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "stage_v2 only, kappa2"
+documented = "0.165"
+pattern = 'stage_v2 only \(every prior A-Z number\)\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "stage_v2 only, recall"
+documented = "39.2"
+pattern = 'stage_v2 only \(every prior A-Z number\)\s+[\d.]+%\s+[\d.]+%\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "the app's path, wake%"
+documented = "14.1%"
+pattern = "stage_v2 \\+ refine_wake \\(the app's path\\)\\s+([\\d.]+)%"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "the app's path, kappa2"
+documented = "0.134"
+pattern = "stage_v2 \\+ refine_wake \\(the app's path\\)\\s+[\\d.]+%\\s+[\\d.]+%\\s+([\\d.]+)"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "the app's path, recall"
+documented = "28.8"
+pattern = "stage_v2 \\+ refine_wake \\(the app's path\\)\\s+[\\d.]+%\\s+[\\d.]+%\\s+[\\d.]+\\s+([\\d.]+)"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "over-call ratio, unrefined"
+documented = "1.91x"
+pattern = 'over-call ratio ([\d.]+)x unrefined'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "on the app's real path over all 34"
+label = "over-call ratio, refined"
+documented = "1.48x"
+pattern = 'over-call ratio [\d.]+x unrefined -> ([\d.]+)x refined'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "over the 28 gate-accepted spans"
+label = "gate-accepted, stage_v2 wake%"
+documented = "18.4%"
+pattern = 'stage_v2, gate-accepted spans only\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "over the 28 gate-accepted spans"
+label = "gate-accepted, stage_v2 kappa2"
+documented = "0.162"
+pattern = 'stage_v2, gate-accepted spans only\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "over the 28 gate-accepted spans"
+label = "gate-accepted, refined wake%"
+documented = "14.2%"
+pattern = '\+ refine_wake, gate-accepted spans only\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "over the 28 gate-accepted spans"
+label = "gate-accepted, refined kappa2"
+documented = "0.130"
+pattern = '\+ refine_wake, gate-accepted spans only\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "over the 28 gate-accepted spans"
+label = "gate-accepted over-call ratio, refined"
+documented = "1.46x"
+pattern = 'over-call ratio [\d.]+x -> ([\d.]+)x on those spans'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "head, we say wake"
+documented = "10.6%"
+pattern = 'head: span open -> first strap-asleep second\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "interior, we say wake"
+documented = "13.2%"
+pattern = "interior: inside the strap's asleep run\\s+([\\d.]+)%"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "interior, the strap says non-asleep"
+documented = "3.4%"
+pattern = "interior: inside the strap's asleep run\\s+[\\d.]+%\\s+([\\d.]+)%"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "tail, we say wake"
+documented = "53.6%"
+pattern = 'tail: after the last strap-asleep second\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "interior wake runs"
+documented = "370"
+pattern = "our wake runs inside the strap's asleep run: (\\d+) runs"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "interior runs <= 2.5 min"
+documented = "244"
+pattern = 'median [\d.]+ min, (\d+) of them <= 2\.5 min'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "where the excess sits"
+label = "interior wake run total hours"
+documented = "19.9"
+pattern = '(\d+\.\d+) h total'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "band code 0 wake, seconds"
+documented = "1023"
+pattern = '^   0 wake\s+(\d+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "band code 0 wake, share"
+documented = "0.2%"
+pattern = '^   0 wake\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "band code 0 wake, we agree"
+documented = "35.5%"
+pattern = '^   0 wake\s+\d+\s+[\d.]+%\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "band code 1 still, share"
+documented = "3.9%"
+pattern = '^   1 still\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "band code 2 asleep, share"
+documented = "90.5%"
+pattern = '^   2 asleep\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "band code 3 up, share"
+documented = "5.5%"
+pattern = '^   3 up\s+\d+\s+([\d.]+)%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "what the reference's wake actually is"
+label = "reference wake% with still dropped"
+documented = "5.6"
+pattern = 'and ([\d.]+) with it dropped'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "band, ours wake% (22 labelled nights)"
+documented = "15.6%"
+pattern = '^   SHIPPED\s+([\d.]+)%\s+6\.0%'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "band, its wake%"
+documented = "6.0%"
+pattern = '^   SHIPPED\s+[\d.]+%\s+([\d.]+)%\s+0\.220'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "dreamt, ours wake%"
+documented = "15.3"
+pattern = '^   SHIPPED\s+0\.312\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "dreamt, its wake%"
+documented = "25.1"
+pattern = '^   SHIPPED\s+0\.312\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "aauwss, ours wake%"
+documented = "9.8"
+pattern = '^   SHIPPED\s+0\.312\s+[\d.]+\s+[\d.]+\s+0\.412\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "aauwss, its wake%"
+documented = "13.3"
+pattern = '^   SHIPPED\s+0\.312\s+[\d.]+\s+[\d.]+\s+0\.412\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "sleep-accel, ours wake%"
+documented = "13.3"
+pattern = '^   SHIPPED\s+0\.312\s+[\d.]+\s+[\d.]+\s+0\.412\s+[\d.]+\s+[\d.]+\s+0\.379\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the direction of the correction, per cohort"
+label = "sleep-accel, its wake%"
+documented = "9.1"
+pattern = '^   SHIPPED\s+0\.312\s+[\d.]+\s+[\d.]+\s+0\.412\s+[\d.]+\s+[\d.]+\s+0\.379\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "three bounded rescues"
+label = "propensity best, band delta-kappa2"
+documented = "+0.019"
+pattern = 'propensity best: awake base rate 0\.10 \(was 0\.34\)\s+([-+][\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "three bounded rescues"
+label = "propensity best, dreamt delta-kappa4"
+documented = "-0.057"
+pattern = 'propensity best: awake base rate 0\.10 \(was 0\.34\)\s+[-+][\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "three bounded rescues"
+label = "motion gate best, band delta-kappa2"
+documented = "+0.061"
+pattern = 'motion gate best: motion gate boost 1\.0 \(was 4\.0\)\s+([-+][\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "three bounded rescues"
+label = "motion gate best, dreamt delta-kappa4"
+documented = "-0.068"
+pattern = 'motion gate best: motion gate boost 1\.0 \(was 4\.0\)\s+[-+][\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "three bounded rescues"
+label = "blip filter best, band delta-kappa2"
+documented = "+0.034"
+pattern = 'blip filter best: drop wake runs under 5 min\s+([-+][\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "three bounded rescues"
+label = "blip filter best, dreamt delta-kappa4"
+documented = "-0.028"
+pattern = 'blip filter best: drop wake runs under 5 min\s+[-+][\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "F1 as a delta on SHIPPED, band"
+documented = "+0.000"
+pattern = 'F1 onset-anchored guard K=4 M0=60\s+([-+][\d.]+)\s+[-+][\d.]+\s+[-+][\d.]+\s+[-+][\d.]+'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3, REJECTED"
+label = "dreamt kappa4 with F3"
+documented = "0.304"
+pattern = '^   F3 onset-anchored clock\s+(0\.\d+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3, REJECTED"
+label = "sleep-accel kappa4 with F3"
+documented = "0.366"
+pattern = '^   F3 onset-anchored clock\s+0\.\d+\s+[\d.]+\s+[\d.]+\s+0\.\d+\s+[\d.]+\s+[\d.]+\s+(0\.\d+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3, the anchor's mechanism"
+label = "minutes from window open to our probe onset"
+documented = "1.5"
+pattern = 'median minutes from window open to: our probe onset ([\d.]+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3, the anchor's mechanism"
+label = "minutes to the strap's first asleep second"
+documented = "18.5"
+pattern = "the strap's first asleep second ([\\d.]+)"
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3, the anchor's mechanism"
+label = "median signed gap"
+documented = "-14.0"
+pattern = 'median signed gap \(ours - strap\) ([-+]?[\d.]+) min'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F3, the anchor's mechanism"
+label = "probe lands in the first 5 min on N of 22"
+documented = "16 of 22"
+pattern = 'our probe lands in the first 5 min on (\d+ of \d+)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "REM fraction with the cap"
+documented = "21.8"
+pattern = '^   REM ramp cap 0\.7 \(on F1\)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)$'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "fractions"
+label = "WHOOP export fractions"
+documented = "6.1 / 49.0 / 20.1 / 24.8"
+pattern = 'WHOOP export = (6\.1 / 49\.0 / 20\.1 / 24\.8)'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the ours dataset's step-stream reality"
+label = "ours nights with a non-empty steps.csv"
+documented = "41"
+pattern = '92 nights, (\d+) with a non-empty steps\.csv'
+
+[[figure]]
+run = "emit_wake"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the ours dataset's step-stream reality"
+label = "ours nights dense enough for the refinement"
+documented = "33"
+pattern = '92 nights, \d+ with a non-empty steps\.csv, (\d+) DENSE'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "pooled first-REM latency error, shipped"
+documented = "8.2"
+pattern = '^shipped \(onset guard\)\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "pooled first-REM latency error, pre-F1 window step"
+documented = "22.7"
+pattern = '^pre-F1 window step at 12%\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "sleep-accel latency error, shipped"
+documented = "3.8"
+pattern = '^shipped\s+0\.379\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "dreamt latency error, shipped"
+documented = "1.2"
+pattern = '^shipped\s+0\.379\s+[\d.]+\s+[\d.]+\s+0\.312\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "aauwss latency error, shipped"
+documented = "19.5"
+pattern = '^shipped\s+0\.379\s+[\d.]+\s+[\d.]+\s+0\.312\s+[\d.]+\s+[\d.]+\s+0\.412\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "pooled REM-fraction error, shipped"
+documented = "5.45"
+pattern = '^shipped \(onset guard\)\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "pooled REM-fraction error with cap 0.7"
+documented = "2.98"
+pattern = '^cap=0\.7\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "aauwss kappa4 with the cap"
+documented = "0.405"
+pattern = '^K=4 M0=60 cap=0\.7\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "sweep_rem"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "sleep-accel kappa4 with the cap"
+documented = "0.368"
+pattern = '^K=4 M0=60 cap=0\.7\s+([\d.]+)'
+
+[[figure]]
+run = "verify_934"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "sleep-accel latency error, pre-F1 window step (93.0 against a truth of 87.0)"
+documented = "93.0"
+pattern = '^shipped, pre-F1 window step\s+0\.379\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+) min'
+
+[[figure]]
+run = "verify_934"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "dreamt kappa4, pre-F1 window step"
+documented = "0.311"
+pattern = '^shipped, pre-F1 window step\s+(0\.311)'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "RE-VERIFIED after F"
+label = "stage fractions, shipped (wake/light/deep/REM)"
+documented = "19.6  41.2  14.7   24.5"
+pattern = '^shipped\s+(19\.6  41\.2  14\.7   24\.5)'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "RE-VERIFIED after F"
+label = "recall"
+documented = "52.0"
+pattern = '^shipped\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+ min\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "RE-VERIFIED after F"
+label = "precision"
+documented = "19.9"
+pattern = '^shipped\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+ min\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "RE-VERIFIED after F"
+label = "nights / hours / band-labelled"
+documented = "92 nights, 649.0 h, 22"
+pattern = '^(92 nights, 649\.0 h, 22) band-labelled'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "first-REM median, shipped"
+documented = "90.2"
+pattern = '^shipped\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+) min'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "F1's guard, ADOPTED"
+label = "first-REM median before the guard shipped"
+documented = "85.2"
+pattern = '^pre-F1 window step\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+) min'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "RE-VERIFIED after F"
+label = "wake fraction on the app's path, cross-checked against emit_wake"
+documented = "14.1%"
+pattern = 'the same \+ refine_wake \(the app\): ours ([\d.]+)%'
+
+[[figure]]
+run = "select_bridge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "the absorb sweep (section 8)"
+label = "the shipped 45-min cell is starred in its own sweep"
+documented = "45"
+pattern = '^\s+\*\s+(45)\s+\d+\s+27/27'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "ours REM rises with night length, capped"
+documented = "15.5"
+pattern = '^<6 h\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "the REM ramp cap, REJECTED"
+label = "ours REM rises with night length, shipped"
+documented = "18.4"
+pattern = '^<6 h\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+# ───────────────────────────────── G: the Viterbi decoder ─────────────────────────────────
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "exhaustive enumeration, identical path"
+documented = "200"
+pattern = 'cases 200   path score equals the enumerated best 200   identical path (\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "injected paths recovered at margin 200"
+documented = "4096"
+pattern = 'margin 200 \(dominates any transition\) (\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "injected paths recovered at margin 1.0"
+documented = "12"
+pattern = 'margin 200 \(dominates any transition\) \d+   margin 1\.0 (\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "continuous spans, reverse decode agrees"
+documented = "34"
+pattern = 'continuous spans\s+34\s+25117\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "continuous epochs"
+documented = "25117"
+pattern = 'continuous spans\s+34\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "dreamt epochs"
+documented = "105960"
+pattern = 'dreamt nights \(100\)\s+100\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "aauwss epochs"
+documented = "11427"
+pattern = 'aauwss nights \(13\)\s+13\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the returned path IS the maximum-likelihood one"
+label = "sleep-accel epochs"
+documented = "27211"
+pattern = 'sleep-accel nights \(31\)\s+31\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "why no PSG cohort can score the refinement"
+label = "PSG spans declined"
+documented = "144"
+pattern = 'PSG, no steps\.csv: 0 of 144 spans REFINED \(0 moved\), (\d+) DECLINED'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "why no PSG cohort can score the refinement"
+label = "PSG spans declining on gravity"
+documented = "0"
+pattern = 'PSG, no steps\.csv:[^\n]*DECLINED by the density gate \((\d+) on gravity'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "dreamt, ref scores >= ours"
+documented = "0"
+pattern = 'dreamt PSG hypnogram\s+100\s+78737\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "dreamt, evidence gap per epoch"
+documented = "0.307"
+pattern = 'dreamt PSG hypnogram\s+100\s+78737\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "dreamt, transition gap per epoch"
+documented = "0.179"
+pattern = 'dreamt PSG hypnogram\s+100\s+78737\s+\d+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "aauwss, evidence gap per epoch"
+documented = "0.476"
+pattern = 'aauwss PSG hypnogram\s+13\s+9828\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "aauwss, transition gap per epoch"
+documented = "0.029"
+pattern = 'aauwss PSG hypnogram\s+13\s+9828\s+\d+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "sleep-accel, evidence gap per epoch"
+documented = "0.461"
+pattern = 'sleep-accel PSG hypnogram\s+31\s+25590\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "band, evidence gap per epoch"
+documented = "0.449"
+pattern = 'band, best path that agrees\s+22\s+18905\s+\d+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "band, transition gap per epoch (the right sign)"
+documented = "-0.112"
+pattern = 'band, best path that agrees\s+22\s+18905\s+\d+\s+[\d.]+\s+([-\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "decoder error against model error"
+label = "closest call, dreamt S074"
+documented = "0.136"
+pattern = 'closest call on S074\s+([\d.]+) log units'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "what the decoder is worth"
+label = "epochs a per-epoch argmax moves"
+documented = "6138"
+pattern = 'it moves (\d+) of 25117 continuous epochs'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "what the decoder is worth"
+label = "argmax kappa2"
+documented = "0.111"
+pattern = 'band kappa2 ([\d.]+) -> [\d.]+'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "what the decoder is worth"
+label = "shipped kappa2"
+documented = "0.134"
+pattern = 'band kappa2 [\d.]+ -> ([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "FOR H2"
+label = "wake runs <= 2.5 min, argmax path"
+documented = "1785"
+pattern = 'argmax (\d+) of\s+1831'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "FOR H2"
+label = "wake runs <= 2.5 min, decoded path"
+documented = "287"
+pattern = 'decoded (\d+) of 501'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "gamma 0, band kappa2"
+documented = "0.111"
+pattern = 'decoder: gamma 0 \(uniform = off\)\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "gamma 0, dreamt kappa4"
+documented = "0.233"
+pattern = 'decoder: gamma 0 \(uniform = off\)\s+[\d.]+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "gamma 4, band kappa2"
+documented = "0.202"
+pattern = 'decoder: gamma 4\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "gamma 1 SHIPPED, dreamt kappa4"
+documented = "0.312"
+pattern = 'decoder: gamma 1 \(SHIPPED\)\s+[\d.]+\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "gamma 1 SHIPPED, aauwss kappa4"
+documented = "0.412"
+pattern = 'decoder: gamma 1 \(SHIPPED\)\s+[\d.]+\s+[\d.]+%\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "gamma 1 SHIPPED, sleep-accel kappa4"
+documented = "0.379"
+pattern = 'decoder: gamma 1 \(SHIPPED\)\s+[\d.]+\s+[\d.]+%\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "no deep gate, labels moved"
+documented = "2.2%"
+pattern = 'emissions: no deep gate\s+[\d.]+\s+[\d.]+%\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)%'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the two axes swept"
+label = "no base rate, band kappa2 (the band prefers it deleted)"
+documented = "0.160"
+pattern = 'emissions: no base rate\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the transition matrix against a measured one"
+label = "pooled PSG P(deep|deep)"
+documented = "0.900"
+pattern = 'POOLED PSG\s+144\s+118073\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the transition matrix against a measured one"
+label = "pooled PSG epoch pairs"
+documented = "118073"
+pattern = 'POOLED PSG\s+144\s+(\d+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the transition matrix against a measured one"
+label = "pooled PSG P(rem|rem)"
+documented = "0.945"
+pattern = 'POOLED PSG\s+144\s+118073\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the transition matrix against a measured one"
+label = "pooled PSG P(light|light)"
+documented = "0.931"
+pattern = 'POOLED PSG\s+144\s+118073\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the transition matrix against a measured one"
+label = "pooled PSG P(awake|awake)"
+documented = "0.840"
+pattern = 'POOLED PSG\s+144\s+118073\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the transition matrix against a measured one"
+label = "measured light->deep (shipped is 0.080)"
+documented = "0.0122"
+pattern = 'POOLED PSG, measured\n(?:[^\n]*\n){3}\s+light\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the base rates against the same hypnograms"
+label = "shipped base_rate normalised, deep"
+documented = "0.124"
+pattern = 'shipped, normalised\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the base rates against the same hypnograms"
+label = "pooled PSG occupancy, deep"
+documented = "0.071"
+pattern = 'pooled PSG fraction\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the band's own stickiness"
+label = "P(asleep -> asleep)"
+documented = "0.9991"
+pattern = 'P\(asleep -> asleep\) band ([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "the band's own stickiness"
+label = "P(non-asleep -> non-asleep)"
+documented = "0.9829"
+pattern = 'P\(non-asleep -> non-asleep\) band ([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "three bounded rescues"
+label = "rescue 1, the pooled PSG matrix, band delta"
+documented = "-0.006"
+pattern = '1  the pooled PSG matrix[^\n]*d ([-+][\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "three bounded rescues"
+label = "rescue 2, 50/50, band delta"
+documented = "+0.029"
+pattern = '2  50/50 with the PSG matrix[^\n]*d ([-+][\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
+section = "three bounded rescues"
+label = "rescue 3, PSG stickiness, band delta"
+documented = "+0.008"
+pattern = '3  PSG stickiness, shipped shape[^\n]*d ([-+][\d.]+)'
+
+# ─────────────────────── flow_az: every stage beside the others ───────────────────────
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "RE-VERIFIED after F"
+label = "wake fraction, ours"
+documented = "18.1%"
+pattern = 'wake fraction  ours ([\d.]+)%'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "RE-VERIFIED after F"
+label = "wake fraction, strap"
+documented = "9.5%"
+pattern = 'wake fraction  ours [\d.]+%  vs strap ([\d.]+)%'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "F"
+section = "RE-VERIFIED after F"
+label = "epochs"
+documented = "592801"
+pattern = 'vs strap [\d.]+%  over (\d+)'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "RE-VERIFIED after F"
+label = "splits"
+documented = "0"
+pattern = 'one strap run over >1 span  : (\d+)'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "C"
+section = "RE-VERIFIED after F"
+label = "merges"
+documented = "5"
+pattern = 'one span over >1 strap run  : (\d+)'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "RE-VERIFIED after F"
+label = "runs missed"
+documented = "0"
+pattern = 'runs with a detected span   : 27  \(missed (\d+)\)'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "RE-VERIFIED after F"
+label = "stored, detected rows, median"
+documented = "-3.9"
+pattern = 'STORED sessions, same runs  : median ([-+][\d.]+) min'
+
+[[figure]]
+run = "flow_az"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "RE-VERIFIED after F"
+label = "hand-edited, median"
+documented = "+63.2"
+pattern = 'hand-edited, NOT persistence: median \+([\d.]+) min'
+
+# ─────────────────────── the corpus tables: pinned, not re-runnable ───────────────────────
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the corpus"
+label = "ours nights cleaned, and beats in -> out"
+documented = "16 of 92, 3362152 -> 2853257"
+note = "build_clean_fixtures.py prints it, but MUST NOT be re-run: the raw root now holds 2,140.5 h against the pinned 2,113 h, so a rebuild is a different corpus. The out-count is checked against hrv_seam above"
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the corpus"
+label = "continuous blocks cleaned, and beats in -> out"
+documented = "6 of 64, 7472725 -> 6499433"
+note = "same pin as above; no harness prints the continuous beat count"
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the cleaner validated against the wire"
+label = "cleaned database holds 96.4% of the wire, 0.7% never sent, 94.9% of seconds exact"
+documented = "96.4 / 0.7 / 94.9"
+note = "rr_clean_audit.py needs a wire capture plus two .noopbak files that are not in the repo"
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the shape of each wearer's R-R against the wire"
+label = "wire 1.20 beats/sec at 0.89x, and 1.21 at 0.83x"
+documented = "1.20 / 0.89 / 1.21 / 0.83"
+note = "capture_clock over two .jsonl captures that are not in the repo"
+
+[[figure]]
+run = "persist_window"
+doc = "SLEEP-FLOW-AZ.md"
+step = "D"
+section = "the whole edited population"
+label = "39 hand-edited sessions, 37 whole-minute ends, 2 bed-only (5.1%)"
+documented = "2 of 39"
+note = "sleep_edit_provenance.py over 26 backups; reads .noopbak files outside the repo"
+
+[[figure]]
+run = "detect_hysteresis"
+doc = "SLEEP-FLOW-AZ.md"
+step = "B"
+section = "B5 CORRECTED"
+label = "dreamt labels epoch 0 on 0 of 100, 262-epoch unscored lead-in, 32 scored pre-onset epochs"
+documented = "0 of 100 / 262 / 32"
+note = "audit_preonset_labels.py, a separate command the B section names"
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "I - fractions, efficiency, Rest"
+label = "shipped 11.6 / 47.0 / 13.8 / 27.7 on 21 nights re-sliced to WHOOP's in-bed window"
+documented = "11.6 / 47.0 / 13.8 / 27.7"
+note = "NO committed command produces it. bench_ours prints 92-night fractions over OUR window; nothing re-slices to the export's in-bed window. I is UNRELIABLE pending its own step (debt I1)"
+
+[[figure]]
+run = "bench_ours"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "I - fractions, efficiency, Rest"
+label = "pre-retune 7.6 / 42.6 / 19.9 / 29.9 on the same 21 nights"
+documented = "7.6 / 42.6 / 19.9 / 29.9"
+note = "same as above: unreproducible, and measured on the unrefined path (debt I1)"

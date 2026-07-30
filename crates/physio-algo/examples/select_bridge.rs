@@ -208,7 +208,7 @@ fn section_min_sleep(bs: &[Block], runs_total: usize) {
         println!("   wake-absorb {absorb} min");
         println!("   min  spans  runs found  spans over a nap  spans over NO strap sleep  (their lengths, min)");
         for r in sweep_min_sleep(bs, absorb) {
-            let mark = if r.min_sleep == 60 { "*" } else { " " };
+            let mark = if r.min_sleep == DetectParams::SHIPPED.min_sleep_min { "*" } else { " " };
             println!(
                 "  {}{:>3}  {:>5}  {:>5} of {:>2}  {:>14}  {:>23}  {}",
                 mark,
@@ -608,7 +608,8 @@ fn section_split_cost(bs: &[Block]) {
 fn section_dense_bridge(bs: &[Block], runs_total: usize) {
     println!("\n8  absorbing a short mid-sleep wake run, swept — splits closed against sleep wrongly swallowed");
     println!("   gap  spans  runs  splits  merges  no-sleep  asleep caught  awake inside spans  open edge med/p90/max");
-    for gap in [0i64, 10, 15, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 120] {
+    // The shipped value is a cell here, or the threshold that ships has no row in its own sweep.
+    for gap in [0i64, 10, 15, 18, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 120] {
         let p = DetectParams { wake_absorb_max_min: gap, ..DetectParams::SHIPPED };
         let (mut spans_n, mut hit, mut split, mut merged, mut spurious) = (0, 0, 0, 0, 0);
         let (mut caught, mut asleep_all, mut awake_in, mut span_s) = (0i64, 0i64, 0i64, 0i64);
@@ -653,7 +654,7 @@ fn section_dense_bridge(bs: &[Block], runs_total: usize) {
                 }
             }
         }
-        let mark = if gap == 0 { "*" } else { " " };
+        let mark = if gap == DetectParams::SHIPPED.wake_absorb_max_min { "*" } else { " " };
         println!(
             "  {mark}{gap:>3}  {spans_n:>5}  {hit:>2}/{runs_total}  {split:>6}  {merged:>6}  {spurious:>8}  \
              {:>12.1}%  {:>7.1}% ({:>4.0} min)  {:>+6.1} {:>+6.1} {:>+6.1}",
