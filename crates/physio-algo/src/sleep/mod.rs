@@ -33,7 +33,8 @@ pub use v2::{emissions_prepared as emissions_v2, epoch_starts as epoch_starts_v2
     segments_of as segments_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, viterbi as decode_v2, Prepared, DEEP_GATE_THRESH, STAGE_ORDER};
 pub use refine::{
-    is_motion_dense as motion_dense, motion_density, refine as refine_wake, MIN_DENSE_FRACTION,
+    is_motion_dense as motion_dense, motion_density, refine as refine_wake, refine_with as refine_wake_with,
+    RefineParams, MIN_DENSE_FRACTION,
 };
 pub use mainnight::{
     bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices,

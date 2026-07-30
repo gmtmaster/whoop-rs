@@ -9,20 +9,58 @@ use super::detect::posture_variance_g2;
 use super::input::{AccelSample, StepSample};
 use super::{SleepStage, StageSegment};
 
-const MIN_WAKE_SEGMENT_SECONDS: i64 = 5 * 60;
 const SUSTAINED_WALK_TICKS_PER_MINUTE: i32 = 10;
 const SUSTAINED_WALK_MIN_CONSECUTIVE_MINUTES: i32 = 2;
 const SINGLE_MINUTE_WALK_TICKS: i32 = 40;
-const STABLE_POSTURE_VARIANCE_G2: f64 = 0.05;
-const MIN_STABLE_MINUTE_FRACTION: f64 = 0.80;
-const BURST_PAD_MINUTES: i64 = 1;
 const MIN_GRAVITY_SAMPLES_PER_MINUTE_FOR_VARIANCE: i32 = 2;
 const MIN_STEP_SAMPLES_PER_MINUTE_FOR_DENSITY: i32 = 1;
 const MIN_DENSE_MINUTE_COVERAGE_FRACTION: f64 = 0.80;
 
+/// Which wake segments the pass may convert, and how much of one it keeps. [`RefineParams::SHIPPED`] is
+/// what [`refine`] runs; the other settings exist so a harness can sweep the eligibility rule and record
+/// a verdict rather than argue one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RefineParams {
+    /// Shortest wake segment the pass will look at. Below it a segment is returned untouched.
+    pub min_wake_segment_seconds: i64,
+    /// Per-minute posture variance (g²) under which a minute counts as still.
+    pub stable_posture_variance_g2: f64,
+    /// Share of a segment's minutes that must be still before any of it converts.
+    pub min_stable_minute_fraction: f64,
+    /// Minutes either side of a burst minute that stay wake with it.
+    pub burst_pad_minutes: i64,
+    /// Leave the window's first and last segment alone. Segments alternate stage, so this is exactly the
+    /// leading and trailing wake run: sleep-onset latency and post-wake in-bed time, which are awake.
+    pub skip_window_edges: bool,
+}
+
+impl RefineParams {
+    pub const SHIPPED: Self = Self {
+        min_wake_segment_seconds: 5 * 60,
+        stable_posture_variance_g2: 0.05,
+        min_stable_minute_fraction: 0.80,
+        burst_pad_minutes: 1,
+        skip_window_edges: true,
+    };
+}
+
+impl Default for RefineParams {
+    fn default() -> Self {
+        Self::SHIPPED
+    }
+}
+
 /// Reclassify non-burst minutes of eligible wake segments to light. `segments` must tile one contiguous
 /// window in order. Byte-identical passthrough when empty, degenerate, or the density gate declines.
 pub fn refine(segments: &[StageSegment], grav: &[AccelSample], steps: &[StepSample]) -> Vec<StageSegment> {
+    refine_with(segments, grav, steps, &RefineParams::SHIPPED)
+}
+
+/// [`refine`] under a chosen eligibility rule. The density gate is not part of `p` — it judges the streams,
+/// not the recipe, so every setting is gated identically and a sweep compares like with like.
+pub fn refine_with(
+    segments: &[StageSegment], grav: &[AccelSample], steps: &[StepSample], p: &RefineParams,
+) -> Vec<StageSegment> {
     let (Some(first), Some(last)) = (segments.first(), segments.last()) else { return segments.to_vec() };
     let (window_start, window_end) = (first.start, last.end);
     if window_end <= window_start || !is_motion_dense(window_start, window_end, grav, steps) {
@@ -31,8 +69,13 @@ pub fn refine(segments: &[StageSegment], grav: &[AccelSample], steps: &[StepSamp
     let grav_by_minute = bucket_by_minute(grav);
     let ticks_by_minute = walk_class_ticks_per_minute(steps);
     let mut out: Vec<StageSegment> = Vec::new();
-    for seg in segments {
-        for piece in refine_segment(*seg, &grav_by_minute, &ticks_by_minute) {
+    let n = segments.len();
+    for (idx, seg) in segments.iter().enumerate() {
+        if p.skip_window_edges && (idx == 0 || idx + 1 == n) {
+            append_merging(*seg, &mut out);
+            continue;
+        }
+        for piece in refine_segment(*seg, &grav_by_minute, &ticks_by_minute, p) {
             append_merging(piece, &mut out);
         }
     }
@@ -86,19 +129,20 @@ fn refine_segment(
     seg: StageSegment,
     grav_by_minute: &HashMap<i64, Vec<AccelSample>>,
     ticks_by_minute: &HashMap<i64, i32>,
+    p: &RefineParams,
 ) -> Vec<StageSegment> {
-    if seg.stage != SleepStage::Wake || seg.end - seg.start < MIN_WAKE_SEGMENT_SECONDS {
+    if seg.stage != SleepStage::Wake || seg.end - seg.start < p.min_wake_segment_seconds {
         return vec![seg];
     }
     let mins = minutes(seg.start, seg.end);
     if mins.is_empty() || has_locomotion(&mins, ticks_by_minute) {
         return vec![seg];
     }
-    let Some(burst) = stable_burst_minutes(&mins, grav_by_minute) else { return vec![seg] };
+    let Some(burst) = stable_burst_minutes(&mins, grav_by_minute, p) else { return vec![seg] };
     let (first_minute, last_minute) = (mins[0], mins[mins.len() - 1]);
     let mut keep_wake: HashSet<i64> = HashSet::new();
     for &m in &burst {
-        let (lo, hi) = (first_minute.max(m - BURST_PAD_MINUTES), last_minute.min(m + BURST_PAD_MINUTES));
+        let (lo, hi) = (first_minute.max(m - p.burst_pad_minutes), last_minute.min(m + p.burst_pad_minutes));
         for p in lo..=hi {
             keep_wake.insert(p);
         }
@@ -135,22 +179,24 @@ fn has_locomotion(mins: &[i64], ticks_by_minute: &HashMap<i64, i32>) -> bool {
     false
 }
 
-/// The burst (not posture-stable) minutes when at least `MIN_STABLE_MINUTE_FRACTION` of `mins` are stable;
-/// `None` when too few are stable to trust. A minute with too little gravity to judge counts as a burst.
-fn stable_burst_minutes(mins: &[i64], grav_by_minute: &HashMap<i64, Vec<AccelSample>>) -> Option<HashSet<i64>> {
+/// The burst (not posture-stable) minutes when at least `p.min_stable_minute_fraction` of `mins` are
+/// stable; `None` when too few are stable to trust. A minute with too little gravity to judge is a burst.
+fn stable_burst_minutes(
+    mins: &[i64], grav_by_minute: &HashMap<i64, Vec<AccelSample>>, p: &RefineParams,
+) -> Option<HashSet<i64>> {
     let mut burst: HashSet<i64> = HashSet::new();
     let mut stable = 0i64;
     let empty: Vec<AccelSample> = Vec::new();
     for &m in mins {
         let samples = grav_by_minute.get(&m).unwrap_or(&empty);
         match posture_variance_g2(samples) {
-            Some(v) if v < STABLE_POSTURE_VARIANCE_G2 => stable += 1,
+            Some(v) if v < p.stable_posture_variance_g2 => stable += 1,
             _ => {
                 burst.insert(m);
             }
         }
     }
-    if (stable as f64) / (mins.len() as f64) < MIN_STABLE_MINUTE_FRACTION {
+    if (stable as f64) / (mins.len() as f64) < p.min_stable_minute_fraction {
         return None;
     }
     Some(burst)
@@ -217,47 +263,84 @@ mod tests {
         StepSample { ts, counter, activity_class: cls }
     }
 
-    #[test]
-    fn hot_but_still_wake_reclassified_to_light() {
-        let seg = vec![StageSegment { start: 0, end: 600, stage: SleepStage::Wake }];
+    /// Still streams dense enough for the gate over `minutes`: two gravity samples and one non-walking
+    /// step sample a minute, against the 2/min and 1/min over 80% of minutes it wants.
+    fn still_streams(minutes: i64) -> (Vec<AccelSample>, Vec<StepSample>) {
         let (mut grav, mut steps) = (Vec::new(), Vec::new());
-        for m in 0..10i64 {
+        for m in 0..minutes {
             grav.push(a(m * 60, 0.0, 0.0, 1.0));
             grav.push(a(m * 60 + 30, 0.0, 0.0, 1.0));
-            steps.push(st(m * 60, 100, Some(0))); // still class, no walk ticks
+            steps.push(st(m * 60, 100, Some(0)));
         }
-        let out = refine(&seg, &grav, &steps);
-        assert_eq!(out.len(), 1);
+        (grav, steps)
+    }
+
+    /// A window with sleep on both sides of one wake run, which is what the shipped rule converts.
+    fn interior_wake(wake_min: i64) -> Vec<StageSegment> {
+        let (w0, w1) = (600, 600 + wake_min * 60);
+        vec![
+            StageSegment { start: 0, end: w0, stage: SleepStage::Light },
+            StageSegment { start: w0, end: w1, stage: SleepStage::Wake },
+            StageSegment { start: w1, end: w1 + 600, stage: SleepStage::Light },
+        ]
+    }
+
+    /// A window holding one short and one long wake run at its edges, plus one in its interior, so every
+    /// eligibility knob has something to change.
+    fn three_wake_runs() -> Vec<StageSegment> {
+        vec![
+            StageSegment { start: 0, end: 180, stage: SleepStage::Wake }, // 3 min, leading
+            StageSegment { start: 180, end: 1200, stage: SleepStage::Light },
+            StageSegment { start: 1200, end: 1800, stage: SleepStage::Wake }, // 10 min, interior
+            StageSegment { start: 1800, end: 2400, stage: SleepStage::Light },
+            StageSegment { start: 2400, end: 3000, stage: SleepStage::Wake }, // 10 min, trailing
+        ]
+    }
+
+    #[test]
+    fn hot_but_still_wake_reclassified_to_light() {
+        let segs = interior_wake(10);
+        let (grav, steps) = still_streams(30);
+        let out = refine(&segs, &grav, &steps);
+        assert_eq!(out.len(), 1, "the whole window merges to one light run");
         assert_eq!(out[0].stage, SleepStage::Light);
-        assert_eq!((out[0].start, out[0].end), (0, 600));
+        assert_eq!((out[0].start, out[0].end), (0, 1800));
+    }
+
+    /// The H fix: sleep-onset latency and post-wake in-bed time are awake, and converting them removed
+    /// true wake on every second of it. Reverting `skip_window_edges` fails this.
+    #[test]
+    fn leading_and_trailing_wake_is_never_converted() {
+        let segs = three_wake_runs();
+        let (grav, steps) = still_streams(50);
+        let out = refine(&segs, &grav, &steps);
+        assert_eq!(out.first().copied(), Some(segs[0]), "the leading wake run must survive");
+        assert_eq!(out.last().copied(), Some(segs[4]), "the trailing wake run must survive");
+        // The interior run is the one it is for, and it does convert.
+        assert!(!out.iter().any(|s| s.stage == SleepStage::Wake && s.start == 1200));
     }
 
     #[test]
     fn sparse_stream_declines_and_passes_through() {
-        let seg = vec![StageSegment { start: 0, end: 600, stage: SleepStage::Wake }];
-        let grav: Vec<_> = (0..10).map(|m| a(m * 60, 0.0, 0.0, 1.0)).collect(); // 1/min < required 2
-        assert_eq!(refine(&seg, &grav, &[]), seg);
+        let segs = interior_wake(10);
+        let grav: Vec<_> = (0..30).map(|m| a(m * 60, 0.0, 0.0, 1.0)).collect(); // 1/min < the required 2
+        assert_eq!(refine(&segs, &grav, &[]), segs);
     }
 
     /// The exported gate must agree with what `refine` then does, or a harness reporting "refined" off
     /// `is_motion_dense` would pool spans the refinement declined.
     #[test]
     fn the_exported_gate_predicts_whether_the_refinement_acts() {
-        let seg = vec![StageSegment { start: 0, end: 600, stage: SleepStage::Wake }];
-        let (mut grav, mut steps) = (Vec::new(), Vec::new());
-        for m in 0..10i64 {
-            grav.push(a(m * 60, 0.0, 0.0, 1.0));
-            grav.push(a(m * 60 + 30, 0.0, 0.0, 1.0));
-            steps.push(st(m * 60, 100, Some(0)));
-        }
-        assert!(is_motion_dense(0, 600, &grav, &steps));
-        assert_ne!(refine(&seg, &grav, &steps), seg);
+        let segs = interior_wake(10);
+        let (grav, steps) = still_streams(30);
+        assert!(is_motion_dense(0, 1800, &grav, &steps));
+        assert_ne!(refine(&segs, &grav, &steps), segs);
         // One step sample every third minute is 33% coverage, under the 80% the gate wants.
         let sparse: Vec<_> = steps.iter().copied().step_by(3).collect();
-        assert!(!is_motion_dense(0, 600, &grav, &sparse));
-        assert_eq!(refine(&seg, &grav, &sparse), seg);
-        assert!(!is_motion_dense(0, 600, &grav, &[]));
-        assert_eq!(refine(&seg, &grav, &[]), seg);
+        assert!(!is_motion_dense(0, 1800, &grav, &sparse));
+        assert_eq!(refine(&segs, &grav, &sparse), segs);
+        assert!(!is_motion_dense(0, 1800, &grav, &[]));
+        assert_eq!(refine(&segs, &grav, &[]), segs);
     }
 
     /// The pass rewrites wake to light and nothing else, so any statistic taken over deep or REM seconds
@@ -265,17 +348,13 @@ mod tests {
     #[test]
     fn deep_and_rem_seconds_are_untouched() {
         let segs = vec![
-            StageSegment { start: 0, end: 600, stage: SleepStage::Wake },
-            StageSegment { start: 600, end: 1200, stage: SleepStage::Deep },
-            StageSegment { start: 1200, end: 1800, stage: SleepStage::Rem },
-            StageSegment { start: 1800, end: 2400, stage: SleepStage::Wake },
+            StageSegment { start: 0, end: 600, stage: SleepStage::Light },
+            StageSegment { start: 600, end: 1200, stage: SleepStage::Wake },
+            StageSegment { start: 1200, end: 1800, stage: SleepStage::Deep },
+            StageSegment { start: 1800, end: 2400, stage: SleepStage::Rem },
+            StageSegment { start: 2400, end: 3000, stage: SleepStage::Light },
         ];
-        let (mut grav, mut steps) = (Vec::new(), Vec::new());
-        for m in 0..40i64 {
-            grav.push(a(m * 60, 0.0, 0.0, 1.0));
-            grav.push(a(m * 60 + 30, 0.0, 0.0, 1.0));
-            steps.push(st(m * 60, 100, Some(0)));
-        }
+        let (grav, steps) = still_streams(50);
         let out = refine(&segs, &grav, &steps);
         assert_ne!(out, segs, "the gate must accept, or this proves nothing");
         let seconds = |v: &[StageSegment], want: SleepStage| -> Vec<i64> {
@@ -283,6 +362,41 @@ mod tests {
         };
         assert_eq!(seconds(&out, SleepStage::Deep), seconds(&segs, SleepStage::Deep));
         assert_eq!(seconds(&out, SleepStage::Rem), seconds(&segs, SleepStage::Rem));
+    }
+
+    /// `refine` is `refine_with` under `SHIPPED`, so a sweep's baseline row is the shipped pass itself.
+    #[test]
+    fn shipped_params_reproduce_the_constant_pass() {
+        let segs = interior_wake(10);
+        let (grav, steps) = still_streams(30);
+        let out = refine(&segs, &grav, &steps);
+        assert_ne!(out, segs, "the gate must accept, or this proves nothing");
+        assert_eq!(out, refine_with(&segs, &grav, &steps, &RefineParams::SHIPPED));
+        assert_eq!(out, refine_with(&segs, &grav, &steps, &RefineParams::default()));
+    }
+
+    /// Each knob must move the outcome, or a sweep over it would report a ceiling that is really a no-op.
+    #[test]
+    fn each_eligibility_knob_changes_the_outcome() {
+        let segs = three_wake_runs();
+        let (grav, steps) = still_streams(50);
+        let wake_s = |p: &RefineParams| -> i64 {
+            refine_with(&segs, &grav, &steps, p)
+                .iter()
+                .filter(|s| s.stage == SleepStage::Wake)
+                .map(|s| s.end - s.start)
+                .sum()
+        };
+        let shipped = RefineParams::SHIPPED;
+        let edges = RefineParams { skip_window_edges: false, ..shipped };
+        // Shipped keeps both edge runs (3 + 10 min) and converts the interior one.
+        assert_eq!(wake_s(&shipped), 780);
+        // With the edges eligible, only the 3-min run is left, under the 5-min floor.
+        assert_eq!(wake_s(&edges), 180);
+        // A 1-min floor takes that too.
+        assert_eq!(wake_s(&RefineParams { min_wake_segment_seconds: 60, ..edges }), 0);
+        // Nothing converts once a still minute has to beat zero variance.
+        assert_eq!(wake_s(&RefineParams { stable_posture_variance_g2: 0.0, ..edges }), 1380);
     }
 
     #[test]

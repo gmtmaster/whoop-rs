@@ -2,9 +2,10 @@
 //! (features → emissions → Viterbi → tiling) stage-for-stage on a crafted integer-only night, so any drift
 //! from the shipped recipe fails immediately. Integer-literal input keeps the two languages bit-identical.
 
-use super::input::{AccelSample, HrSample, RrRun, SleepInput};
+use super::input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 use super::params::Params;
-use super::{analyze, stage_v2, SleepStage, SleepStreams, DEEP_GATE_THRESH};
+use super::refine::{refine_with, RefineParams};
+use super::{analyze, motion_dense, stage_v2, SleepStage, SleepStreams, DEEP_GATE_THRESH};
 
 const REF_MIDNIGHT: i64 = 1_749_513_600;
 
@@ -118,6 +119,47 @@ fn analyze_still_night_stages_and_tiles_the_span() {
     for w in segs.windows(2) {
         assert_eq!(w[0].end, w[1].start);
     }
+}
+
+/// The golden above carries no step stream, so `analyze`'s last stage declines on it and the frozen
+/// hypnogram cannot see the refinement at all. This drives the same night WITH one.
+///
+/// The golden night's only wake run is its last, 5,309 s of post-wake in-bed time. The shipped rule
+/// leaves it; the rule H opened with converted all of it to light. So the fix is pinned end to end, on
+/// the same crafted night the recipe is frozen against.
+#[test]
+fn analyze_keeps_the_golden_night_trailing_wake_when_the_step_stream_is_dense() {
+    let input = golden_input();
+    let steps: Vec<StepSample> = (input.start..input.end)
+        .step_by(30)
+        .map(|ts| StepSample { ts, counter: 100, activity_class: Some(0) })
+        .collect();
+    let bare = SleepStreams {
+        hr: input.hr.clone(),
+        rr: input.rr.clone(),
+        accel: input.accel.clone(),
+        tz_offset_s: 0,
+        ..Default::default()
+    };
+    let dense = SleepStreams { steps: steps.clone(), ..bare.clone() };
+    let (a, b) = (analyze(&bare), analyze(&dense));
+    assert_eq!((1, 1), (a.len(), b.len()));
+    let span = (b[0].start, b[0].end);
+    assert!(!motion_dense(span.0, span.1, &input.accel, &[]), "the bare golden must decline");
+    assert!(motion_dense(span.0, span.1, &input.accel, &steps), "the dense one must be accepted");
+    assert_eq!(a[0].segments, b[0].segments, "the shipped rule leaves a trailing wake run alone");
+    let tail = *b[0].segments.last().unwrap();
+    assert_eq!(SleepStage::Wake, tail.stage);
+    assert_eq!(5_309, tail.end - tail.start);
+    assert_eq!(b[0].end, tail.end);
+
+    // The rule H opened with, over the same staging and the same streams: it takes the whole run.
+    let span_steps: Vec<StepSample> = steps.iter().copied().filter(|s| s.ts >= span.0 && s.ts < span.1).collect();
+    let span_accel: Vec<AccelSample> =
+        input.accel.iter().copied().filter(|g| g.ts >= span.0 && g.ts < span.1).collect();
+    let pre_h = RefineParams { skip_window_edges: false, ..RefineParams::SHIPPED };
+    let old = refine_with(&b[0].segments, &span_accel, &span_steps, &pre_h);
+    assert_ne!(SleepStage::Wake, old.last().unwrap().stage, "pre-H converted the trailing run");
 }
 
 #[test]

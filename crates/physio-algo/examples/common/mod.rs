@@ -165,6 +165,35 @@ pub fn read_steps(dir: &Path) -> Vec<StepSample> {
         .collect()
 }
 
+/// One night as WHOOP's own app reports it: its in-bed window and its stage shares, in `STAGE_ORDER`.
+pub struct Export {
+    pub owner: String,
+    pub onset: i64,
+    pub wake: i64,
+    pub frac: [f64; 4],
+}
+
+/// Every export night under `whoop-labels.json`, onset-sorted. A row with a bad window or a missing share
+/// is dropped rather than defaulted, so a night that reaches a table carries all four fractions.
+pub fn read_export() -> Vec<Export> {
+    let Ok(text) = fs::read_to_string(fixtures_root().join("whoop-labels.json")) else { return Vec::new() };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (owner, nights) in root.as_object().into_iter().flatten() {
+        for n in nights.as_array().into_iter().flatten() {
+            let (Some(onset), Some(wake)) = (n["onset_unix"].as_i64(), n["wake_unix"].as_i64()) else {
+                continue;
+            };
+            let frac = ["awake", "light", "deep", "rem"].map(|k| n[k].as_f64().unwrap_or(f64::NAN));
+            if wake > onset && frac.iter().all(|v| v.is_finite()) {
+                out.push(Export { owner: owner.clone(), onset, wake, frac });
+            }
+        }
+    }
+    out.sort_by_key(|e| e.onset);
+    out
+}
+
 /// Which side of the refinement's density gate each span fell on, for one reported figure.
 ///
 /// The gate wants a gravity sample twice a minute and a step sample once a minute over 80% of the
