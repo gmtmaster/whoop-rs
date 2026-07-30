@@ -16,35 +16,13 @@
 
 mod common;
 
-use common::{dirs_of, read_accel, read_csv, read_hr, read_rr, read_steps, RefineCensus};
-
-use physio_algo::sleep::{
-    params::Params, prepare_v2, stage_v2_prepared, SleepInput, SleepStage, StageSegment, StepSample,
+use common::{
+    dirs_of, labels_at, median, read_accel, read_csv, read_hr, read_meta, read_rr, read_steps, RefineCensus,
 };
 
+use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, SleepInput, StageSegment, StepSample};
+
 const EPOCH_SEC: i64 = 30;
-
-fn idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
-}
-
-fn labels_at(segs: &[StageSegment], w0: i64, n: usize) -> Vec<usize> {
-    (0..n)
-        .map(|k| {
-            let mid = w0 + k as i64 * EPOCH_SEC + EPOCH_SEC / 2;
-            idx(segs
-                .iter()
-                .find(|s| s.start <= mid && mid < s.end)
-                .map(|s| s.stage)
-                .unwrap_or_else(|| segs.last().expect("staging is never empty here").stage))
-        })
-        .collect()
-}
 
 /// Stage one window, then run the app's last stage over it through the census. `refine` false gives the
 /// `stage_v2`-only path every A-Z number before this was measured on.
@@ -83,8 +61,7 @@ fn summarise(ns: &[&NightEffect], refined: bool) -> (usize, usize, usize, f64, f
         .iter()
         .map(|n| 100.0 * (if refined { n.moved_ref } else { n.moved_raw }) as f64 / n.inner.max(1) as f64)
         .collect();
-    per.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let med = if per.is_empty() { f64::NAN } else { per[per.len() / 2] };
+    let med = median(&mut per);
     let wf: usize = ns.iter().map(|n| if refined { n.wake_full_ref } else { n.wake_full }).sum();
     let wt: usize = ns.iter().map(|n| if refined { n.wake_trim_ref } else { n.wake_trim }).sum();
     (
@@ -112,9 +89,7 @@ fn main() {
     let mut census = RefineCensus::default();
 
     for d in dirs_of("ours") {
-        let Ok(meta) = std::fs::read_to_string(d.join("meta.txt")) else { continue };
-        let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-        let (w0, w1, n) = (m[1], m[2], m[3] as usize);
+        let Some((w0, w1, n)) = read_meta(&d) else { continue };
         let truth = read_csv(&d.join("truth.csv"));
         let asleep: Vec<usize> = truth.iter().filter(|r| r[1] == 1.0).map(|r| r[0] as usize).collect();
         if asleep.len() < 240 {
@@ -134,10 +109,10 @@ fn main() {
         // Both paths over both windows. A night counts as dense only if the gate accepted BOTH stagings,
         // because the sensitivity is a comparison and half of it being unrefined measures nothing.
         let mut per_night = RefineCensus::default();
-        let a = labels_at(&stage_window(&full, &p, &steps, false, &mut per_night), w0, n);
-        let b = labels_at(&stage_window(&trim, &p, &steps, false, &mut per_night), t0, inner);
-        let ar = labels_at(&stage_window(&full, &p, &steps, true, &mut per_night), w0, n);
-        let br = labels_at(&stage_window(&trim, &p, &steps, true, &mut per_night), t0, inner);
+        let a = labels_at(&stage_window(&full, &p, &steps, false, &mut per_night), w0, n, EPOCH_SEC);
+        let b = labels_at(&stage_window(&trim, &p, &steps, false, &mut per_night), t0, inner, EPOCH_SEC);
+        let ar = labels_at(&stage_window(&full, &p, &steps, true, &mut per_night), w0, n, EPOCH_SEC);
+        let br = labels_at(&stage_window(&trim, &p, &steps, true, &mut per_night), t0, inner, EPOCH_SEC);
         census.absorb(&per_night);
 
         all.push(NightEffect {

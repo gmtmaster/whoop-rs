@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{dirs_of, night_id, read_accel, read_hr, read_meta, read_rr, read_steps, stage_idx};
+use common::{dirs_of, mean, night_id, read_accel, read_hr, read_meta, read_rr, read_steps, stage_idx};
 
 use physio_algo::hrv::HrvReadiness;
 use physio_algo::recovery::{recovery, DriverBaseline, RecoveryInput, W_HRV, W_SLEEP};
@@ -162,10 +162,6 @@ fn charge_of(hrv_from: &Scored, rest_from: &Scored, p: &Person) -> Option<f64> {
         sleep_perf: rest_of(rest_from, p).map(|r| r / 100.0),
         ..Default::default()
     })
-}
-
-fn mean(v: &[f64]) -> f64 {
-    v.iter().sum::<f64>() / v.len().max(1) as f64
 }
 
 /// One perturbation applied to every night: the mean level of each output, and the mean signed change.

@@ -15,12 +15,11 @@
 mod common;
 
 use common::{
-    dirs_of, kappa4, median, read_csv, read_rr, read_steps, stage_at, stage_idx, BAND_ASLEEP, RefineCensus,
-    TwoClass,
+    dirs_of, kappa4, median, read_accel, read_band, read_hr, read_meta, read_rr, read_steps, read_truth,
+    stage_at, stage_idx, BAND_ASLEEP, RefineCensus, TwoClass, WAKE,
 };
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use physio_algo::sleep::{
@@ -31,7 +30,6 @@ use physio_algo::sleep::{
 const EPOCH_SEC: i64 = 30;
 /// One epoch in minutes, for reporting an epoch index as a time.
 const EPOCH_MIN_F: f64 = 0.5;
-const WAKE: usize = 0;
 /// The PSG cohorts, named so every kappa below says which population it came from.
 const PSG: [&str; 3] = ["dreamt", "aauwss", "sleep-accel"];
 /// The three rescue families of section 3. One finalist from each reaches the ledger, so the bound of
@@ -70,20 +68,11 @@ struct Block {
 }
 
 fn load_block(d: &Path) -> Option<Block> {
-    let band: Vec<(i64, i32)> = read_csv(&d.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
-    if band.is_empty() {
+    let (band, accel) = (read_band(d), read_accel(d));
+    if band.is_empty() || accel.len() < 120 {
         return None;
     }
-    let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    if accel.len() < 120 {
-        return None;
-    }
-    let hr: Vec<HrSample> =
-        read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-    Some(Block { hr, rr: read_rr(d), accel, steps: read_steps(d), band })
+    Some(Block { hr: read_hr(d), rr: read_rr(d), accel, steps: read_steps(d), band })
 }
 
 /// One detected span with its staging, the band over it, and the streams the refinement reads.
@@ -321,22 +310,13 @@ struct Night {
 }
 
 fn load_ours(d: &Path) -> Option<Night> {
-    let meta = fs::read_to_string(d.join("meta.txt")).ok()?;
-    let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let hr: Vec<HrSample> =
-        read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-    let truth: BTreeMap<usize, i32> =
-        read_csv(&d.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect();
+    let (w0, w1, n) = read_meta(d)?;
     Some(Night {
-        w0: m[1],
-        n: m[3] as usize,
-        input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(d), accel },
+        w0,
+        n,
+        input: SleepInput { start: w0, end: w1, hr: read_hr(d), rr: read_rr(d), accel: read_accel(d) },
         steps: read_steps(d),
-        truth,
+        truth: read_truth(d),
     })
 }
 
@@ -458,23 +438,15 @@ struct PsgNight {
 }
 
 fn load_psg(d: &Path) -> Option<PsgNight> {
-    let meta = fs::read_to_string(d.join("meta.txt")).ok()?;
-    let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let truth: BTreeMap<usize, i32> =
-        read_csv(&d.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect();
+    let (w0, w1, n) = read_meta(d)?;
+    let truth = read_truth(d);
     if truth.is_empty() {
         return None;
     }
-    let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let hr: Vec<HrSample> =
-        read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
     Some(PsgNight {
-        w0: m[1],
-        n: m[3] as usize,
-        input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(d), accel },
+        w0,
+        n,
+        input: SleepInput { start: w0, end: w1, hr: read_hr(d), rr: read_rr(d), accel: read_accel(d) },
         truth,
     })
 }

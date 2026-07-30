@@ -11,17 +11,14 @@
 
 mod common;
 
-use common::{read_csv};
+use common::{kappa4, read_accel, read_hr, read_meta, read_rr, read_truth, stage_idx};
 
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use physio_algo::sleep::{
-    params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, Prepared, RrRun, SleepInput,
-    SleepStage,
-};
+use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, Prepared, SleepInput};
 
 const DATASETS: [&str; 4] = ["dreamt", "aauwss", "killa5", "sleep-accel"];
 
@@ -33,30 +30,12 @@ struct Night {
 }
 
 fn load_night(dir: &Path) -> Option<Night> {
-    let meta = fs::read_to_string(dir.join("meta.txt")).ok()?;
-    let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let (w0, w1, n_epochs) = (m[1], m[2], m[3] as usize);
+    let (w0, w1, n_epochs) = read_meta(dir)?;
 
-    let accel = read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let hr = read_csv(&dir.join("hr.csv"))
-        .iter()
-        .map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 })
-        .collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&dir.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(last) if last.ts == ts => last.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    let mut truth = BTreeMap::new();
-    for row in read_csv(&dir.join("truth.csv")) {
-        truth.insert(row[0] as usize, row[1] as i32);
-    }
+    let accel = read_accel(dir);
+    let hr = read_hr(dir);
+    let rr = read_rr(dir);
+    let truth = read_truth(dir);
     if truth.is_empty() {
         return None; // an empty ground truth measures nothing
     }
@@ -72,37 +51,6 @@ fn load_dataset(ds: &str) -> Vec<Night> {
     dirs.iter().filter_map(|d| load_night(d)).collect()
 }
 
-fn stage_to_int(s: SleepStage) -> i32 {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
-}
-
-fn cohen_kappa(cm: &[[i64; 4]; 4]) -> f64 {
-    let tot: i64 = cm.iter().flatten().sum();
-    if tot == 0 {
-        return 0.0;
-    }
-    let tot = tot as f64;
-    let agree: i64 = (0..4).map(|i| cm[i][i]).sum();
-    let po = agree as f64 / tot;
-    let mut pe = 0.0;
-    for (j, row_j) in cm.iter().enumerate() {
-        let col: i64 = cm.iter().map(|r| r[j]).sum();
-        let row: i64 = row_j.iter().sum();
-        pe += col as f64 * row as f64;
-    }
-    pe /= tot * tot;
-    if pe >= 1.0 {
-        0.0
-    } else {
-        (po - pe) / (1.0 - pe)
-    }
-}
-
 /// Feature extraction is the expensive half and only `jerk_move_mult` changes it, so a sweep extracts
 /// once and re-labels. Re-prepare whenever that axis moves.
 fn prepare_all(nights: &[Night], p: &Params) -> Vec<Prepared> {
@@ -112,7 +60,7 @@ fn prepare_all(nights: &[Night], p: &Params) -> Vec<Prepared> {
 fn kappa(nights: &[Night], prep: &[Prepared], p: &Params) -> f64 {
     let mut cm = [[0i64; 4]; 4];
     accumulate(nights, prep, p, &mut cm);
-    cohen_kappa(&cm)
+    kappa4(&cm)
 }
 
 /// Pooled kappa over several datasets: one confusion matrix across all of them, so the objective is
@@ -122,7 +70,7 @@ fn pooled_kappa(sets: &[(&[Night], &[Prepared])], p: &Params) -> f64 {
     for (nights, prep) in sets {
         accumulate(nights, prep, p, &mut cm);
     }
-    cohen_kappa(&cm)
+    kappa4(&cm)
 }
 
 fn accumulate(nights: &[Night], prep: &[Prepared], p: &Params, cm: &mut [[i64; 4]; 4]) {
@@ -138,7 +86,7 @@ fn accumulate(nights: &[Night], prep: &[Prepared], p: &Params, cm: &mut [[i64; 4
                 .find(|s| s.start <= mid && mid < s.end)
                 .map(|s| s.stage)
                 .unwrap_or_else(|| segs.last().unwrap().stage);
-            cm[t as usize][stage_to_int(stage) as usize] += 1;
+            cm[t as usize][stage_idx(stage)] += 1;
         }
     }
 }

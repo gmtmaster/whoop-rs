@@ -12,15 +12,13 @@
 
 mod common;
 
-use common::{median_avg, read_csv, root, stage_idx};
+use common::{median_avg, read_accel, read_hr, read_meta, read_rr, read_truth, root, stage_idx};
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use physio_algo::sleep::{
-    params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, Prepared, RrRun, SleepInput,
-};
+use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, Prepared, SleepInput};
 
 struct Night {
     owner: String,
@@ -31,29 +29,11 @@ struct Night {
 }
 
 fn load(dir: &Path) -> Option<Night> {
-    let meta = fs::read_to_string(dir.join("meta.txt")).ok()?;
-    let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let (w0, w1, n_epochs) = (m[1], m[2], m[3] as usize);
-    let accel = read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let hr = read_csv(&dir.join("hr.csv"))
-        .iter()
-        .map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 })
-        .collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&dir.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(last) if last.ts == ts => last.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    let mut truth = BTreeMap::new();
-    for row in read_csv(&dir.join("truth.csv")) {
-        truth.insert(row[0] as usize, row[1] as i32);
-    }
+    let (w0, w1, n_epochs) = read_meta(dir)?;
+    let accel = read_accel(dir);
+    let hr = read_hr(dir);
+    let rr = read_rr(dir);
+    let truth = read_truth(dir);
     let owner = dir.file_name()?.to_string_lossy().split('_').next()?.to_string();
     Some(Night { owner, input: SleepInput { start: w0, end: w1, hr, rr, accel }, w0, n_epochs, truth })
 }

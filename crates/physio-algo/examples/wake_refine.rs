@@ -20,7 +20,7 @@ mod common;
 
 use common::{
     dirs_of, median, night_id, pair_nearest, read_accel, read_band, read_hr, read_meta, read_rr, read_steps,
-    stage_at, BAND_ASLEEP, Export, RefineCensus, TwoClass,
+    stage_at, BAND_ASLEEP, Export, RefineCensus, TwoClass, WAKE,
 };
 
 use physio_algo::sleep::{
@@ -30,7 +30,6 @@ use physio_algo::sleep::{
 };
 
 const EPOCH_SEC: i64 = 30;
-const WAKE: usize = 0;
 const PSG: [&str; 3] = ["dreamt", "aauwss", "sleep-accel"];
 /// How far apart a staged night and an export row may sit and still be the same night.
 const MATCH_SLACK_S: i64 = 4 * 3600;

@@ -23,8 +23,8 @@
 mod common;
 
 use common::{
-    asleep_runs, dirs_of, median, pct, read_accel, read_band, read_hr, read_rr, read_steps, BAND_ASLEEP,
-    RefineCensus,
+    asleep_runs, band_asleep_secs, dirs_of, local_day, median, pct, read_accel, read_band, read_hr, read_rr,
+    read_steps, BAND_ASLEEP, RefineCensus,
 };
 
 use std::path::Path;
@@ -64,15 +64,6 @@ fn band_asleep_frac(band: &[(i64, i32)], a: i64, b: i64) -> Option<f64> {
         return None;
     }
     Some(seg.iter().filter(|&&s| s == BAND_ASLEEP).count() as f64 / seg.len() as f64)
-}
-
-/// Seconds the strap called asleep inside `[a, b]`, on a 1 Hz band.
-fn band_asleep_secs(band: &[(i64, i32)], a: i64, b: i64) -> i64 {
-    band.iter().filter(|(t, s)| *t >= a && *t <= b && *s == BAND_ASLEEP).count() as i64
-}
-
-fn local_day(ts: i64, offset_s: i64) -> i64 {
-    (ts + offset_s).div_euclid(86_400)
 }
 
 fn blocks() -> Vec<Block> {

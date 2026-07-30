@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{median_avg, read_csv, stage_idx};
+use common::{mean, median_avg, onset_of, read_accel, read_hr, read_meta, read_rr, read_truth, stage_idx};
 
 use common::kappa4 as kappa;
 
@@ -18,13 +18,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use physio_algo::sleep::{
-    params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, Prepared, RrRun, SleepInput,
-};
+use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, Prepared, SleepInput};
 
 const PSG: [&str; 3] = ["sleep-accel", "dreamt", "aauwss"];
 const REM: usize = 3;
-const WAKE: usize = 0;
 
 struct Night {
     input: SleepInput,
@@ -34,29 +31,11 @@ struct Night {
 }
 
 fn load_night(dir: &Path, need_truth: bool) -> Option<Night> {
-    let meta = fs::read_to_string(dir.join("meta.txt")).ok()?;
-    let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let (w0, w1, n_epochs) = (m[1], m[2], m[3] as usize);
-    let accel = read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let hr = read_csv(&dir.join("hr.csv"))
-        .iter()
-        .map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 })
-        .collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&dir.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(last) if last.ts == ts => last.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    let mut truth = BTreeMap::new();
-    for row in read_csv(&dir.join("truth.csv")) {
-        truth.insert(row[0] as usize, row[1] as i32);
-    }
+    let (w0, w1, n_epochs) = read_meta(dir)?;
+    let accel = read_accel(dir);
+    let hr = read_hr(dir);
+    let rr = read_rr(dir);
+    let truth = read_truth(dir);
     if need_truth && truth.is_empty() {
         return None;
     }
@@ -84,22 +63,6 @@ fn labels(n: &Night, prep: &Prepared, p: &Params) -> Vec<usize> {
             )
         })
         .collect()
-}
-
-/// The first epoch of the earliest ten-epoch run without a wake label, mirroring the staging rule.
-fn onset_of(seq: &[usize]) -> Option<usize> {
-    let mut run = 0;
-    for (i, &l) in seq.iter().enumerate() {
-        run = if l == WAKE { 0 } else { run + 1 };
-        if run == 10 {
-            return Some(i - 9);
-        }
-    }
-    None
-}
-
-fn mean(v: &[f64]) -> f64 {
-    v.iter().sum::<f64>() / v.len() as f64
 }
 
 fn sd(v: &[f64]) -> f64 {

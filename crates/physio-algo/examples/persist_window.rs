@@ -21,10 +21,9 @@
 
 mod common;
 
-use common::{asleep_runs, median, pct, read_csv, root};
+use common::{asleep_runs, dirs_of, median, pct, read_accel, read_band, read_csv, read_hr};
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 
 use physio_algo::sleep::{detect_sessions_with, AccelSample, DetectParams, DetectedSpan, HrSample};
 
@@ -50,18 +49,11 @@ struct Block {
 }
 
 fn load(dir: &Path) -> Option<Block> {
-    let band: Vec<(i64, i32)> = read_csv(&dir.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
-    if band.is_empty() {
+    let (band, accel) = (read_band(dir), read_accel(dir));
+    if band.is_empty() || accel.len() < 120 {
         return None;
     }
-    let accel: Vec<AccelSample> = read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    if accel.len() < 120 {
-        return None;
-    }
-    let hr = read_csv(&dir.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
+    let hr = read_hr(dir);
     // Column 3 is absent on a fixture built before the flag was carried; absent reads as un-edited,
     // which is the same direction the blind comparison already assumed.
     let stored = read_csv(&dir.join("sessions.csv"))
@@ -73,11 +65,7 @@ fn load(dir: &Path) -> Option<Block> {
 }
 
 fn blocks() -> Vec<Block> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root("continuous"))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
-    dirs.iter().filter_map(|d| load(d)).collect()
+    dirs_of("continuous").iter().filter_map(|d| load(d)).collect()
 }
 
 fn spans_of(b: &Block, p: &DetectParams) -> Vec<DetectedSpan> {

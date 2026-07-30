@@ -18,7 +18,7 @@ mod common;
 
 use common::{
     dirs_of, kappa4, night_id, pair_nearest, pre_retune, read_accel, read_hr, read_meta, read_rr, read_steps,
-     stage_idx, RefineCensus,
+    stage_idx, RefineCensus,
 };
 
 use std::fs;

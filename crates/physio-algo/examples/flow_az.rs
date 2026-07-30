@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::{asleep_runs, median, pct, read_csv, root, RefineCensus};
+use common::{asleep_runs, median, pct, read_accel, read_band, read_csv, read_hr, read_rr, root, RefineCensus};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -49,23 +49,10 @@ fn load(dir: &Path) -> Option<Block> {
         .iter()
         .map(|r| Stored { start: r[0] as i64, end: r[1] as i64, edited: r.get(2).copied().unwrap_or(0.0) != 0.0 })
         .collect();
-    let hr = read_csv(&dir.join("hr.csv"))
-        .iter()
-        .map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 })
-        .collect();
-    let accel = read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&dir.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    let band = read_csv(&dir.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
+    let hr = read_hr(dir);
+    let accel = read_accel(dir);
+    let rr = read_rr(dir);
+    let band = read_band(dir);
     // `-1` in column 3 means the activity class was not decoded, which is not "still".
     let steps = read_csv(&dir.join("steps.csv"))
         .iter()

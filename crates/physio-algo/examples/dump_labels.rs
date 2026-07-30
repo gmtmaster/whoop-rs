@@ -11,14 +11,12 @@
 
 mod common;
 
-use common::{read_csv, root};
+use common::{read_accel, read_hr, read_meta, read_rr, root};
 
 use std::fs;
 use std::path::PathBuf;
 
-use physio_algo::sleep::{
-    params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun, SleepInput, SleepStage,
-};
+use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, SleepInput, SleepStage};
 
 fn main() {
     let shipped = Params::SHIPPED;
@@ -32,25 +30,10 @@ fn main() {
     dirs.sort();
     println!("sid,recipe,epochs,labels");
     for d in dirs {
-        let Ok(meta) = fs::read_to_string(d.join("meta.txt")) else { continue };
-        let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-        let (w0, w1, n) = (m[1], m[2], m[3] as usize);
-        let accel = read_csv(&d.join("gravity.csv"))
-            .iter()
-            .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-            .collect();
-        let hr = read_csv(&d.join("hr.csv"))
-            .iter()
-            .map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 })
-            .collect();
-        let mut rr: Vec<RrRun> = Vec::new();
-        for row in read_csv(&d.join("rr.csv")) {
-            let (ts, ms) = (row[0] as i64, row[1] as u16);
-            match rr.last_mut() {
-                Some(last) if last.ts == ts => last.intervals.push(ms),
-                _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-            }
-        }
+        let Some((w0, w1, n)) = read_meta(&d) else { continue };
+        let accel = read_accel(&d);
+        let hr = read_hr(&d);
+        let rr = read_rr(&d);
         let input = SleepInput { start: w0, end: w1, hr, rr, accel };
         let sid = d.file_name().unwrap().to_string_lossy().to_string();
         for (name, p) in [("shipped", &shipped), ("pre", &pre), ("cap07", &capped)] {

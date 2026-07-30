@@ -24,8 +24,8 @@
 mod common;
 
 use common::{
-    dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, stage_at, BAND_ASLEEP,
-    RefineCensus, TwoClass,
+    dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, stage_at,
+    BAND_ASLEEP, RefineCensus, TwoClass,
 };
 
 use physio_algo::sleep::{

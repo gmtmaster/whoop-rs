@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -71,6 +72,12 @@ pub fn read_rr(dir: &Path) -> Vec<RrRun> {
         }
     }
     rr
+}
+
+/// `truth.csv` as epoch index -> label. Empty when the set carries no labels, which is how a harness
+/// tells "unlabelled" apart from "all wake" — several sets have no truth at all.
+pub fn read_truth(dir: &Path) -> BTreeMap<usize, i32> {
+    read_csv(&dir.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect()
 }
 
 /// `meta.txt` as (window start, window end, epoch count). A fixture night is rebased onto a synthetic
@@ -188,6 +195,36 @@ pub fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
 /// fold every band-scored figure in the chain uses.
 pub const BAND_ASLEEP: i32 = 2;
 
+/// The label index of wake in a `Vec<usize>` epoch sequence — the same 0 [`stage_idx`] returns.
+pub const WAKE: usize = 0;
+
+/// The local calendar day `ts` falls in, as a day number. A main-night pick partitions on these.
+pub fn local_day(ts: i64, offset_s: i64) -> i64 {
+    (ts + offset_s).div_euclid(86_400)
+}
+
+/// Seconds the strap itself called asleep inside `[a, b]`, its band being 1 Hz.
+pub fn band_asleep_secs(band: &[(i64, i32)], a: i64, b: i64) -> i64 {
+    band.iter().filter(|(t, s)| *t >= a && *t <= b && *s == BAND_ASLEEP).count() as i64
+}
+
+/// First epoch of the first 10-epoch non-wake run: the onset rule the stager itself applies.
+pub fn onset_of(seq: &[usize]) -> Option<usize> {
+    let mut run = 0;
+    for (i, &l) in seq.iter().enumerate() {
+        run = if l == WAKE { 0 } else { run + 1 };
+        if run == 10 {
+            return Some(i - 9);
+        }
+    }
+    None
+}
+
+/// The arithmetic mean, 0.0 rather than NaN on an empty slice.
+pub fn mean(v: &[f64]) -> f64 {
+    v.iter().sum::<f64>() / v.len().max(1) as f64
+}
+
 /// The strap's own asleep runs of at least `min_min` minutes, joining across gaps up to `tol_s`. The
 /// reference every detection and wake figure is scored against.
 pub fn asleep_runs(band: &[(i64, i32)], min_min: i64, tol_s: i64) -> Vec<(i64, i64)> {
@@ -244,6 +281,17 @@ pub fn median_avg(v: &mut [f64]) -> f64 {
     v.sort_by(f64::total_cmp);
     let n = v.len();
     if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
+}
+
+/// The `n` epoch labels of a hypnogram tiled from `w0`, each read at its epoch midpoint. Past the last
+/// segment the final stage is held, so a caller always gets `n` labels.
+pub fn labels_at(segs: &[StageSegment], w0: i64, n: usize, epoch_sec: i64) -> Vec<usize> {
+    (0..n)
+        .map(|k| {
+            let mid = w0 + k as i64 * epoch_sec + epoch_sec / 2;
+            stage_idx(stage_at(segs, mid).unwrap_or_else(|| segs.last().expect("staging is never empty here").stage))
+        })
+        .collect()
 }
 
 /// `STAGE_ORDER`'s index for a stage: the column order every confusion matrix and fraction table uses.

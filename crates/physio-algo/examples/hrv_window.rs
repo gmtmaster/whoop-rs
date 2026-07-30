@@ -13,14 +13,14 @@
 
 mod common;
 
-use common::{median, read_csv, root};
+use common::{median, read_accel, read_hr, read_rr, root};
 
 use std::fs;
 use std::path::PathBuf;
 
 use physio_algo::hrv::HrvReadiness;
 use physio_algo::sleep::{
-    params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun, SleepInput, SleepStage,
+    params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, SleepInput, SleepStage,
 };
 
 /// How far a staged night's start may sit from a published sleep onset and still be the same night.
@@ -103,22 +103,9 @@ fn main() {
     let mut staged: Vec<Night> = Vec::new();
 
     for d in &dirs {
-        let hr: Vec<HrSample> = read_csv(&d.join("hr.csv"))
-            .iter()
-            .map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 })
-            .collect();
-        let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-            .iter()
-            .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-            .collect();
-        let mut rr: Vec<RrRun> = Vec::new();
-        for row in read_csv(&d.join("rr.csv")) {
-            let (ts, ms) = (row[0] as i64, row[1] as u16);
-            match rr.last_mut() {
-                Some(l) if l.ts == ts => l.intervals.push(ms),
-                _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-            }
-        }
+        let hr: Vec<HrSample> = read_hr(d);
+        let accel: Vec<AccelSample> = read_accel(d);
+        let rr = read_rr(d);
         if hr.len() < 120 || accel.len() < 120 || rr.is_empty() {
             continue;
         }

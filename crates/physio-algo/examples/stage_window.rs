@@ -20,12 +20,11 @@
 mod common;
 
 use common::{
-    dirs_of, median, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, stage_idx, BAND_ASLEEP,
-    RefineCensus,
+    band_asleep_secs, dirs_of, labels_at, local_day, median, read_accel, read_band, read_hr, read_meta,
+    read_rr, read_steps, read_truth, RefineCensus,
 };
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use physio_algo::sleep::{
@@ -74,14 +73,13 @@ struct Night {
 }
 
 fn load_night(d: &Path) -> Option<Night> {
-    let meta = fs::read_to_string(d.join("meta.txt")).ok()?;
-    let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let truth = read_csv(&d.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect();
+    let (w0, w1, n) = read_meta(d)?;
+    let truth = read_truth(d);
     Some(Night {
         name: d.file_name().unwrap().to_string_lossy().chars().take(38).collect(),
-        w0: m[1],
-        w1: m[2],
-        n: m[3] as usize,
+        w0,
+        w1,
+        n,
         hr: read_hr(d),
         rr: read_rr(d),
         accel: read_accel(d),
@@ -92,22 +90,6 @@ fn load_night(d: &Path) -> Option<Night> {
 
 fn nights() -> Vec<Night> {
     dirs_of("ours").iter().filter_map(|d| load_night(d)).collect()
-}
-
-/// One label per epoch of `[w0, w0 + n*EPOCH_SEC)`, read at each epoch's MIDPOINT out of a staging's
-/// wall-clock segments — so a caller's grid and the stager's grid are matched by time, not by index.
-fn labels_at(segs: &[StageSegment], w0: i64, n: usize) -> Vec<usize> {
-    (0..n)
-        .map(|k| {
-            let mid = w0 + k as i64 * EPOCH_SEC + EPOCH_SEC / 2;
-            stage_idx(
-                segs.iter()
-                    .find(|s| s.start <= mid && mid < s.end)
-                    .map(|s| s.stage)
-                    .unwrap_or_else(|| segs.last().expect("staging is never empty here").stage),
-            )
-        })
-        .collect()
 }
 
 /// Shift every timestamp of a night by `d` seconds. Content, span and epoch count are untouched; only
@@ -237,9 +219,9 @@ fn section_grid_phase() {
 
     for n in &ns {
         let (input, w0) = shifted(n, 0);
-        base_raw.push(labels_at(&stage(&input, &p), w0, n.n));
+        base_raw.push(labels_at(&stage(&input, &p), w0, n.n, EPOCH_SEC));
         let shifted_steps = shift_steps(&n.steps, 0);
-        base_ref.push(labels_at(&stage_refined(&input, &p, &shifted_steps, &mut census), w0, n.n));
+        base_ref.push(labels_at(&stage_refined(&input, &p, &shifted_steps, &mut census), w0, n.n, EPOCH_SEC));
     }
     for d in 0..EPOCH_SEC {
         let (mut moved, mut moved_r, mut total) = (0usize, 0usize, 0usize);
@@ -248,8 +230,8 @@ fn section_grid_phase() {
         for (i, n) in ns.iter().enumerate() {
             let (input, w0) = shifted(n, d);
             let steps = shift_steps(&n.steps, d);
-            let lab = labels_at(&stage(&input, &p), w0, n.n);
-            let lab_r = labels_at(&stage_refined(&input, &p, &steps, &mut census), w0, n.n);
+            let lab = labels_at(&stage(&input, &p), w0, n.n, EPOCH_SEC);
+            let lab_r = labels_at(&stage_refined(&input, &p, &steps, &mut census), w0, n.n, EPOCH_SEC);
             let ch = (0..n.n).filter(|&k| lab[k] != base_raw[i][k]).count();
             moved += ch;
             moved_r += (0..n.n).filter(|&k| lab_r[k] != base_ref[i][k]).count();
@@ -369,10 +351,10 @@ fn window_effect(ns: &[Night], p: &Params) -> WindowEffect {
         let (t0, t1) = (n.w0 + first as i64 * EPOCH_SEC, n.w0 + (last + 1) as i64 * EPOCH_SEC);
         let trim = SleepInput { start: t0, end: t1, ..full.clone() };
         let inner = last + 1 - first;
-        let a = labels_at(&stage(&full, p), n.w0, n.n);
-        let b = labels_at(&stage(&trim, p), t0, inner);
-        let ar = labels_at(&stage_refined(&full, p, &n.steps, &mut census), n.w0, n.n);
-        let br = labels_at(&stage_refined(&trim, p, &n.steps, &mut census), t0, inner);
+        let a = labels_at(&stage(&full, p), n.w0, n.n, EPOCH_SEC);
+        let b = labels_at(&stage(&trim, p), t0, inner, EPOCH_SEC);
+        let ar = labels_at(&stage_refined(&full, p, &n.steps, &mut census), n.w0, n.n, EPOCH_SEC);
+        let br = labels_at(&stage_refined(&trim, p, &n.steps, &mut census), t0, inner, EPOCH_SEC);
         let changed = (0..inner).filter(|&k| a[first + k] != b[k]).count();
         moved_ref += (0..inner).filter(|&k| ar[first + k] != br[k]).count();
         for k in 0..inner {
@@ -510,14 +492,6 @@ fn load_cont(d: &Path) -> Option<ContBlock> {
         accel,
         band,
     })
-}
-
-fn band_asleep_secs(band: &[(i64, i32)], a: i64, b: i64) -> i64 {
-    band.iter().filter(|(t, s)| *t >= a && *t <= b && *s == BAND_ASLEEP).count() as i64
-}
-
-fn local_day(ts: i64, offset_s: i64) -> i64 {
-    (ts + offset_s).div_euclid(86_400)
 }
 
 /// Asleep and in-bed seconds a staging decodes: the numbers the stages-scored pick reads, from the

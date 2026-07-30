@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{asleep_runs, pct, read_accel, read_csv, read_hr, read_rr};
+use common::{asleep_runs, pct, read_accel, read_band, read_csv, read_hr, read_meta, read_rr};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -63,7 +63,7 @@ fn load_blocks() -> Vec<Block> {
             hr: read_hr(d),
             rr: read_rr(d),
             accel: read_accel(d),
-            band: read_csv(&d.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect(),
+            band: read_band(d),
         })
         .filter(|b| !b.band.is_empty() && b.accel.len() >= 120)
         .collect()
@@ -72,9 +72,7 @@ fn load_blocks() -> Vec<Block> {
 fn load_psg_nights() -> Vec<PsgNight> {
     let mut out = Vec::new();
     for d in subdirs("dreamt") {
-        let Ok(meta) = fs::read_to_string(d.join("meta.txt")) else { continue };
-        let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-        let w0 = m[1];
+        let Some((w0, _, _)) = read_meta(&d) else { continue };
         let truth: BTreeMap<i64, i32> =
             read_csv(&d.join("truth.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
         if truth.is_empty() {
@@ -105,10 +103,6 @@ fn load_psg_nights() -> Vec<PsgNight> {
         });
     }
     out
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    pct(v, 0.5)
 }
 
 #[derive(Default)]
@@ -260,7 +254,7 @@ fn open_stats(head: &[f64]) -> String {
     format!(
         "{:>5} {:>7.1} {:>7.1} {:>7.1} {:>7.1} {:>5} {:>5} {:>6.1} {:>5}",
         head.len(),
-        median(&mut head.to_vec()),
+        pct(&mut head.to_vec(), 0.5),
         pct(&mut head.to_vec(), 0.9),
         pct(&mut head.to_vec(), 1.0),
         pct(&mut head.to_vec(), 0.0),
@@ -276,7 +270,7 @@ fn print_band(label: &str, s: &BandScore) {
         "{:<16}{} {:>6.1} {:>7.1} {:>6} {:>6} {:>5} {:>5}",
         label,
         open_stats(&s.head),
-        median(&mut s.tail.clone()),
+        pct(&mut s.tail.clone(), 0.5),
         pct(&mut s.tail.clone(), 1.0),
         s.tail.iter().filter(|x| **x > 15.0).count(),
         s.runs - s.hit,
@@ -343,7 +337,7 @@ fn main() {
         delta.iter().filter(|d| **d < -0.001).count(),
         delta.iter().filter(|d| d.abs() <= 0.001).count(),
         delta.iter().filter(|d| **d > 0.001).count(),
-        median(&mut delta),
+        pct(&mut delta, 0.5),
     );
 
     println!("\n--- the two named configs, and the staging churn each window causes ---");

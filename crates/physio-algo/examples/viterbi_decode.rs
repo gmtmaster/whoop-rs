@@ -23,7 +23,8 @@
 mod common;
 
 use common::{
-    dirs_of, kappa4, read_csv, read_rr, read_steps, root, stage_at, BAND_ASLEEP, RefineCensus, TwoClass,
+    dirs_of, kappa4, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, root, stage_at,
+    BAND_ASLEEP, RefineCensus, TwoClass,
 };
 
 use std::collections::BTreeMap;
@@ -66,19 +67,16 @@ fn continuous_spans(p: &Params) -> Vec<Span> {
     let mut out = Vec::new();
     for d in dirs_of("continuous") {
         let band: Vec<(i64, i32)> =
-            read_csv(&d.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
+            read_band(&d);
         if band.is_empty() {
             continue;
         }
-        let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-            .iter()
-            .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-            .collect();
+        let accel: Vec<AccelSample> = read_accel(&d);
         if accel.len() < 120 {
             continue;
         }
         let hr: Vec<HrSample> =
-            read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
+            read_hr(&d);
         let rr = read_rr(&d);
         let steps = read_steps(&d);
         for s in detect_sessions(&hr, &accel, 0, &[], &band, None) {
@@ -146,12 +144,9 @@ fn load_psg(set: &str) -> Vec<PsgNight> {
         if truth.is_empty() {
             continue;
         }
-        let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-            .iter()
-            .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-            .collect();
+        let accel: Vec<AccelSample> = read_accel(&d);
         let hr: Vec<HrSample> =
-            read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
+            read_hr(&d);
         out.push(PsgNight {
             name: d.file_name().unwrap().to_string_lossy().to_string(),
             input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d), accel },
