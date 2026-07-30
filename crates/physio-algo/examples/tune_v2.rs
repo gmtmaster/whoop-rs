@@ -9,6 +9,8 @@
 //! `stage_v2` ONLY. The fitting sets are PSG cohorts with no step stream, so `refine_wake` would
 //! decline; a recipe fitted here is fitted on the unrefined path.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::fs;
@@ -22,9 +24,7 @@ use physio_algo::sleep::{
 const DATASETS: [&str; 4] = ["dreamt", "aauwss", "killa5", "sleep-accel"];
 
 fn fixtures_root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
+    common::fixtures_root()
 }
 
 struct Night {

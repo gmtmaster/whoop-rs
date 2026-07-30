@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::RefineCensus;
+use common::{kappa4, RefineCensus};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -39,10 +39,7 @@ const MOTION_GATE: &str = "motion gate";
 const BLIP_FILTER: &str = "blip filter";
 
 fn root(set: &str) -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join(set)
+    common::fixtures_root().join(set)
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {
@@ -588,22 +585,6 @@ fn load_psg(d: &Path) -> Option<PsgNight> {
         input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d.join("rr.csv")), accel },
         truth,
     })
-}
-
-fn kappa4(cm: &[[i64; 4]; 4]) -> f64 {
-    let tot: f64 = cm.iter().flatten().sum::<i64>() as f64;
-    if tot == 0.0 {
-        return 0.0;
-    }
-    let po = (0..4).map(|i| cm[i][i]).sum::<i64>() as f64 / tot;
-    let mut pe = 0.0;
-    for j in 0..4 {
-        let col: i64 = cm.iter().map(|r| r[j]).sum();
-        let row: i64 = cm[j].iter().sum();
-        pe += col as f64 * row as f64;
-    }
-    pe /= tot * tot;
-    if pe >= 1.0 { 0.0 } else { (po - pe) / (1.0 - pe) }
 }
 
 /// 4-class kappa plus the wake fraction, per cohort, so no number is quoted without its population.

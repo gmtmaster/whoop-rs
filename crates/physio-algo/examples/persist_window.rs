@@ -19,6 +19,8 @@
 //! This harness never stages, so the wake refinement is out of scope by construction rather than by
 //! choice: every figure is a window bound, and `refine_wake` rewrites labels inside a fixed span.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,10 +33,7 @@ const RUN_TOLERANCE_S: i64 = 300;
 const EARLY_CLOSE_MIN: f64 = 15.0;
 
 fn root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("continuous")
+    common::fixtures_root().join("continuous")
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {

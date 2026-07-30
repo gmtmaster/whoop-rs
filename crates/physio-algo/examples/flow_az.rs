@@ -27,10 +27,7 @@ use physio_algo::sleep::{
 };
 
 fn root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("continuous")
+    common::fixtures_root().join("continuous")
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {

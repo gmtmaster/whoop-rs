@@ -11,13 +11,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
-    motion_density, refine_wake, AccelSample, HrSample, RrRun, StageSegment, StepSample, MIN_DENSE_FRACTION,
+    motion_density, params::Params, refine_wake, AccelSample, HrSample, RrRun, StageSegment, StepSample,
+    MIN_DENSE_FRACTION,
 };
 
-/// The de-duplicated corpus. The raw `fixtures_multi` root holds each beat twice on 16 of its 92 `ours`
-/// nights and 6 of its 64 `continuous` blocks, so defaulting to it would hand back a doubled R-R stream
-/// with no error. `WHOOP_SLEEP_FIXTURES` overrides.
-const DEFAULT_ROOT: &str = "C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi_clean";
+/// The de-duplicated corpus, and the default for every harness. The raw `fixtures_multi` root holds each
+/// beat twice on 16 of its 92 `ours` nights and 6 of its 64 `continuous` blocks, and `fixtures_multi_clean`
+/// still holds the second wearer-side duplication on 30 and 36 of them, so defaulting to either would hand
+/// back a doubled R-R stream with no error. `WHOOP_SLEEP_FIXTURES` overrides.
+const DEFAULT_ROOT: &str = "C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi_clean2";
 
 pub fn fixtures_root() -> PathBuf {
     std::env::var("WHOOP_SLEEP_FIXTURES").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(DEFAULT_ROOT))
@@ -69,6 +71,84 @@ pub fn read_rr(dir: &Path) -> Vec<RrRun> {
         }
     }
     rr
+}
+
+/// `meta.txt` as (window start, window end, epoch count). A fixture night is rebased onto a synthetic
+/// clock, so this is the FIXTURE window, not the real one.
+pub fn read_meta(dir: &Path) -> Option<(i64, i64, usize)> {
+    let m: Vec<i64> =
+        fs::read_to_string(dir.join("meta.txt")).ok()?.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    (m.len() >= 4).then(|| (m[1], m[2], m[3] as usize))
+}
+
+/// Owner and real unix onset out of an `owner_device_day_onset` fixture directory name. The real onset is
+/// the only link a rebased night keeps to the wearer's own clock.
+pub fn night_id(dir: &Path) -> (String, i64) {
+    let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let owner = name.split('_').next().unwrap_or("?").to_string();
+    let onset = name.rsplit('_').next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    (owner, onset)
+}
+
+/// Nearest-first 1:1 pairing of two (owner, onset) lists, inside `slack` seconds. Returns index pairs.
+pub fn pair_nearest(a: &[(String, i64)], b: &[(String, i64)], slack: i64) -> Vec<(usize, usize)> {
+    let mut cand: Vec<(i64, usize, usize)> = Vec::new();
+    for (i, x) in a.iter().enumerate() {
+        for (j, y) in b.iter().enumerate() {
+            let d = (x.1 - y.1).abs();
+            if x.0 == y.0 && d <= slack {
+                cand.push((d, i, j));
+            }
+        }
+    }
+    cand.sort();
+    let (mut used_a, mut used_b, mut out) = (Vec::new(), Vec::new(), Vec::new());
+    for (_, i, j) in cand {
+        if !used_a.contains(&i) && !used_b.contains(&j) {
+            used_a.push(i);
+            used_b.push(j);
+            out.push((i, j));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The recipe the stager used before its current tune, over any base. Five harnesses score against it, so
+/// it lives here rather than as a literal in each.
+pub fn pre_retune(base: &Params) -> Params {
+    Params {
+        deep_hrv: -1.1, deep_hr: 0.0, deep_motion: -0.5,
+        rem_hrv: 0.6, rem_motion: -0.6, rem_hr: 0.4,
+        awake_motion: 1.0, awake_hrv: 0.8, awake_hr: 0.4, awake_deadzone: 0.0,
+        deep_gate_thresh: 0.25, jerk_move_mult: 38.0, jerk_gate_mult: 55.0, motion_gate_boost: 2.0,
+        base_rate: [0.18, 0.22, 0.50, 0.10],
+        transition: [
+            [0.86, 0.007, 0.126, 0.007],
+            [0.005, 0.88, 0.10, 0.015],
+            [0.06, 0.06, 0.85, 0.03],
+            [0.01, 0.02, 0.27, 0.70],
+        ],
+        ..*base
+    }
+}
+
+/// Cohen's kappa over a 4-class confusion matrix (rows = truth, cols = predicted). Print it beside any
+/// accuracy: these references call most epochs asleep, and raw accuracy rewards a config that says so.
+pub fn kappa4(cm: &[[i64; 4]; 4]) -> f64 {
+    let tot: f64 = cm.iter().flatten().sum::<i64>() as f64;
+    if tot == 0.0 {
+        return 0.0;
+    }
+    let po = (0..4).map(|i| cm[i][i]).sum::<i64>() as f64 / tot;
+    let mut pe = 0.0;
+    for j in 0..4 {
+        let col: i64 = cm.iter().map(|r| r[j]).sum();
+        let row: i64 = cm[j].iter().sum();
+        pe += col as f64 * row as f64;
+    }
+    pe /= tot * tot;
+    if pe >= 1.0 { 0.0 } else { (po - pe) / (1.0 - pe) }
 }
 
 /// The strap's own `sleep_state`, 1 Hz, as `(ts, code)`.

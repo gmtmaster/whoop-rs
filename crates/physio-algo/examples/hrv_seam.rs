@@ -9,16 +9,15 @@
 //! Staging is used only to find the deep spans, which `refine_wake` cannot move (it rewrites wake to
 //! light), so the seam figures are the same on both paths.
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 
 use physio_algo::hrv::HrvReadiness;
 
 fn root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("ours")
+    common::fixtures_root().join("ours")
 }
 
 fn median(v: &mut [f64]) -> f64 {

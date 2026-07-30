@@ -13,128 +13,136 @@
 [meta]
 version = "1.0.0"
 cargo_root = "whoop-rs"
-# The de-duplicated corpus. Do NOT rebuild it expecting these numbers: the raw root has been rebuilt
-# from newer backups (2,140.5 h against the pinned 2,113 h), so a rebuild is a DIFFERENT corpus.
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+# The de-duplicated corpus, both rules applied. Built by grafting onto the pinned fixtures_multi_clean,
+# never rebuilt from the raw root: that has since been rebuilt from newer backups (2,140.5 h against the
+# pinned 2,113 h), so a rebuild from it is a DIFFERENT corpus.
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 
 # ─────────────────────────────────────────── the runs ───────────────────────────────────────────
 
 [[run]]
 id = "hrv_seam"
 example = "hrv_seam"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "A"
 what = "the R-R report-seam rule, per wearer"
 
 [[run]]
 id = "hrv_window"
 example = "hrv_window"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "A"
 what = "whole-night vs deep-only vs last-deep HRV, and every published WHOOP pair"
 
 [[run]]
 id = "detect_hysteresis"
 example = "detect_hysteresis"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "B"
 what = "the 25-cell enter/exit sweep on two references, both named configs, the staging churn"
 
 [[run]]
 id = "select_bridge"
 example = "select_bridge"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "C"
 what = "nine sections: cardinality, bridging, selection, split cost, the absorb sweep, both paths"
 
 [[run]]
 id = "persist_window"
 example = "persist_window"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "D"
 what = "the stored window against fresh detection, split by who wrote each row"
 
 [[run]]
 id = "window_effect"
 example = "window_effect"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "E"
 what = "the window sensitivity itself, on both paths"
 
 [[run]]
 id = "stage_window"
 example = "stage_window"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "E"
 what = "grid origins, grid phase, the ablation, and the two main-night scorers"
 
 [[run]]
 id = "emit_wake"
 example = "emit_wake"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "F"
 what = "the wake over-call on the app's path, the region split, six levers, the PSG ledger"
 
 [[run]]
 id = "viterbi_decode"
 example = "viterbi_decode"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "G"
 what = "the decoder against three oracles and four references, the matrix and base rates measured"
 
 [[run]]
 id = "flow_az"
 example = "flow_az"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "B-I"
 what = "every stage of the flow beside the others on one reference"
 
 [[run]]
+id = "stage_fractions"
+example = "stage_fractions"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
+step = "I"
+what = "stage fractions on the export's own in-bed window, both paths, both references, three rescues"
+
+[[run]]
 id = "bench_ours"
 example = "bench_ours"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "I"
 what = "stage fractions and first-REM over all 92 nights"
 
 [[run]]
 id = "sweep_rem"
 example = "sweep_rem"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "F"
 what = "the REM guard's K x minutes grid and the ramp ceiling, on PSG truth"
 
 [[run]]
 id = "verify_934"
 example = "verify_934"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "F"
 what = "the guard per cohort, against the pre-F1 window step, with the units claim"
 
 [[run]]
 id = "ablate_cycle"
 example = "ablate_cycle"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "-"
 what = "the cycle prior ablated against PSG truth. No A-Z figure is quoted from it"
 
 [[run]]
 id = "dump_labels"
 example = "dump_labels"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "-"
 what = "per-epoch labels for an external aligner. No A-Z figure is quoted from it"
 
 [[run]]
 id = "tune_v2"
 example = "tune_v2"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "-"
 skip = "a coordinate-descent search, not a measurement; no A-Z figure is quoted from it"
 
 [[run]]
 id = "verify_backup"
 example = "verify_backup"
-fixtures = "sleep-benchmark/fixtures_multi_clean"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
 step = "-"
 skip = "reads a backup slices directory, not the fixture root; no A-Z figure is quoted from it"
 
@@ -173,7 +181,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the seam rule on the clean corpus vs the doubled one"
 label = "user-69-7e79, clean median shift"
-documented = "-21.7%"
+documented = "-11.1%"
 pattern = '^user-69-7e79\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+]?[\d.]+)%'
 
 [[figure]]
@@ -200,7 +208,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the seam rule on the clean corpus vs the doubled one"
 label = "all 85 nights, clean p10"
-documented = "-29.2%"
+documented = "-19.0%"
 pattern = 'per-night shift: median [-+][\d.]+%\s+p10 ([-+][\d.]+)%'
 
 [[figure]]
@@ -209,7 +217,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the corpus"
 label = "beats in the clean ours corpus"
-documented = "2853257"
+documented = "2546998"
 pattern = '^(\d+) beats,'
 
 [[figure]]
@@ -218,7 +226,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the window choice"
 label = "median avgHrv, whole-night"
-documented = "61.5"
+documented = "65.5"
 pattern = 'whole-night ([\d.]+) ms \(n=85\)'
 
 [[figure]]
@@ -227,7 +235,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the window choice"
 label = "median avgHrv, deep-only"
-documented = "43.3"
+documented = "48.5"
 pattern = 'deep-only ([\d.]+) ms \(n=83\)'
 
 [[figure]]
@@ -236,7 +244,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the window choice"
 label = "median avgHrv, last-deep"
-documented = "63.1"
+documented = "62.9"
 pattern = 'last-deep ([\d.]+) ms \(n=75\)'
 
 [[figure]]
@@ -245,7 +253,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "the window choice"
 label = "per-night whole->deep shift, median"
-documented = "-13.9%"
+documented = "-14.2%"
 pattern = 'whole->deep shift: median ([-+][\d.]+)%'
 
 [[figure]]
@@ -371,7 +379,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "A7/F2 - RMSSD tracks beat-time excess"
 label = "user-69-7e79 whole-night RMSSD"
-documented = "105.3"
+documented = "114.0"
 pattern = '^user-69-7e79\s+29\s+1\s+([\d.]+)'
 
 [[figure]]
@@ -380,7 +388,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "A"
 section = "A7/F2 - RMSSD tracks beat-time excess"
 label = "user-f1e5 whole-night RMSSD"
-documented = "73.1"
+documented = "76.2"
 pattern = '^user-f1e5\s+19\s+0\s+([\d.]+)'
 
 [[figure]]
@@ -2451,8 +2459,8 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "I"
 section = "RE-VERIFIED after F"
 label = "stage fractions, shipped (wake/light/deep/REM)"
-documented = "19.6  41.2  14.7   24.5"
-pattern = '^shipped\s+(19\.6  41\.2  14\.7   24\.5)'
+documented = "19.5  41.3  14.7   24.5"
+pattern = '^shipped\s+(19\.5  41\.3  14\.7   24\.5)'
 
 [[figure]]
 run = "bench_ours"
@@ -2496,7 +2504,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "F1's guard, ADOPTED"
 label = "first-REM median before the guard shipped"
-documented = "85.2"
+documented = "83.2"
 pattern = '^pre-F1 window step\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+) min'
 
 [[figure]]
@@ -2523,7 +2531,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "the REM ramp cap, REJECTED"
 label = "ours REM rises with night length, capped"
-documented = "15.5"
+documented = "15.7"
 pattern = '^<6 h\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
 
 [[figure]]
@@ -2532,7 +2540,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "the REM ramp cap, REJECTED"
 label = "ours REM rises with night length, shipped"
-documented = "18.4"
+documented = "18.2"
 pattern = '^<6 h\s+\d+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
 
 # ───────────────────────────────── G: the Viterbi decoder ─────────────────────────────────
@@ -3072,20 +3080,337 @@ label = "dreamt labels epoch 0 on 0 of 100, 262-epoch unscored lead-in, 32 score
 documented = "0 of 100 / 262 / 32"
 note = "audit_preonset_labels.py, a separate command the B section names"
 
-[[figure]]
-run = "bench_ours"
-doc = "SLEEP-FLOW-AZ.md"
-step = "I"
-section = "I - fractions, efficiency, Rest"
-label = "shipped 11.6 / 47.0 / 13.8 / 27.7 on 21 nights re-sliced to WHOOP's in-bed window"
-documented = "11.6 / 47.0 / 13.8 / 27.7"
-note = "NO committed command produces it. bench_ours prints 92-night fractions over OUR window; nothing re-slices to the export's in-bed window. I is UNRELIABLE pending its own step (debt I1)"
+
 
 [[figure]]
-run = "bench_ours"
+run = "stage_fractions"
 doc = "SLEEP-FLOW-AZ.md"
 step = "I"
-section = "I - fractions, efficiency, Rest"
-label = "pre-retune 7.6 / 42.6 / 19.9 / 29.9 on the same 21 nights"
-documented = "7.6 / 42.6 / 19.9 / 29.9"
-note = "same as above: unreproducible, and measured on the unrefined path (debt I1)"
+section = "the pairing"
+label = "nights paired with an export row"
+documented = "23"
+pattern = '^(\d+) paired within'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the pairing"
+label = "our window covers the export's in-bed seconds, median"
+documented = "100.0"
+pattern = 'in-bed seconds: median ([\d.]+)%'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the pairing"
+label = "our window covers the export's in-bed seconds, worst"
+documented = "49.6"
+pattern = 'worst ([\d.]+)%'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the fraction table, 23 paired nights"
+label = "WHOOP wake"
+documented = "6.4"
+pattern = '^WHOOP export\s+23\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the fraction table, 23 paired nights"
+label = "WHOOP deep"
+documented = "19.8"
+pattern = '^WHOOP export\s+23\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the fraction table, 23 paired nights"
+label = "shipped wake, stage_v2"
+documented = "11.2"
+pattern = '^shipped, stage_v2\s+23\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the fraction table, 23 paired nights"
+label = "shipped deep, stage_v2"
+documented = "13.2"
+pattern = '^shipped, stage_v2\s+23\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the fraction table, 23 paired nights"
+label = "pre-retune deep, stage_v2"
+documented = "19.9"
+pattern = '^pre-retune, stage_v2\s+23\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the fraction table, 23 paired nights"
+label = "spans the density gate accepts"
+documented = "15"
+pattern = 'shipped over the paired nights: (\d+) of 23 spans REFINED'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the gate-accepted nights, both paths"
+label = "WHOOP deep on those nights"
+documented = "20.8"
+pattern = '^WHOOP export\s+15\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the gate-accepted nights, both paths"
+label = "shipped deep, stage_v2"
+documented = "18.1"
+pattern = '^shipped, stage_v2\s+15\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the gate-accepted nights, both paths"
+label = "shipped deep, + refine_wake"
+documented = "18.1"
+pattern = '^shipped, \+ refine_wake\s+15\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the gate-accepted nights, both paths"
+label = "shipped wake, stage_v2"
+documented = "7.9"
+pattern = '^shipped, stage_v2\s+15\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the gate-accepted nights, both paths"
+label = "shipped wake, + refine_wake"
+documented = "6.9"
+pattern = '^shipped, \+ refine_wake\s+15\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "the gate-accepted nights, both paths"
+label = "pre-retune deep on the same nights"
+documented = "25.0"
+pattern = '^pre-retune, stage_v2\s+15\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "a second wearer"
+label = "cba-kormilitsyna wake"
+documented = "11.2"
+pattern = '^cba-kormilitsyna\s+291\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "a second wearer"
+label = "cba-kormilitsyna deep"
+documented = "25.2"
+pattern = '^cba-kormilitsyna\s+291\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "a second wearer"
+label = "cba-kormilitsyna REM"
+documented = "18.1"
+pattern = '^cba-kormilitsyna\s+291\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "a second wearer"
+label = "david's whole export, deep"
+documented = "20.0"
+pattern = '^david\s+29\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "against PSG"
+label = "deep error, dreamt"
+documented = "-0.4"
+pattern = '^dreamt\s+100\s+.*?([-+][\d.]+)\s+[\d.]+$'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "against PSG"
+label = "deep error, aauwss"
+documented = "-5.0"
+pattern = '^aauwss\s+13\s+.*?([-+][\d.]+)\s+[\d.]+$'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "against PSG"
+label = "deep error, sleep-accel"
+documented = "-4.5"
+pattern = '^sleep-accel\s+31\s+.*?([-+][\d.]+)\s+[\d.]+$'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "against PSG"
+label = "PSG deep occupancy, dreamt"
+documented = "3.3"
+pattern = '^dreamt\s+100\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "against PSG"
+label = "PSG deep occupancy, aauwss"
+documented = "18.0"
+pattern = '^aauwss\s+13\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "against PSG"
+label = "our deep, dreamt"
+documented = "2.9"
+pattern = '^dreamt\s+100\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "efficiency"
+label = "WHOOP's own efficiency over the paired nights"
+documented = "93.6"
+pattern = '^WHOOP export\s+23\s+([\d.]+)$'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "efficiency"
+label = "ours, stage_v2"
+documented = "88.8"
+pattern = '^shipped, stage_v2\s+23\s+([\d.]+)$'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "efficiency"
+label = "ours, + refine_wake"
+documented = "93.1"
+pattern = '^shipped, \+ refine_wake\s+15\s+([\d.]+)$'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "SHIPPED deep error against the export"
+documented = "-6.6"
+pattern = '^SHIPPED\s+([-+][\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "base_rate deep 0.20: export deep error"
+documented = "-1.5"
+pattern = '^base_rate deep 0\.20\s+([-+][\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "base_rate deep 0.20: dreamt kappa4"
+documented = "0.298"
+pattern = '^base_rate deep 0\.20\s+[-+][\d.]+\s+[-+][\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "deep_gate_thresh 0.70: export deep error"
+documented = "-5.3"
+pattern = '^deep_gate_thresh 0\.70\s+([-+][\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "deep_gate_thresh 0.70: sleep-accel kappa4"
+documented = "0.384"
+pattern = '^deep_gate_thresh 0\.70\s+[-+][\d.]+\s+[-+][\d.]+\s+[\d.]+\s+[-+][\d.]+\s+[\d.]+\s+[-+][\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "cycle_deep_scale 1.6: export deep error"
+documented = "-3.0"
+pattern = '^cycle_deep_scale 1\.6\s+([-+][\d.]+)'
+
+[[figure]]
+run = "stage_fractions"
+doc = "SLEEP-FLOW-AZ.md"
+step = "I"
+section = "three bounded rescues"
+label = "cycle_deep_scale 1.6: aauwss kappa4"
+documented = "0.401"
+pattern = '^cycle_deep_scale 1\.6\s+[-+][\d.]+\s+[-+][\d.]+\s+[\d.]+\s+[-+][\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the corpus"
+label = "0.953 rule: ours nights cleaned, and beats in -> out"
+documented = "30 of 92, 2853257 -> 2546998"
+note = "build_clean_fixtures.py fixtures_multi_clean fixtures_multi_clean2 prints it; the sweep runs cargo examples only"
+
+[[figure]]
+run = "hrv_seam"
+doc = "SLEEP-FLOW-AZ.md"
+step = "A"
+section = "the corpus"
+label = "0.953 rule: continuous blocks cleaned, and beats in -> out"
+documented = "36 of 64, 6499433 -> 5657121"
+note = "same command; and the per-rule false-positive control is the same script with a gate of 0 and one rule named"

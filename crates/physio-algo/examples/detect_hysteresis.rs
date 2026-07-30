@@ -12,6 +12,8 @@
 //! other, and `refine_wake` shrinks wake on both sides of that comparison, so it would mask the
 //! relabelling rather than measure it. Not the app's absolute wake figure — see `emit_wake` for that.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,9 +30,7 @@ const RUN_MIN_MINUTES: i64 = 90;
 const ONSET_RUN_EPOCHS: usize = 10;
 
 fn fixtures_root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
+    common::fixtures_root()
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {

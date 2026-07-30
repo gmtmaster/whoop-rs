@@ -11,6 +11,8 @@
 //! create or remove neither a deep nor a REM second, so every deep-window statistic below is identical
 //! on both paths. Pinned by `refine::tests::deep_and_rem_seconds_are_untouched`.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,9 +25,7 @@ use physio_algo::sleep::{
 const MATCH_SLACK_S: i64 = 4 * 3600;
 
 fn fixtures() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
+    common::fixtures_root()
 }
 
 fn root() -> PathBuf {
@@ -69,14 +69,6 @@ struct Night {
     deep: Option<f64>,
 }
 
-/// Owner and real unix onset out of an `owner_device_day_onset` fixture directory name.
-fn night_id(dir: &Path) -> (String, i64) {
-    let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
-    let owner = name.split('_').next().unwrap_or("?").to_string();
-    let onset = name.rsplit('_').next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-    (owner, onset)
-}
-
 /// WHOOP's own published nightly HRV per wearer, keyed by the unix onset of the night it belongs to.
 fn published_hrv() -> Vec<(String, i64, f64)> {
     let text = match fs::read_to_string(fixtures().join("whoop-hrv.json")) {
@@ -95,30 +87,6 @@ fn published_hrv() -> Vec<(String, i64, f64)> {
             }
         }
     }
-    out
-}
-
-/// Nearest-first 1:1 pairing of staged nights to published ones, inside [`MATCH_SLACK_S`].
-fn pair_nights(nights: &[Night], published: &[(String, i64, f64)]) -> Vec<(usize, usize)> {
-    let mut cand: Vec<(i64, usize, usize)> = Vec::new();
-    for (i, n) in nights.iter().enumerate() {
-        for (j, p) in published.iter().enumerate() {
-            let d = (n.start - p.1).abs();
-            if n.owner == p.0 && d <= MATCH_SLACK_S {
-                cand.push((d, i, j));
-            }
-        }
-    }
-    cand.sort();
-    let (mut used_n, mut used_p, mut out) = (Vec::new(), Vec::new(), Vec::new());
-    for (_, i, j) in cand {
-        if !used_n.contains(&i) && !used_p.contains(&j) {
-            used_n.push(i);
-            used_p.push(j);
-            out.push((i, j));
-        }
-    }
-    out.sort();
     out
 }
 
@@ -185,7 +153,7 @@ fn main() {
             rr.iter().flat_map(|r| r.intervals.iter().map(|&v| (r.ts as u32, v))).collect();
         let (s, e) = (start as u32, end as u32);
         nights += 1;
-        let (owner, onset) = night_id(d);
+        let (owner, onset) = common::night_id(d);
         let row = per_owner.entry(owner.clone()).or_default();
         row.nights += 1;
         let deep_secs: u32 = deep.iter().map(|(a, b)| b - a).sum();
@@ -248,7 +216,9 @@ fn main() {
         println!("no whoop-hrv.json beside the fixtures — the published-HRV comparison is skipped");
         return;
     }
-    let pairs = pair_nights(&staged, &published);
+    let keys_n: Vec<(String, i64)> = staged.iter().map(|n| (n.owner.clone(), n.start)).collect();
+    let keys_p: Vec<(String, i64)> = published.iter().map(|p| (p.0.clone(), p.1)).collect();
+    let pairs = common::pair_nearest(&keys_n, &keys_p, MATCH_SLACK_S);
     let (mut ours_deep, mut ours_whole, mut theirs) = (Vec::new(), Vec::new(), Vec::new());
     let (mut dev_deep, mut dev_whole) = (Vec::new(), Vec::new());
     // Every pair, so the window choice can be checked night by night instead of on a median.

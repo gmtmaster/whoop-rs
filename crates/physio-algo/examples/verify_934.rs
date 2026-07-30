@@ -8,6 +8,10 @@
 //! `stage_v2` ONLY. The guard is a REM-placement term and the refinement rewrites wake to light, so it
 //! can move no first-REM latency; the PSG cohorts have no step stream for it either way.
 
+mod common;
+
+use common::kappa4 as kappa;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,9 +26,7 @@ const REM: usize = 3;
 const WAKE: usize = 0;
 
 fn fixtures_root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
+    common::fixtures_root()
 }
 
 struct Night {
@@ -164,39 +166,6 @@ fn rank(v: &[f64]) -> Vec<f64> {
     r
 }
 
-fn kappa(cm: &[[i64; 4]; 4]) -> f64 {
-    let tot: f64 = cm.iter().flatten().sum::<i64>() as f64;
-    if tot == 0.0 {
-        return 0.0;
-    }
-    let po = (0..4).map(|i| cm[i][i]).sum::<i64>() as f64 / tot;
-    let mut pe = 0.0;
-    for j in 0..4 {
-        let col: i64 = cm.iter().map(|r| r[j]).sum();
-        let row: i64 = cm[j].iter().sum();
-        pe += col as f64 * row as f64;
-    }
-    pe /= tot * tot;
-    if pe >= 1.0 { 0.0 } else { (po - pe) / (1.0 - pe) }
-}
-
-fn pre_retune(shipped: &Params) -> Params {
-    Params {
-        deep_hrv: -1.1, deep_hr: 0.0, deep_motion: -0.5,
-        rem_hrv: 0.6, rem_motion: -0.6, rem_hr: 0.4,
-        awake_motion: 1.0, awake_hrv: 0.8, awake_hr: 0.4, awake_deadzone: 0.0,
-        deep_gate_thresh: 0.25, jerk_move_mult: 38.0, jerk_gate_mult: 55.0, motion_gate_boost: 2.0,
-        base_rate: [0.18, 0.22, 0.50, 0.10],
-        transition: [
-            [0.86, 0.007, 0.126, 0.007],
-            [0.005, 0.88, 0.10, 0.015],
-            [0.06, 0.06, 0.85, 0.03],
-            [0.01, 0.02, 0.27, 0.70],
-        ],
-        ..*shipped
-    }
-}
-
 /// The units argument, from the PSG column alone: does true first-REM latency track session length,
 /// and is it steadier measured in minutes or as a share of the night.
 fn units_claim(ds: &str, nights: &[Night]) {
@@ -304,7 +273,7 @@ fn score(nights: &[Night], p: &Params, base: Option<&Vec<Vec<usize>>>) -> (Row, 
 
 fn main() {
     let shipped = Params::SHIPPED;
-    let pre = pre_retune(&shipped);
+    let pre = common::pre_retune(&shipped);
     let mut shipped_no_step = shipped;
     shipped_no_step.cycle_rem_early_penalty = 0.0;
     let mut pre_no_step = pre;

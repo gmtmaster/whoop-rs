@@ -22,7 +22,7 @@
 
 mod common;
 
-use common::RefineCensus;
+use common::{kappa4, RefineCensus};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -52,10 +52,7 @@ const TRUTH_TO_COL: [usize; 4] = [AWAKE, LIGHT, DEEP, REM];
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────────
 
 fn root(set: &str) -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join(set)
+    common::fixtures_root().join(set)
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {
@@ -349,22 +346,6 @@ impl TwoClass {
         let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
         if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
     }
-}
-
-fn kappa4(cm: &[[i64; 4]; 4]) -> f64 {
-    let tot: f64 = cm.iter().flatten().sum::<i64>() as f64;
-    if tot == 0.0 {
-        return 0.0;
-    }
-    let po = (0..4).map(|i| cm[i][i]).sum::<i64>() as f64 / tot;
-    let mut pe = 0.0;
-    for j in 0..4 {
-        let col: i64 = cm.iter().map(|r| r[j]).sum();
-        let row: i64 = cm[j].iter().sum();
-        pe += col as f64 * row as f64;
-    }
-    pe /= tot * tot;
-    if pe >= 1.0 { 0.0 } else { (po - pe) / (1.0 - pe) }
 }
 
 fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {

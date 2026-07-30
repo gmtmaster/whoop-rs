@@ -17,8 +17,9 @@ use physio_algo::sleep::{
 };
 
 /// The de-duplicated corpus. The raw `fixtures_multi` root holds each beat twice on some of its own-strap
-/// nights, so defaulting to it would silently score a doubled R-R stream.
-const DEFAULT_ROOT: &str = "C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi_clean";
+/// nights and `fixtures_multi_clean` still holds a second wearer-side duplication, so defaulting to either
+/// would silently score a doubled R-R stream.
+const DEFAULT_ROOT: &str = "C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi_clean2";
 
 fn fixtures_root() -> PathBuf {
     std::env::var("WHOOP_SLEEP_FIXTURES").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(DEFAULT_ROOT))

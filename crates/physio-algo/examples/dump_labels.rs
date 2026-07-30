@@ -9,6 +9,8 @@
 //! across dropouts, so the refinement's posture check reads artificially stable here and its wake would
 //! be optimistic. An aligner wanting the app's wake labels needs `continuous` and the density gate.
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,10 +19,7 @@ use physio_algo::sleep::{
 };
 
 fn root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("ours")
+    common::fixtures_root().join("ours")
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {
@@ -36,20 +35,7 @@ fn read_csv(path: &Path) -> Vec<Vec<f64>> {
 
 fn main() {
     let shipped = Params::SHIPPED;
-    let pre = Params {
-        deep_hrv: -1.1, deep_hr: 0.0, deep_motion: -0.5,
-        rem_hrv: 0.6, rem_motion: -0.6, rem_hr: 0.4,
-        awake_motion: 1.0, awake_hrv: 0.8, awake_hr: 0.4, awake_deadzone: 0.0,
-        deep_gate_thresh: 0.25, jerk_move_mult: 38.0, jerk_gate_mult: 55.0, motion_gate_boost: 2.0,
-        base_rate: [0.18, 0.22, 0.50, 0.10],
-        transition: [
-            [0.86, 0.007, 0.126, 0.007],
-            [0.005, 0.88, 0.10, 0.015],
-            [0.06, 0.06, 0.85, 0.03],
-            [0.01, 0.02, 0.27, 0.70],
-        ],
-        ..shipped
-    };
+    let pre = common::pre_retune(&shipped);
     let mut capped = shipped;
     capped.cycle_rem_ramp_cap = 0.7;
 

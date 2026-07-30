@@ -74,7 +74,11 @@ def run_one(run: dict, cargo_root: Path) -> tuple[int, float]:
     env = dict(os.environ)
     env["WHOOP_SLEEP_FIXTURES"] = str(WHOOP / run["fixtures"])
     t0 = time.time()
-    r = subprocess.run([str(exe), *run.get("args", [])], capture_output=True, text=True, env=env)
+    # The harnesses print UTF-8 (·, Δ, κ appear in patterns). Decoding by the console's locale instead
+    # turns those into mojibake and the figure reads NOT-FOUND, which looks like a moved number.
+    r = subprocess.run(
+        [str(exe), *run.get("args", [])], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env
+    )
     (OUT / f"{run['id']}.txt").write_text(r.stdout, encoding="utf-8")
     if r.stderr.strip():
         (OUT / f"{run['id']}.err").write_text(r.stderr, encoding="utf-8")

@@ -9,6 +9,8 @@
 //! `stage_v2` ONLY, and deliberately: the PSG cohorts carry no step stream at one sample a minute, so
 //! `refine_wake`'s density gate declines on every one of them. Stated because the gate is silent.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,9 +23,7 @@ use physio_algo::sleep::{
 const DATASETS: [&str; 5] = ["dreamt", "aauwss", "sleep-accel", "killa5", "strap"];
 
 fn fixtures_root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
+    common::fixtures_root()
 }
 
 struct Night {
@@ -210,30 +210,7 @@ fn main() {
     no_prior.cycle_rem_early_penalty = 0.0;
     // The recipe as it stood before the DREAMT re-tune, reconstructed from that commit's diff. Its
     // movement floor differs, so its features are extracted separately rather than re-labelled.
-    let pre = Params {
-        deep_hrv: -1.1,
-        deep_hr: 0.0,
-        deep_motion: -0.5,
-        rem_hrv: 0.6,
-        rem_motion: -0.6,
-        rem_hr: 0.4,
-        awake_motion: 1.0,
-        awake_hrv: 0.8,
-        awake_hr: 0.4,
-        awake_deadzone: 0.0,
-        deep_gate_thresh: 0.25,
-        jerk_move_mult: 38.0,
-        jerk_gate_mult: 55.0,
-        motion_gate_boost: 2.0,
-        base_rate: [0.18, 0.22, 0.50, 0.10],
-        transition: [
-            [0.86, 0.007, 0.126, 0.007],
-            [0.005, 0.88, 0.10, 0.015],
-            [0.06, 0.06, 0.85, 0.03],
-            [0.01, 0.02, 0.27, 0.70],
-        ],
-        ..shipped
-    };
+    let pre = common::pre_retune(&shipped);
     let mut pre_no_step = pre;
     pre_no_step.cycle_rem_early_penalty = 0.0;
     let variants: [(&str, Params); 4] = [

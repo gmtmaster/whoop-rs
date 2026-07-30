@@ -10,6 +10,8 @@
 //! reads artificially stable on this set and its wake fraction cannot be trusted here; the refined
 //! figures come from `continuous` in `emit_wake`.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,10 +22,7 @@ use physio_algo::sleep::{
 };
 
 fn root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("ours")
+    common::fixtures_root().join("ours")
 }
 
 struct Night {
@@ -125,20 +124,7 @@ fn main() {
     let pre_guard = Params { cycle_rem_onset_minutes: 0.0, cycle_rem_early_penalty: 3.0, ..shipped };
     let mut no_ramp = shipped;
     no_ramp.cycle_rem_scale = 0.0;
-    let pre = Params {
-        deep_hrv: -1.1, deep_hr: 0.0, deep_motion: -0.5,
-        rem_hrv: 0.6, rem_motion: -0.6, rem_hr: 0.4,
-        awake_motion: 1.0, awake_hrv: 0.8, awake_hr: 0.4, awake_deadzone: 0.0,
-        deep_gate_thresh: 0.25, jerk_move_mult: 38.0, jerk_gate_mult: 55.0, motion_gate_boost: 2.0,
-        base_rate: [0.18, 0.22, 0.50, 0.10],
-        transition: [
-            [0.86, 0.007, 0.126, 0.007],
-            [0.005, 0.88, 0.10, 0.015],
-            [0.06, 0.06, 0.85, 0.03],
-            [0.01, 0.02, 0.27, 0.70],
-        ],
-        ..shipped
-    };
+    let pre = common::pre_retune(&shipped);
 
     let labelled: usize = nights.iter().filter(|n| !n.truth.is_empty()).count();
     let hours: f64 = nights.iter().map(|n| n.n_epochs as f64 / 120.0).sum();
