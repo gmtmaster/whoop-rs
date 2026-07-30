@@ -11,73 +11,48 @@
 //! 6  main-night selection per local day: which group wins and what the pick leaves behind
 //! 7  what a split costs: one night staged as fragments against the same night staged whole
 //! 8  the wake-absorb sweep, two-sided
-//! 9  the whole change on one balanced number: epoch agreement with the strap's own call
+//! 9  the whole change on one balanced number: epoch agreement with the strap's own call, on both the
+//!    `stage_v2` path every earlier C number was measured on and the `+ refine_wake` path the app runs
 //!
 //! Blocks are cut on wear, not on labels, so nothing here tells the detector where to look. The
 //! fixture carries no timezone, so local time is UTC; section 6 diffs that against +2 h.
+//!
+//! Sections 1-6 and 8 read detection and selection, which `refine_wake` cannot reach — it rewrites stage
+//! labels inside a span the detector already fixed. Only 7 and 9 stage, so only those two carry a census.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+mod common;
+
+use common::{dirs_of, read_accel, read_band, read_hr, read_rr, read_steps, RefineCensus};
+
+use std::path::Path;
 
 use physio_algo::sleep::{
     bridged_night_groups, detect_sessions_with, main_night_group_indices, main_night_selection, params::Params,
     prepare_v2, stage_v2_prepared, AccelSample, DetectParams, DetectedSpan, HrSample, MainNightReason, NightBlock,
-    RrRun, SleepInput, SleepStage, StageSegment,
+    RrRun, SleepInput, SleepStage, StageSegment, StepSample,
 };
 
 const BAND_ASLEEP: i32 = 2;
 /// Interruption a band asleep run tolerates before it counts as two runs (seconds).
 const RUN_TOLERANCE_S: i64 = 300;
 
-fn root() -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join("continuous")
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 struct Block {
     name: String,
     hr: Vec<HrSample>,
     rr: Vec<RrRun>,
     accel: Vec<AccelSample>,
+    /// The strap's own step stream — what the refinement's density gate reads.
+    steps: Vec<StepSample>,
     band: Vec<(i64, i32)>,
 }
 
 fn load(dir: &Path) -> Option<Block> {
-    let band: Vec<(i64, i32)> = read_csv(&dir.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
-    if band.is_empty() {
+    let (band, accel) = (read_band(dir), read_accel(dir));
+    if band.is_empty() || accel.len() < 120 {
         return None;
-    }
-    let accel: Vec<AccelSample> = read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    if accel.len() < 120 {
-        return None;
-    }
-    let hr = read_csv(&dir.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&dir.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
     }
     let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    Some(Block { name, hr, rr, accel, band })
+    Some(Block { name, hr: read_hr(dir), rr: read_rr(dir), accel, steps: read_steps(dir), band })
 }
 
 /// Contiguous stretches the strap itself called asleep, at least `min_min` long, tolerating a `tol_s`
@@ -135,11 +110,7 @@ fn local_day(ts: i64, offset_s: i64) -> i64 {
 }
 
 fn blocks() -> Vec<Block> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
-    dirs.iter().filter_map(|d| load(d)).collect()
+    dirs_of("continuous").iter().filter_map(|d| load(d)).collect()
 }
 
 fn spans_of(b: &Block, p: &DetectParams) -> Vec<DetectedSpan> {
@@ -276,6 +247,8 @@ fn section_min_sleep(bs: &[Block], runs_total: usize) {
 
 fn section_cardinality(bs: &[Block]) {
     println!("\n3  run-to-span cardinality, every case named (shipped detector)");
+    println!("   Refinement-independent by construction: `refine_wake` rewrites stage labels inside a span");
+    println!("   the detector already fixed, so it can move no span edge and no run-to-span count here.");
     let (mut split, mut merged) = (0, 0);
     for b in bs {
         let spans = spans_of(b, &DetectParams::SHIPPED);
@@ -543,6 +516,14 @@ fn stage_span(b: &Block, start: i64, end: i64, params: &Params) -> Vec<StageSegm
     stage_v2_prepared(&prepare_v2(&input, params), params)
 }
 
+/// The span's own gravity and step slices, which is what `analyze` hands the refinement.
+fn span_streams(b: &Block, start: i64, end: i64) -> (Vec<AccelSample>, Vec<StepSample>) {
+    (
+        b.accel.iter().filter(|g| g.ts >= start && g.ts < end).cloned().collect(),
+        b.steps.iter().filter(|t| t.ts >= start && t.ts < end).cloned().collect(),
+    )
+}
+
 fn label_at(segs: &[StageSegment], t: i64) -> Option<SleepStage> {
     segs.iter().find(|g| g.start <= t && t < g.end).map(|g| g.stage)
 }
@@ -551,6 +532,8 @@ fn section_split_cost(bs: &[Block]) {
     println!("\n7  what a split costs: the same night staged as fragments and as one window.");
     println!("   Measured under the detector WITHOUT the wake absorb, because with it there is no split");
     println!("   left to measure — the evidence for a fix has to outlive the fix.");
+    println!("   stage_v2 ONLY, stated so it is not read as the app's path: refine_wake shrinks wake on both");
+    println!("   sides of this comparison, which would mask the relabelling the split causes, not measure it.");
     let params = Params::SHIPPED;
     let detect = DetectParams { wake_absorb_max_min: 0, ..DetectParams::SHIPPED };
     let (mut cases, mut moved, mut total) = (0usize, 0i64, 0i64);
@@ -686,35 +669,167 @@ fn section_dense_bridge(bs: &[Block], runs_total: usize) {
 
 // ── 9  the whole change, scored on one balanced number ─────────────────────────────────────────────
 
-fn section_agreement(bs: &[Block]) {
-    println!("\n9  every detected span staged and scored against the strap's own asleep/wake call");
-    println!("   absorb  epochs  agreement  our wake%  strap wake%");
-    let params = Params::SHIPPED;
-    for absorb in [0i64, DetectParams::SHIPPED.wake_absorb_max_min] {
-        let p = DetectParams { wake_absorb_max_min: absorb, ..DetectParams::SHIPPED };
-        let (mut ok, mut n, mut our_wake, mut band_wake) = (0i64, 0i64, 0i64, 0i64);
-        for b in bs {
-            for s in spans_of(b, &p) {
-                let segs = stage_span(b, s.start, s.end, &params);
-                if segs.is_empty() {
+/// One agreement scoreboard: banded seconds, hits, and each side's wake count. Raw accuracy rewards a
+/// config that rarely says wake on a reference calling ~90% of these seconds asleep, so kappa is the
+/// number to read and both wake rates are printed beside it.
+#[derive(Default, Clone, Copy)]
+struct Score {
+    n: i64,
+    ok: i64,
+    our_wake: i64,
+    band_wake: i64,
+    hit: i64,
+}
+
+impl Score {
+    fn add(&mut self, ours_wake: bool, strap_wake: bool) {
+        self.n += 1;
+        self.ok += i64::from(ours_wake == strap_wake);
+        self.our_wake += i64::from(ours_wake);
+        self.band_wake += i64::from(strap_wake);
+        self.hit += i64::from(ours_wake && strap_wake);
+    }
+    fn accuracy(&self) -> f64 {
+        100.0 * self.ok as f64 / self.n.max(1) as f64
+    }
+    /// Cohen's kappa over the 2x2 table: accuracy with the base rate divided out.
+    fn kappa(&self) -> f64 {
+        let n = self.n.max(1) as f64;
+        let (pw, tw) = (self.our_wake as f64, self.band_wake as f64);
+        let po = self.ok as f64 / n;
+        let pe = (pw / n) * (tw / n) + (1.0 - pw / n) * (1.0 - tw / n);
+        if pe >= 1.0 { 0.0 } else { (po - pe) / (1.0 - pe) }
+    }
+    fn row(&self, label: &str) {
+        println!(
+            "   {label:<44} {:>7}  {:>8.2}%  {:>7.3}  {:>8.1}%  {:>10.1}%",
+            self.n,
+            self.accuracy(),
+            self.kappa(),
+            100.0 * self.our_wake as f64 / self.n.max(1) as f64,
+            100.0 * self.band_wake as f64 / self.n.max(1) as f64,
+        );
+    }
+}
+
+/// One absorb setting scored three ways over one block set, plus which spans the density gate accepted.
+#[derive(Default)]
+struct AbsorbRun {
+    all: Score,
+    dense_raw: Score,
+    dense_ref: Score,
+    /// The same three, restricted to band seconds every absorb setting covers, so the absorb changing
+    /// what a span IS cannot move the denominator between the rows being compared.
+    paired_raw: Score,
+    paired_ref: Score,
+    census: RefineCensus,
+    spans: usize,
+    dense_spans: usize,
+}
+
+/// Band seconds covered by a staged span under `p`, as a sorted list — the denominator one setting offers.
+fn covered_seconds(b: &Block, p: &DetectParams, params: &Params) -> Vec<i64> {
+    let mut out: Vec<i64> = Vec::new();
+    for s in spans_of(b, p) {
+        if stage_span(b, s.start, s.end, params).is_empty() {
+            continue;
+        }
+        out.extend(b.band.iter().filter(|(t, _)| *t >= s.start && *t < s.end).map(|(t, _)| *t));
+    }
+    out.sort_unstable();
+    out
+}
+
+fn absorb_run(bs: &[Block], absorb: i64, params: &Params, common: &[Vec<i64>]) -> AbsorbRun {
+    let p = DetectParams { wake_absorb_max_min: absorb, ..DetectParams::SHIPPED };
+    let mut r = AbsorbRun::default();
+    for (bi, b) in bs.iter().enumerate() {
+        for s in spans_of(b, &p) {
+            let segs = stage_span(b, s.start, s.end, params);
+            if segs.is_empty() {
+                continue;
+            }
+            r.spans += 1;
+            let (grav, steps) = span_streams(b, s.start, s.end);
+            // The shipped gate decides, asked before the refinement rather than inferred after it.
+            let mut probe = RefineCensus::default();
+            let fine = probe.refine(&segs, &grav, &steps);
+            let dense = probe.all_refined();
+            r.census.absorb(&probe);
+            if dense {
+                r.dense_spans += 1;
+            }
+            for &(ts, st) in b.band.iter().filter(|(t, _)| *t >= s.start && *t < s.end) {
+                let Some(stage) = label_at(&segs, ts) else { continue };
+                let (ours, strap) = (stage == SleepStage::Wake, st != BAND_ASLEEP);
+                r.all.add(ours, strap);
+                if !dense {
                     continue;
                 }
-                for &(ts, st) in b.band.iter().filter(|(t, _)| *t >= s.start && *t < s.end) {
-                    let Some(stage) = label_at(&segs, ts) else { continue };
-                    let (ours_wake, strap_wake) = (stage == SleepStage::Wake, st != BAND_ASLEEP);
-                    n += 1;
-                    ok += i64::from(ours_wake == strap_wake);
-                    our_wake += i64::from(ours_wake);
-                    band_wake += i64::from(strap_wake);
+                r.dense_raw.add(ours, strap);
+                let Some(refined) = label_at(&fine, ts) else { continue };
+                let ours_ref = refined == SleepStage::Wake;
+                r.dense_ref.add(ours_ref, strap);
+                if common[bi].binary_search(&ts).is_ok() {
+                    r.paired_raw.add(ours, strap);
+                    r.paired_ref.add(ours_ref, strap);
                 }
             }
         }
-        let mark = if absorb == 0 { " before" } else { "  after" };
+    }
+    r
+}
+
+fn section_agreement(bs: &[Block]) {
+    println!("\n9  every detected span staged and scored against the strap's own asleep/wake call");
+    println!("   Three paths per setting. `stage_v2, all spans` is what the absorb was shipped on. The dense");
+    println!("   rows restrict to spans whose step stream passes the refinement's density gate, so the");
+    println!("   stage_v2 one is the control for `+ refine_wake`, which is the path `analyze` runs. A span the");
+    println!("   gate declines is NOT the app's path and is never pooled into a refined row.");
+    println!("   The PAIRED rows drop every second only one setting covers, since the absorb changes what a");
+    println!("   span is; those two rows are the only strict within-comparison the corpus allows.");
+    let params = Params::SHIPPED;
+    let settings = [0i64, DetectParams::SHIPPED.wake_absorb_max_min];
+    // Seconds every setting covers, per block.
+    let common: Vec<Vec<i64>> = bs
+        .iter()
+        .map(|b| {
+            let mut acc = covered_seconds(b, &DetectParams { wake_absorb_max_min: settings[0], ..DetectParams::SHIPPED }, &params);
+            for &a in &settings[1..] {
+                let next = covered_seconds(b, &DetectParams { wake_absorb_max_min: a, ..DetectParams::SHIPPED }, &params);
+                acc.retain(|t| next.binary_search(t).is_ok());
+            }
+            acc
+        })
+        .collect();
+
+    println!("\n   setting / path                                 epochs  accuracy   kappa2  our wake%  strap wake%");
+    let runs: Vec<(i64, AbsorbRun)> =
+        settings.iter().map(|&a| (a, absorb_run(bs, a, &params, &common))).collect();
+    for (absorb, r) in &runs {
+        let mark = if *absorb == 0 { "absorb 0 (before)" } else { "absorb 45 (shipped)" };
+        r.all.row(&format!("{mark}, stage_v2, all {} spans", r.spans));
+        r.dense_raw.row(&format!("{mark}, stage_v2, {} dense spans", r.dense_spans));
+        r.dense_ref.row(&format!("{mark}, + refine_wake (the app)"));
+        r.paired_raw.row(&format!("{mark}, PAIRED seconds, stage_v2"));
+        r.paired_ref.row(&format!("{mark}, PAIRED seconds, + refine_wake"));
+        println!("{}", r.census.line(mark));
+        // The refined rows are built only from spans the gate accepted, and this is what says so.
+        assert_eq!(r.census.refined, r.dense_spans, "{mark}: a declined span reached the refined row");
+    }
+    let (a, z) = (&runs[0].1, &runs[1].1);
+    println!("\n   what the absorb is worth, as a delta from 0 to 45 min:");
+    for (label, before, after) in [
+        ("stage_v2, all spans (how it shipped)", &a.all, &z.all),
+        ("stage_v2, dense spans", &a.dense_raw, &z.dense_raw),
+        ("+ refine_wake, dense spans", &a.dense_ref, &z.dense_ref),
+        ("stage_v2, PAIRED seconds", &a.paired_raw, &z.paired_raw),
+        ("+ refine_wake, PAIRED seconds", &a.paired_ref, &z.paired_ref),
+    ] {
         println!(
-            "  {mark}  {n:>6}  {:>8.2}%  {:>8.1}%  {:>10.1}%",
-            100.0 * ok as f64 / n.max(1) as f64,
-            100.0 * our_wake as f64 / n.max(1) as f64,
-            100.0 * band_wake as f64 / n.max(1) as f64,
+            "   {label:<40} accuracy {:+.2} pp   kappa2 {:+.3}",
+            after.accuracy() - before.accuracy(),
+            after.kappa() - before.kappa(),
         );
     }
 }

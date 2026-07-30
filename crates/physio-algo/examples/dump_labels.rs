@@ -4,6 +4,8 @@
 //!   cargo run --release -p physio-algo --example dump_labels > labels.csv
 //!
 //! One row per night: fixture id, recipe, then one character per epoch (w/l/d/r).
+//!
+//! `stage_v2` ONLY — the labels dumped are the unrefined staging, not what the app displays.
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -12,13 +12,17 @@
 //! set whose gravity is NOT held forward — so the refinement's posture check sees real dropouts).
 //! Section 3 reads `ours` (window baked in, cheap to re-label). Section 4 reads the three PSG sets.
 
+mod common;
+
+use common::RefineCensus;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
-    detect_sessions, params::Params, prepare_v2, refine_wake, stage_v2_prepared, AccelSample, HrSample,
-    Prepared, RrRun, SleepInput, SleepStage, StageSegment, StepSample,
+    detect_sessions, motion_dense, params::Params, prepare_v2, refine_wake, stage_v2_prepared, AccelSample,
+    HrSample, Prepared, RrRun, SleepInput, SleepStage, StageSegment, StepSample,
 };
 
 const EPOCH_SEC: i64 = 30;
@@ -282,27 +286,34 @@ fn section_refinement(spans: &[Span], p: &Params) {
     println!("   stream its density gate needs. Both rows below are the same staging, scored per band second.");
 
     let (mut raw, mut ref_) = (TwoClass::default(), TwoClass::default());
-    let (mut dense, mut moved_spans, mut moved_sec) = (0usize, 0usize, 0i64);
+    let (mut raw_dense, mut ref_dense) = (TwoClass::default(), TwoClass::default());
+    let mut census = RefineCensus::default();
+    let mut moved_sec = 0i64;
     let mut steps_rows = 0usize;
     for s in spans {
         let segs = stage_v2_prepared(&s.prep, p);
-        let fine = refine_wake(&segs, &s.accel, &s.steps);
+        // Through the census, not straight to `refine_wake`: a non-empty steps file is not the same thing
+        // as a stream dense enough for the gate, and the gate declines in silence.
+        let mut probe = RefineCensus::default();
+        let fine = probe.refine(&segs, &s.accel, &s.steps);
+        let dense = probe.all_refined();
+        census.absorb(&probe);
         steps_rows += s.steps.len();
-        if fine != segs {
-            moved_spans += 1;
-        }
-        if !s.steps.is_empty() {
-            dense += 1;
-        }
         for &(ts, st) in &s.band {
             let (Some(a), Some(b)) = (stage_at(&segs, ts), stage_at(&fine, ts)) else { continue };
-            raw.add(a == SleepStage::Wake, st != BAND_ASLEEP);
-            ref_.add(b == SleepStage::Wake, st != BAND_ASLEEP);
+            let strap = st != BAND_ASLEEP;
+            raw.add(a == SleepStage::Wake, strap);
+            ref_.add(b == SleepStage::Wake, strap);
+            if dense {
+                raw_dense.add(a == SleepStage::Wake, strap);
+                ref_dense.add(b == SleepStage::Wake, strap);
+            }
             moved_sec += i64::from(a != b);
         }
     }
-    println!("\n   {} detected spans, {} carrying a step stream, {} step rows", spans.len(), dense, steps_rows);
-    println!("   spans the refinement changes: {moved_spans}, moving {moved_sec} band seconds\n");
+    println!("\n   {} detected spans, {} step rows", spans.len(), steps_rows);
+    println!("{}", census.line("the over-call comparison"));
+    println!("   the refinement moves {moved_sec} band seconds\n");
     header();
     raw.row("stage_v2 only (every prior A-Z number)");
     ref_.row("stage_v2 + refine_wake (the app's path)");
@@ -310,6 +321,18 @@ fn section_refinement(spans: &[Span], p: &Params) {
         "\n   over-call ratio {:.2}x unrefined -> {:.2}x refined",
         raw.pred_pct() / raw.true_pct(),
         ref_.pred_pct() / ref_.true_pct()
+    );
+    // The two rows above pool the declined spans, whose "refined" labels are their unrefined ones. That
+    // is what the app holds over these spans, but it understates what the refinement DOES; the pair below
+    // is the same comparison over the spans the gate accepted, which is the refinement's own effect.
+    println!("\n   the same comparison over the {} spans the gate accepted:", census.refined);
+    header();
+    raw_dense.row("stage_v2, gate-accepted spans only");
+    ref_dense.row("+ refine_wake, gate-accepted spans only");
+    println!(
+        "   over-call ratio {:.2}x -> {:.2}x on those spans",
+        raw_dense.pred_pct() / raw_dense.true_pct(),
+        ref_dense.pred_pct() / ref_dense.true_pct()
     );
 }
 
@@ -752,13 +775,22 @@ fn main() {
 
     let ns: Vec<Night> = dirs_of("ours").iter().filter_map(|d| load_ours(d)).collect();
     let preps: Vec<Prepared> = ns.iter().map(|n| prepare_v2(&n.input, &shipped)).collect();
+    // A non-empty steps file is not a dense one, so the count that matters is the SHIPPED gate's answer.
     let with_steps = ns.iter().filter(|n| !n.steps.is_empty()).count();
+    let dense = ns
+        .iter()
+        .filter(|n| motion_dense(n.input.start, n.input.end, &n.input.accel, &n.steps))
+        .count();
     println!(
-        "\n   (`ours`: {} nights, {} carrying a step stream, {} band-labelled)",
+        "\n   (`ours`: {} nights, {} with a non-empty steps.csv, {} DENSE enough for the refinement, \
+         {} band-labelled)",
         ns.len(),
         with_steps,
+        dense,
         ns.iter().filter(|n| !n.truth.is_empty()).count()
     );
+    println!("   Section 3's sweep is stage_v2 ONLY — it compares emission recipes against each other, and");
+    println!("   `ours` gravity is held forward across gaps, so its posture check cannot be trusted here.");
     let mut cands = section_sweep(&ns, &preps, &shipped);
     let cycle = section_cycle(&ns, &preps, &shipped);
     cands.extend(cycle.into_iter().filter(|r| r.label != "SHIPPED"));

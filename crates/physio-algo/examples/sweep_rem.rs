@@ -5,6 +5,10 @@
 //!   cargo run --release -p physio-algo --example sweep_rem
 //!
 //! Features are extracted once per dataset and re-labelled, so only the prior moves between rows.
+//!
+//! `stage_v2` ONLY: no PSG cohort carries a step stream dense enough for `refine_wake`, so the gate
+//! would decline on every row. Stated because the gate is silent. The prior it sweeps is a deep/REM
+//! term, and the refinement can move neither.
 
 use std::collections::BTreeMap;
 use std::fs;

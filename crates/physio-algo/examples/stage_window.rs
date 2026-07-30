@@ -10,15 +10,25 @@
 //!
 //! Sections 1-3 read `ours` (window baked in, so they measure sensitivity, not our error); 1 and 4
 //! read `continuous` (real unix seconds, whole wear blocks, the band as reference).
+//!
+//! Sections 2 and 3 report BOTH paths side by side: `stage_v2` alone, which is what every A-Z number
+//! before this was measured on, and `stage_v2` + `refine_wake`, which is what `analyze` runs. Each
+//! refined column carries its own census, so a span the density gate declined cannot be pooled into it.
+//! `ours` gravity is held forward across dropouts, so the refined columns' posture check is optimistic —
+//! it is still the only set that can measure a window sensitivity, because the window is baked in.
+
+mod common;
+
+use common::{dirs_of, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, RefineCensus};
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use physio_algo::sleep::{
     detect_sessions_with, main_night_group_indices, main_night_group_indices_scored, params::Params, prepare_v2,
     stage_v2_prepared, AccelSample, DetectParams, DetectedSpan, HrSample, RrRun, ScoredNightBlock, SleepInput,
-    SleepStage, StageSegment,
+    SleepStage, StageSegment, StepSample,
 };
 
 /// The stager's epoch width, and the band code for asleep.
@@ -26,32 +36,6 @@ const EPOCH_SEC: i64 = 30;
 const BAND_ASLEEP: i32 = 2;
 /// Shortest band asleep run the flow is scored against (minutes).
 const MIN_RUN_MIN: i64 = 90;
-
-fn root(set: &str) -> PathBuf {
-    std::env::var("WHOOP_SLEEP_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi"))
-        .join(set)
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn dirs_of(set: &str) -> Vec<PathBuf> {
-    let mut d: Vec<PathBuf> = fs::read_dir(root(set))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    d.sort();
-    d
-}
 
 fn median(v: &mut [f64]) -> f64 {
     if v.is_empty() {
@@ -88,6 +72,9 @@ struct Night {
     hr: Vec<HrSample>,
     rr: Vec<RrRun>,
     accel: Vec<AccelSample>,
+    /// The strap's own step stream — what the refinement's density gate reads. Empty for a night whose
+    /// `steps.csv` is empty, which is what makes the gate decline in silence.
+    steps: Vec<StepSample>,
     /// Band label per epoch index: 0 wake, 1 asleep. Absent epochs are unlabelled.
     truth: BTreeMap<usize, i32>,
 }
@@ -95,29 +82,16 @@ struct Night {
 fn load_night(d: &Path) -> Option<Night> {
     let meta = fs::read_to_string(d.join("meta.txt")).ok()?;
     let m: Vec<i64> = meta.split_whitespace().map(|x| x.parse().unwrap()).collect();
-    let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    let hr: Vec<HrSample> =
-        read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&d.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
     let truth = read_csv(&d.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect();
     Some(Night {
         name: d.file_name().unwrap().to_string_lossy().chars().take(38).collect(),
         w0: m[1],
         w1: m[2],
         n: m[3] as usize,
-        hr,
-        rr,
-        accel,
+        hr: read_hr(d),
+        rr: read_rr(d),
+        accel: read_accel(d),
+        steps: read_steps(d),
         truth,
     })
 }
@@ -164,8 +138,21 @@ fn shifted(n: &Night, d: i64) -> (SleepInput, i64) {
     (input, n.w0 + d)
 }
 
+/// The same shift applied to the step stream, so the refinement's per-minute buckets move with the data
+/// instead of straddling it.
+fn shift_steps(steps: &[StepSample], d: i64) -> Vec<StepSample> {
+    steps.iter().map(|s| StepSample { ts: s.ts + d, ..*s }).collect()
+}
+
 fn stage(input: &SleepInput, p: &Params) -> Vec<StageSegment> {
     stage_v2_prepared(&prepare_v2(input, p), p)
+}
+
+/// The app's path over one window: stage, then `refine_wake` through the census. The gravity handed to
+/// the refinement is the window's own, which is what `analyze` passes it.
+fn stage_refined(input: &SleepInput, p: &Params, steps: &[StepSample], census: &mut RefineCensus) -> Vec<StageSegment> {
+    let segs = stage(input, p);
+    census.refine(&segs, &input.accel, steps)
 }
 
 /// The band's own asleep runs, long enough to score, as `(first, last)` epoch indices.
@@ -208,20 +195,11 @@ fn section_grid_origins() {
     let mut cont_phase: BTreeMap<i64, usize> = BTreeMap::new();
     let mut spans_seen = 0usize;
     for d in dirs_of("continuous") {
-        let band: Vec<(i64, i32)> = read_csv(&d.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
-        if band.is_empty() {
+        let (band, accel) = (read_band(&d), read_accel(&d));
+        if band.is_empty() || accel.len() < 120 {
             continue;
         }
-        let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-            .iter()
-            .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-            .collect();
-        if accel.len() < 120 {
-            continue;
-        }
-        let hr: Vec<HrSample> =
-            read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-        for s in detect_sessions_with(&hr, &accel, 0, &[], &band, None, &DetectParams::SHIPPED) {
+        for s in detect_sessions_with(&read_hr(&d), &accel, 0, &[], &band, None, &DetectParams::SHIPPED) {
             *cont_phase.entry(first_epoch(s.start) - s.start).or_default() += 1;
             spans_seen += 1;
         }
@@ -246,64 +224,93 @@ fn section_grid_origins() {
 
 // ── 2  grid PHASE sensitivity ─────────────────────────────────────────────────────────────────────
 
+/// One epoch-grid phase: how many labels it moves against shift 0 and what it agrees with the band at,
+/// on `stage_v2` and on the app's path.
+struct PhaseRow {
+    shift: i64,
+    moved: f64,
+    median_night: f64,
+    agree: f64,
+    moved_ref: f64,
+    agree_ref: f64,
+}
+
 fn section_grid_phase() {
     println!("\n2  grid PHASE sensitivity — the same night, shifted 0..29 s");
     println!("   Every timestamp moves together, so the data, the span and the epoch count are identical");
     println!("   and only the epoch BOUNDARIES move against the samples. Anything that changes here is");
     println!("   the grid, not the window. Labels are read at each truth epoch's midpoint in shifted time.");
+    println!("   Both paths, so the floor is comparable with the window effect on either one.");
     let p = Params::SHIPPED;
     // The same 21 band-labelled nights section 3 scores, so the two numbers share a denominator.
     let ns: Vec<Night> = nights().into_iter().filter(|n| truth_run(n).is_some()).collect();
-    let mut per_shift: Vec<(i64, f64, f64)> = Vec::new();
+    let mut per_shift: Vec<PhaseRow> = Vec::new();
     // Per-night worst movement over the sweep, so one bad night cannot hide in a mean.
-    let mut worst_per_night: Vec<f64> = Vec::new();
-    let mut base_labels: Vec<Vec<usize>> = Vec::new();
-    let mut agreement: Vec<(i64, f64)> = Vec::new();
+    let mut worst_per_night: Vec<f64> = vec![0.0; ns.len()];
+    let (mut base_raw, mut base_ref): (Vec<Vec<usize>>, Vec<Vec<usize>>) = (Vec::new(), Vec::new());
+    let mut census = RefineCensus::default();
 
     for n in &ns {
         let (input, w0) = shifted(n, 0);
-        base_labels.push(labels_at(&stage(&input, &p), w0, n.n));
+        base_raw.push(labels_at(&stage(&input, &p), w0, n.n));
+        let shifted_steps = shift_steps(&n.steps, 0);
+        base_ref.push(labels_at(&stage_refined(&input, &p, &shifted_steps, &mut census), w0, n.n));
     }
     for d in 0..EPOCH_SEC {
-        let (mut moved, mut total) = (0usize, 0usize);
-        let (mut agree, mut scored) = (0usize, 0usize);
+        let (mut moved, mut moved_r, mut total) = (0usize, 0usize, 0usize);
+        let (mut agree, mut agree_r, mut scored) = (0usize, 0usize, 0usize);
         let mut per_night: Vec<f64> = Vec::new();
         for (i, n) in ns.iter().enumerate() {
             let (input, w0) = shifted(n, d);
+            let steps = shift_steps(&n.steps, d);
             let lab = labels_at(&stage(&input, &p), w0, n.n);
-            let ch = (0..n.n).filter(|&k| lab[k] != base_labels[i][k]).count();
+            let lab_r = labels_at(&stage_refined(&input, &p, &steps, &mut census), w0, n.n);
+            let ch = (0..n.n).filter(|&k| lab[k] != base_raw[i][k]).count();
             moved += ch;
+            moved_r += (0..n.n).filter(|&k| lab_r[k] != base_ref[i][k]).count();
             total += n.n;
             per_night.push(100.0 * ch as f64 / n.n.max(1) as f64);
             for (&k, &t) in &n.truth {
                 if k < n.n {
                     scored += 1;
                     agree += usize::from((lab[k] == 0) == (t == 0));
+                    agree_r += usize::from((lab_r[k] == 0) == (t == 0));
                 }
             }
         }
-        per_shift.push((d, 100.0 * moved as f64 / total.max(1) as f64, median(&mut per_night.clone())));
-        agreement.push((d, 100.0 * agree as f64 / scored.max(1) as f64));
-        if d == 0 {
-            worst_per_night = vec![0.0; ns.len()];
-        }
+        let pct = |x: usize, y: usize| 100.0 * x as f64 / y.max(1) as f64;
+        per_shift.push(PhaseRow {
+            shift: d,
+            moved: pct(moved, total),
+            median_night: median(&mut per_night.clone()),
+            agree: pct(agree, scored),
+            moved_ref: pct(moved_r, total),
+            agree_ref: pct(agree_r, scored),
+        });
         for (i, v) in per_night.iter().enumerate() {
-            if *v > worst_per_night[i] {
-                worst_per_night[i] = *v;
-            }
+            worst_per_night[i] = worst_per_night[i].max(*v);
         }
     }
-    println!("\n   shift  labels moved vs shift 0   median/night   two-class agreement with the band");
-    for (d, all, med) in &per_shift {
-        let ag = agreement.iter().find(|(x, _)| x == d).map(|(_, a)| *a).unwrap_or(f64::NAN);
-        let mark = if (ns[0].w0 + d).rem_euclid(EPOCH_SEC) == 0 { "  <- grid ON the reference epochs" } else { "" };
-        println!("   {d:>4} s  {all:>18.2}%  {med:>13.2}%  {ag:>32.2}%{mark}");
+    println!("\n   shift  labels moved vs shift 0   median/night   band agreement    REFINED: moved  agreement");
+    for r in &per_shift {
+        let mark =
+            if (ns[0].w0 + r.shift).rem_euclid(EPOCH_SEC) == 0 { "  <- grid ON the reference epochs" } else { "" };
+        println!(
+            "   {:>4} s  {:>18.2}%  {:>13.2}%  {:>15.2}%  {:>14.2}%  {:>9.2}%{mark}",
+            r.shift, r.moved, r.median_night, r.agree, r.moved_ref, r.agree_ref
+        );
     }
-    let all_moved: Vec<f64> = per_shift.iter().skip(1).map(|(_, a, _)| *a).collect();
+    let all_moved: Vec<f64> = per_shift.iter().skip(1).map(|r| r.moved).collect();
+    let all_moved_r: Vec<f64> = per_shift.iter().skip(1).map(|r| r.moved_ref).collect();
     println!(
-        "\n   over the 29 non-zero shifts: median {:.2}% of labels move, worst {:.2}%",
+        "\n   over the 29 non-zero shifts, stage_v2: median {:.2}% of labels move, worst {:.2}%",
         median(&mut all_moved.clone()),
         all_moved.iter().copied().fold(0.0, f64::max)
+    );
+    println!(
+        "   over the same shifts, + refine_wake: median {:.2}%, worst {:.2}%   <- the floor on the app's path",
+        median(&mut all_moved_r.clone()),
+        all_moved_r.iter().copied().fold(0.0, f64::max)
     );
     let mut w = worst_per_night.clone();
     let worst_i = (0..worst_per_night.len()).max_by(|&a, &b| worst_per_night[a].partial_cmp(&worst_per_night[b]).unwrap());
@@ -313,11 +320,17 @@ fn section_grid_phase() {
         worst_i.map(|i| worst_per_night[i]).unwrap_or(0.0),
         worst_i.map(|i| ns[i].name.clone()).unwrap_or_default()
     );
-    let (lo, hi) = (
-        agreement.iter().map(|(_, a)| *a).fold(f64::INFINITY, f64::min),
-        agreement.iter().map(|(_, a)| *a).fold(f64::NEG_INFINITY, f64::max),
-    );
+    let span = |f: fn(&PhaseRow) -> f64| {
+        let lo = per_shift.iter().map(f).fold(f64::INFINITY, f64::min);
+        let hi = per_shift.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
+        (lo, hi)
+    };
+    let (lo, hi) = span(|r| r.agree);
+    let (lo_r, hi_r) = span(|r| r.agree_ref);
     println!("   band agreement across all 30 phases: {lo:.2}% to {hi:.2}% (spread {:.2} pp)", hi - lo);
+    println!("   the same refined: {lo_r:.2}% to {hi_r:.2}% (spread {:.2} pp)", hi_r - lo_r);
+    println!("{}", census.line("grid-phase sweep, 30 shifts x the nights"));
+    census.require_all_refined("grid-phase sweep");
 }
 
 // ── 3  window sensitivity, and which channel carries it ───────────────────────────────────────────
@@ -334,12 +347,28 @@ struct WindowEffect {
     /// the strap's own run — what the relabelling actually costs.
     agree_full: f64,
     agree_trim: f64,
+    /// The same three figures on the app's path, and the census that says every span reached it.
+    moved_ref: usize,
+    agree_full_ref: f64,
+    agree_trim_ref: f64,
+    census: RefineCensus,
+}
+
+impl WindowEffect {
+    fn moved_pct(&self) -> f64 {
+        100.0 * self.moved as f64 / self.shared.max(1) as f64
+    }
+    fn moved_ref_pct(&self) -> f64 {
+        100.0 * self.moved_ref as f64 / self.shared.max(1) as f64
+    }
 }
 
 fn window_effect(ns: &[Night], p: &Params) -> WindowEffect {
-    let (mut nights, mut shared, mut moved) = (0usize, 0usize, 0usize);
+    let (mut nights, mut shared, mut moved, mut moved_ref) = (0usize, 0usize, 0usize, 0usize);
     let (mut ok_full, mut ok_trim, mut scored) = (0usize, 0usize, 0usize);
+    let (mut ok_full_r, mut ok_trim_r) = (0usize, 0usize);
     let mut per_night: Vec<f64> = Vec::new();
+    let mut census = RefineCensus::default();
     for n in ns {
         let Some((first, last)) = truth_run(n) else { continue };
         if first == 0 && last + 1 >= n.n {
@@ -357,25 +386,35 @@ fn window_effect(ns: &[Night], p: &Params) -> WindowEffect {
         let inner = last + 1 - first;
         let a = labels_at(&stage(&full, p), n.w0, n.n);
         let b = labels_at(&stage(&trim, p), t0, inner);
+        let ar = labels_at(&stage_refined(&full, p, &n.steps, &mut census), n.w0, n.n);
+        let br = labels_at(&stage_refined(&trim, p, &n.steps, &mut census), t0, inner);
         let changed = (0..inner).filter(|&k| a[first + k] != b[k]).count();
+        moved_ref += (0..inner).filter(|&k| ar[first + k] != br[k]).count();
         for k in 0..inner {
             let Some(&t) = n.truth.get(&(first + k)) else { continue };
             scored += 1;
             ok_full += usize::from((a[first + k] == 0) == (t == 0));
             ok_trim += usize::from((b[k] == 0) == (t == 0));
+            ok_full_r += usize::from((ar[first + k] == 0) == (t == 0));
+            ok_trim_r += usize::from((br[k] == 0) == (t == 0));
         }
         nights += 1;
         shared += inner;
         moved += changed;
         per_night.push(100.0 * changed as f64 / inner as f64);
     }
+    let pct = |x: usize| 100.0 * x as f64 / scored.max(1) as f64;
     WindowEffect {
         nights,
         shared,
         moved,
         median_night: median(&mut per_night),
-        agree_full: 100.0 * ok_full as f64 / scored.max(1) as f64,
-        agree_trim: 100.0 * ok_trim as f64 / scored.max(1) as f64,
+        agree_full: pct(ok_full),
+        agree_trim: pct(ok_trim),
+        moved_ref,
+        agree_full_ref: pct(ok_full_r),
+        agree_trim_ref: pct(ok_trim_r),
+        census,
     }
 }
 
@@ -424,8 +463,10 @@ fn section_window_channels() {
         ..shipped
     };
 
-    println!("\n   config                                 nights  shared   moved  median/night   band agreement");
-    println!("                                                                                  full / trimmed");
+    println!("   Each config is reported on BOTH paths: stage_v2 alone, and + refine_wake as the app runs it.");
+    println!("\n   config                            nights shared   stage_v2: moved  med/night  agreement full/trim  \
+              + refine_wake: moved  agreement full/trim");
+    let mut censuses: Vec<(String, RefineCensus)> = Vec::new();
     for (label, p) in [
         ("SHIPPED", &shipped),
         ("- clock prior (cycle deep+REM off)", &no_clock),
@@ -437,18 +478,28 @@ fn section_window_channels() {
     ] {
         let w = window_effect(&ns, p);
         println!(
-            "   {label:<38} {:>4}  {:>6}  {:>5.1}%  {:>11.1}%   {:>5.2}% / {:.2}%",
+            "   {label:<34} {:>4} {:>6}  {:>13.1}%  {:>8.1}%  {:>7.2}% / {:.2}%  {:>18.1}%  {:>7.2}% / {:.2}%",
             w.nights,
             w.shared,
-            100.0 * w.moved as f64 / w.shared.max(1) as f64,
+            w.moved_pct(),
             w.median_night,
             w.agree_full,
             w.agree_trim,
+            w.moved_ref_pct(),
+            w.agree_full_ref,
+            w.agree_trim_ref,
         );
+        censuses.push((label.to_string(), w.census));
     }
     println!("\n   A per-night z-score is a function of the epochs in the window by construction, so the");
     println!("   residual under `cardiac z-scores ONLY` is the floor no window change can go below. The");
     println!("   agreement columns are what the relabelling COSTS: labels move, the score barely does.");
+    println!("   Only a within-row delta is readable: the reference calls ~85% of these epochs asleep, so a");
+    println!("   config that rarely says wake scores higher without being better.\n");
+    for (label, c) in &censuses {
+        println!("{}", c.line(label));
+        c.require_all_refined(label);
+    }
 }
 
 // ── 4  the two main-night scorers, against the strap ──────────────────────────────────────────────
@@ -462,28 +513,18 @@ struct ContBlock {
 }
 
 fn load_cont(d: &Path) -> Option<ContBlock> {
-    let band: Vec<(i64, i32)> = read_csv(&d.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();
-    if band.is_empty() {
+    let band = read_band(d);
+    let accel = read_accel(d);
+    if band.is_empty() || accel.len() < 120 {
         return None;
     }
-    let accel: Vec<AccelSample> = read_csv(&d.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect();
-    if accel.len() < 120 {
-        return None;
-    }
-    let hr: Vec<HrSample> =
-        read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&d.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    Some(ContBlock { name: d.file_name().unwrap().to_string_lossy().into_owned(), hr, rr, accel, band })
+    Some(ContBlock {
+        name: d.file_name().unwrap().to_string_lossy().into_owned(),
+        hr: read_hr(d),
+        rr: read_rr(d),
+        accel,
+        band,
+    })
 }
 
 fn band_asleep_secs(band: &[(i64, i32)], a: i64, b: i64) -> i64 {

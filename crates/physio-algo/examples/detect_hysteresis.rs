@@ -7,6 +7,10 @@
 //! `continuous` + the strap's own asleep runs answer "do we agree with the band", on both edges.
 //! `dreamt` + its PSG column answer "are we right", on the open edge only — those recordings end at wake,
 //! so they cannot judge a close. Neither set is cut to a session window, so both can see a window error.
+//!
+//! The interior-churn rows stage with `stage_v2` ONLY. They compare two DETECTION windows against each
+//! other, and `refine_wake` shrinks wake on both sides of that comparison, so it would mask the
+//! relabelling rather than measure it. Not the app's absolute wake figure — see `emit_wake` for that.
 
 use std::collections::BTreeMap;
 use std::fs;

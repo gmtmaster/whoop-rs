@@ -5,6 +5,9 @@
 //! Before = every beat flattened into one chain (`analyze_raw`, which applies the same range and ectopic
 //! cleaning but knows no report boundaries). After = `rmssd_gap_aware`, which now breaks contiguity at
 //! each report's first beat. Same beats, same cleaning; only the seam differs.
+//!
+//! Staging is used only to find the deep spans, which `refine_wake` cannot move (it rewrites wake to
+//! light), so the seam figures are the same on both paths.
 
 use std::fs;
 use std::path::PathBuf;

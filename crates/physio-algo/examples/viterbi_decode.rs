@@ -17,15 +17,20 @@
 //! `refine_wake` declines on them by its own density gate** — section 1 verifies that rather than assuming
 //! it, and every PSG number below is therefore the unrefined staging, stated as such.
 //!
-//! Shares its fixture loader with eleven other examples.
+//! Every refinement here runs through `common::RefineCensus`, so a cohort whose step stream the density
+//! gate declines is reported as declined rather than pooled into a refined number.
+
+mod common;
+
+use common::RefineCensus;
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
-    decode_v2, detect_sessions, emissions_v2, epoch_starts_v2, params::Params, prepare_v2, refine_wake,
-    segments_v2, AccelSample, HrSample, Prepared, RrRun, SleepInput, SleepStage, StageSegment, StepSample,
+    decode_v2, detect_sessions, emissions_v2, epoch_starts_v2, params::Params, prepare_v2, segments_v2,
+    AccelSample, HrSample, Prepared, RrRun, SleepInput, SleepStage, StageSegment, StepSample,
 };
 
 const EPOCH_SEC: i64 = 30;
@@ -398,23 +403,21 @@ fn labels_of(path: &[usize]) -> Vec<SleepStage> {
     path.iter().map(|&c| physio_algo::sleep::STAGE_ORDER[c]).collect()
 }
 
-/// Band two-class kappa over the app's real path — decode, tile, then `refine_wake` — plus the count of
-/// spans the refinement actually changed, so a silently-declining gate cannot pass for a measurement.
-fn score_band(spans: &[Span], kind: &Kind) -> (TwoClass, usize) {
-    let (mut tc, mut moved) = (TwoClass::default(), 0usize);
+/// Band two-class kappa over the app's real path — decode, tile, then `refine_wake` — plus the census, so
+/// a span the density gate declined cannot pass for a refined one. "Changed" and "refined" are different
+/// questions: a gate that declines and a refinement that finds nothing to do both leave the labels alone.
+fn score_band(spans: &[Span], kind: &Kind) -> (TwoClass, RefineCensus) {
+    let (mut tc, mut census) = (TwoClass::default(), RefineCensus::default());
     for s in spans {
         let segs = segments_v2(&s.prep, &labels_of(&path_of(&s.prep, kind)));
-        let fine = refine_wake(&segs, &s.accel, &s.steps);
-        if fine != segs {
-            moved += 1;
-        }
+        let fine = census.refine(&segs, &s.accel, &s.steps);
         for &(ts, st) in &s.band {
             if let Some(l) = stage_at(&fine, ts) {
                 tc.add(l == SleepStage::Wake, st != BAND_ASLEEP);
             }
         }
     }
-    (tc, moved)
+    (tc, census)
 }
 
 /// 4-class kappa against PSG truth. Unrefined: no PSG cohort carries a step stream, so `refine_wake`
@@ -524,18 +527,18 @@ fn section_isolation(spans: &[Span], psg: &[(&str, Vec<PsgNight>, Vec<Prepared>)
     }
 
     // (d) the refinement's gate on each family, stated rather than assumed.
-    let (_, moved) = score_band(spans, &Kind::Restage(Box::new(Params::SHIPPED)));
-    let mut psg_moved = 0usize;
+    let (_, census) = score_band(spans, &Kind::Restage(Box::new(Params::SHIPPED)));
+    let mut psg_census = RefineCensus::default();
     for (_, _, preps) in psg {
         for prep in preps {
             let segs = segments_v2(prep, &labels_of(&path_of(prep, &Kind::Restage(Box::new(Params::SHIPPED)))));
-            psg_moved += usize::from(refine_wake(&segs, &[], &[]) != segs);
+            psg_census.refine(&segs, &[], &[]);
         }
     }
     println!("\n   (d) which family runs the app's last stage, verified not assumed");
-    println!("       continuous: refine_wake changes {moved} of {} spans — the step stream is there", spans.len());
-    println!("       PSG: refine_wake changes {psg_moved} spans — no steps.csv, so its density gate declines");
-    println!("       and every PSG kappa below is the unrefined staging. Stated, because the gate is silent.");
+    println!("{}", census.line("continuous"));
+    println!("{}", psg_census.line("PSG, no steps.csv"));
+    println!("       so every PSG kappa below is the unrefined staging. Stated, because the gate is silent.");
 }
 
 // ── 2  decoder error against model error ──────────────────────────────────────────────────────────
@@ -734,25 +737,22 @@ fn wake_runs(path: &[usize]) -> (usize, usize) {
 }
 
 /// Band score from a caller-supplied path over pinned shipped emissions.
-fn score_band_paths(spans: &[Span], f: impl Fn(&[[f64; 4]]) -> Vec<usize>) -> (TwoClass, usize) {
-    let (mut tc, mut moved) = (TwoClass::default(), 0usize);
+fn score_band_paths(spans: &[Span], f: impl Fn(&[[f64; 4]]) -> Vec<usize>) -> (TwoClass, RefineCensus) {
+    let (mut tc, mut census) = (TwoClass::default(), RefineCensus::default());
     for s in spans {
         let em = emissions_v2(&s.prep, &Params::SHIPPED);
         if em.is_empty() {
             continue;
         }
         let segs = segments_v2(&s.prep, &labels_of(&f(&em)));
-        let fine = refine_wake(&segs, &s.accel, &s.steps);
-        if fine != segs {
-            moved += 1;
-        }
+        let fine = census.refine(&segs, &s.accel, &s.steps);
         for &(ts, st) in &s.band {
             if let Some(l) = stage_at(&fine, ts) {
                 tc.add(l == SleepStage::Wake, st != BAND_ASLEEP);
             }
         }
     }
-    (tc, moved)
+    (tc, census)
 }
 
 // ── 3  the two axes, sized against each other ─────────────────────────────────────────────────────

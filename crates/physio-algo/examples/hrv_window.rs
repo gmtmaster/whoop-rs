@@ -6,6 +6,10 @@
 //! bucket of the night, only buckets centred in deep sleep, and only buckets in the LAST deep run. Also
 //! reports how often a night yields no deep bucket at all, which is the coverage cost of the deep window,
 //! and pairs the wearer with an export against WHOOP's own published nightly HRV for the same nights.
+//!
+//! `stage_v2` ONLY, and it changes nothing here: `refine_wake` rewrites wake seconds to light and can
+//! create or remove neither a deep nor a REM second, so every deep-window statistic below is identical
+//! on both paths. Pinned by `refine::tests::deep_and_rem_seconds_are_untouched`.
 
 use std::fs;
 use std::path::{Path, PathBuf};

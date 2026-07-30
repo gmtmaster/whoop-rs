@@ -4,6 +4,9 @@
 //! kappa, stage fractions and first-REM latency under both the shipped and the pre-retune recipe.
 //!
 //!   cargo run --release -p physio-algo --example verify_934
+//!
+//! `stage_v2` ONLY. The guard is a REM-placement term and the refinement rewrites wake to light, so it
+//! can move no first-REM latency; the PSG cohorts have no step stream for it either way.
 
 use std::collections::BTreeMap;
 use std::fs;

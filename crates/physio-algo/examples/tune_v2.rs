@@ -5,6 +5,9 @@
 //!   cargo run --release -p physio-algo --example tune_v2 -- --fit pooled --holdout killa5 --rounds 5
 //!
 //! Prints the winning `Params` as Rust source. Nothing is written; adopting a result is a manual edit.
+//!
+//! `stage_v2` ONLY. The fitting sets are PSG cohorts with no step stream, so `refine_wake` would
+//! decline; a recipe fitted here is fitted on the unrefined path.
 
 use std::collections::BTreeMap;
 use std::io::Write;

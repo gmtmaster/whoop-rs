@@ -40,12 +40,24 @@ pub fn refine(segments: &[StageSegment], grav: &[AccelSample], steps: &[StepSamp
 }
 
 /// True when both the gravity and step streams are dense enough over `[start, end)` to trust per-minute
-/// locomotion/posture evidence. Judges the observed streams directly, never a strap model.
-pub(super) fn is_motion_dense(start: i64, end: i64, grav: &[AccelSample], steps: &[StepSample]) -> bool {
-    let grav_density = dense_minute_fraction(grav, start, end, MIN_GRAVITY_SAMPLES_PER_MINUTE_FOR_VARIANCE, |g| g.ts);
-    let step_density = dense_minute_fraction(steps, start, end, MIN_STEP_SAMPLES_PER_MINUTE_FOR_DENSITY, |s| s.ts);
-    grav_density >= MIN_DENSE_MINUTE_COVERAGE_FRACTION && step_density >= MIN_DENSE_MINUTE_COVERAGE_FRACTION
+/// locomotion/posture evidence. Judges the observed streams directly, never a strap model. Exported so a
+/// caller can ask whether [`refine`] will act BEFORE calling it — the gate is otherwise silent.
+pub fn is_motion_dense(start: i64, end: i64, grav: &[AccelSample], steps: &[StepSample]) -> bool {
+    let (g, s) = motion_density(start, end, grav, steps);
+    g >= MIN_DENSE_MINUTE_COVERAGE_FRACTION && s >= MIN_DENSE_MINUTE_COVERAGE_FRACTION
 }
+
+/// The gravity and step dense-minute fractions the gate compares against its threshold, and that
+/// threshold. Exported so a caller can say WHICH stream declined instead of only that one did.
+pub fn motion_density(start: i64, end: i64, grav: &[AccelSample], steps: &[StepSample]) -> (f64, f64) {
+    (
+        dense_minute_fraction(grav, start, end, MIN_GRAVITY_SAMPLES_PER_MINUTE_FOR_VARIANCE, |g| g.ts),
+        dense_minute_fraction(steps, start, end, MIN_STEP_SAMPLES_PER_MINUTE_FOR_DENSITY, |s| s.ts),
+    )
+}
+
+/// The dense-minute fraction both streams must reach for [`refine`] to act.
+pub const MIN_DENSE_FRACTION: f64 = MIN_DENSE_MINUTE_COVERAGE_FRACTION;
 
 /// Fraction of the wall-clock minutes tiling `[start, end)` that carry at least `min_per_minute` samples.
 fn dense_minute_fraction<T>(samples: &[T], start: i64, end: i64, min_per_minute: i32, ts: impl Fn(&T) -> i64) -> f64 {
@@ -225,6 +237,52 @@ mod tests {
         let seg = vec![StageSegment { start: 0, end: 600, stage: SleepStage::Wake }];
         let grav: Vec<_> = (0..10).map(|m| a(m * 60, 0.0, 0.0, 1.0)).collect(); // 1/min < required 2
         assert_eq!(refine(&seg, &grav, &[]), seg);
+    }
+
+    /// The exported gate must agree with what `refine` then does, or a harness reporting "refined" off
+    /// `is_motion_dense` would pool spans the refinement declined.
+    #[test]
+    fn the_exported_gate_predicts_whether_the_refinement_acts() {
+        let seg = vec![StageSegment { start: 0, end: 600, stage: SleepStage::Wake }];
+        let (mut grav, mut steps) = (Vec::new(), Vec::new());
+        for m in 0..10i64 {
+            grav.push(a(m * 60, 0.0, 0.0, 1.0));
+            grav.push(a(m * 60 + 30, 0.0, 0.0, 1.0));
+            steps.push(st(m * 60, 100, Some(0)));
+        }
+        assert!(is_motion_dense(0, 600, &grav, &steps));
+        assert_ne!(refine(&seg, &grav, &steps), seg);
+        // One step sample every third minute is 33% coverage, under the 80% the gate wants.
+        let sparse: Vec<_> = steps.iter().copied().step_by(3).collect();
+        assert!(!is_motion_dense(0, 600, &grav, &sparse));
+        assert_eq!(refine(&seg, &grav, &sparse), seg);
+        assert!(!is_motion_dense(0, 600, &grav, &[]));
+        assert_eq!(refine(&seg, &grav, &[]), seg);
+    }
+
+    /// The pass rewrites wake to light and nothing else, so any statistic taken over deep or REM seconds
+    /// is identical on both paths. Several harnesses stay on the unrefined staging because of this.
+    #[test]
+    fn deep_and_rem_seconds_are_untouched() {
+        let segs = vec![
+            StageSegment { start: 0, end: 600, stage: SleepStage::Wake },
+            StageSegment { start: 600, end: 1200, stage: SleepStage::Deep },
+            StageSegment { start: 1200, end: 1800, stage: SleepStage::Rem },
+            StageSegment { start: 1800, end: 2400, stage: SleepStage::Wake },
+        ];
+        let (mut grav, mut steps) = (Vec::new(), Vec::new());
+        for m in 0..40i64 {
+            grav.push(a(m * 60, 0.0, 0.0, 1.0));
+            grav.push(a(m * 60 + 30, 0.0, 0.0, 1.0));
+            steps.push(st(m * 60, 100, Some(0)));
+        }
+        let out = refine(&segs, &grav, &steps);
+        assert_ne!(out, segs, "the gate must accept, or this proves nothing");
+        let seconds = |v: &[StageSegment], want: SleepStage| -> Vec<i64> {
+            v.iter().filter(|s| s.stage == want).flat_map(|s| s.start..s.end).collect()
+        };
+        assert_eq!(seconds(&out, SleepStage::Deep), seconds(&segs, SleepStage::Deep));
+        assert_eq!(seconds(&out, SleepStage::Rem), seconds(&segs, SleepStage::Rem));
     }
 
     #[test]

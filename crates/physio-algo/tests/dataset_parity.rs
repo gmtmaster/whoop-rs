@@ -1,7 +1,12 @@
-//! Parity gate: run the ported stagers on the on-disk DREAMT + AAUWSS fixtures and reproduce the shipped
-//! Cohen's-kappa within a tight tolerance. Ignored by default (the datasets live outside the repo); point
-//! `WHOOP_SLEEP_FIXTURES` at a `fixtures_multi` directory, or rely on the default sibling path, then run:
+//! Parity gate: run the ported stagers on the on-disk PSG fixtures and reproduce the shipped
+//! Cohen's-kappa within a tight tolerance. All three cohorts the staging ceilings rest on are asserted,
+//! so a regression on any of them fails. Ignored by default (the datasets live outside the repo); point
+//! `WHOOP_SLEEP_FIXTURES` at a fixture root, or rely on the default below, then run:
 //!   cargo test -p physio-algo --test dataset_parity -- --ignored --nocapture
+//!
+//! The stagers run `stage_v2` alone. No PSG cohort carries a step stream at one sample a minute, so
+//! `refine_wake` would decline on every one of them; this is the unrefined path and it is the only path
+//! these cohorts can score.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -11,11 +16,12 @@ use physio_algo::sleep::{
     stage_v2, AccelSample, HrSample, RrRun, SleepInput, SleepStage, StageSegment,
 };
 
+/// The de-duplicated corpus. The raw `fixtures_multi` root holds each beat twice on some of its own-strap
+/// nights, so defaulting to it would silently score a doubled R-R stream.
+const DEFAULT_ROOT: &str = "C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi_clean";
+
 fn fixtures_root() -> PathBuf {
-    if let Ok(p) = std::env::var("WHOOP_SLEEP_FIXTURES") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from("C:/Users/DavidGillot/Projects/whoop/sleep-benchmark/fixtures_multi")
+    std::env::var("WHOOP_SLEEP_FIXTURES").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(DEFAULT_ROOT))
 }
 
 fn read_csv(path: &Path) -> Vec<Vec<f64>> {
@@ -169,12 +175,23 @@ fn v2_aauwss_kappa_matches_shipped() {
     assert!((kappa - 0.412).abs() < 0.008, "V2 AAUWSS kappa {kappa:.3} off target 0.412");
 }
 
+/// The third PSG cohort. Two staging ceilings (F's wake ledger and G's transition-matrix rescues) quote
+/// its kappa, so it needs a gate of its own rather than a print-only row.
+#[test]
+#[ignore = "reads external fixtures; run with --ignored for the parity gate"]
+fn v2_sleep_accel_kappa_matches_shipped() {
+    let (kappa, n) = run_dataset("sleep-accel");
+    println!("V2 sleep-accel: kappa={kappa:.3} over {n} subjects (target ~0.379)");
+    assert!((kappa - 0.379).abs() < 0.008, "V2 sleep-accel kappa {kappa:.3} off target 0.379");
+}
+
 /// Every fixture set in one table, so a recipe change is read as one before/after sheet rather than
-/// two pinned numbers. A set whose fixtures carry no labels is reported as such, never as kappa 0.
-/// Prints only — the two gates above are what fail on drift.
+/// three pinned numbers. A set whose fixtures carry no labels is reported as such, never as kappa 0.
+/// Prints only — the three gates above are what fail on drift.
 #[test]
 #[ignore = "reads external fixtures; run with --ignored for the full sheet"]
 fn v2_all_datasets_report() {
+    println!("fixture root: {}", fixtures_root().display());
     println!("{:<14} {:>8} {:>10}", "dataset", "kappa", "subjects");
     for ds in ["dreamt", "aauwss", "e9night", "killa5", "sleep-accel"] {
         let root = fixtures_root().join(ds);

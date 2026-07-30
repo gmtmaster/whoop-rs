@@ -12,6 +12,9 @@
 //! [`stage_refined`] is the two together. Staging splits once more: [`emissions_v2`] is the per-epoch
 //! log-evidence and [`decode_v2`] the path search over it, so the two can be scored apart. Pure +
 //! deterministic.
+//!
+//! [`refine_wake`]'s density gate declines silently on a sparse or absent step stream, so it is exported
+//! as [`motion_dense`]: ask it first and a caller can never report an unrefined span as a refined one.
 
 mod common;
 mod detect;
@@ -29,7 +32,9 @@ pub use detect::{detect_sessions, detect_sessions_with, DetectParams, DetectedSp
 pub use v2::{emissions_prepared as emissions_v2, epoch_starts as epoch_starts_v2, prepare as prepare_v2,
     segments_of as segments_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, viterbi as decode_v2, Prepared, DEEP_GATE_THRESH, STAGE_ORDER};
-pub use refine::refine as refine_wake;
+pub use refine::{
+    is_motion_dense as motion_dense, motion_density, refine as refine_wake, MIN_DENSE_FRACTION,
+};
 pub use mainnight::{
     bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices,
     main_night_group_indices_scored, main_night_index, main_night_index_scored, main_night_selection,

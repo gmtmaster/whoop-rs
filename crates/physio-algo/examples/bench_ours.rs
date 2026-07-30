@@ -5,6 +5,10 @@
 //! The band label is two-class (wake vs asleep), so it judges the wake fraction and nothing finer. That
 //! is the quantity the field regression reports turn on, and it is the one label here that noop did not
 //! produce itself. Nights without band coverage still contribute stage fractions, which need no label.
+//!
+//! `stage_v2` ONLY. `ours` gravity is held forward across dropouts, so the refinement's posture check
+//! reads artificially stable on this set and its wake fraction cannot be trusted here; the refined
+//! figures come from `continuous` in `emit_wake`.
 
 use std::collections::BTreeMap;
 use std::fs;

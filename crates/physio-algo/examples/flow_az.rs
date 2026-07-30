@@ -8,6 +8,10 @@
 //! Stage E-I  staging: stage fractions inside the spans, against the strap's wake/asleep call
 //!
 //! Blocks are cut on wear, not on labels, so nothing here tells the detector where to look.
+//!
+//! STAGE FIGURES HERE ARE `stage_v2` ONLY, not the app's `stage_v2` + `refine_wake`. The refined wake
+//! figures live in `emit_wake`; this harness exists to place every stage of the flow beside the others
+//! on one reference, so both of its stage rows are the unrefined path and say so.
 
 use std::fs;
 use std::path::{Path, PathBuf};

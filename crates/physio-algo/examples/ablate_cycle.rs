@@ -5,6 +5,9 @@
 //!   cargo run --release -p physio-algo --example ablate_cycle
 //!
 //! Reads the same fixture tree as `tune_v2`. Nothing is written; this only measures.
+//!
+//! `stage_v2` ONLY, and deliberately: the PSG cohorts carry no step stream at one sample a minute, so
+//! `refine_wake`'s density gate declines on every one of them. Stated because the gate is silent.
 
 use std::collections::BTreeMap;
 use std::fs;
