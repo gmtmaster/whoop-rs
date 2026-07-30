@@ -529,10 +529,12 @@ fn section_isolation(spans: &[Span], psg: &[(&str, Vec<PsgNight>, Vec<Prepared>)
     // (d) the refinement's gate on each family, stated rather than assumed.
     let (_, census) = score_band(spans, &Kind::Restage(Box::new(Params::SHIPPED)));
     let mut psg_census = RefineCensus::default();
-    for (_, _, preps) in psg {
-        for prep in preps {
+    for (_, nights, preps) in psg {
+        // The cohort's OWN gravity, and no steps because no cohort has a `steps.csv` — so the census says
+        // whether it is the step stream alone that declines or the gravity as well.
+        for (night, prep) in nights.iter().zip(preps) {
             let segs = segments_v2(prep, &labels_of(&path_of(prep, &Kind::Restage(Box::new(Params::SHIPPED)))));
-            psg_census.refine(&segs, &[], &[]);
+            psg_census.refine(&segs, &night.input.accel, &[]);
         }
     }
     println!("\n   (d) which family runs the app's last stage, verified not assumed");
