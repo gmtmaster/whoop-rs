@@ -186,25 +186,36 @@ fn v2_sleep_accel_kappa_matches_shipped() {
     assert!((kappa - 0.379).abs() < 0.008, "V2 sleep-accel kappa {kappa:.3} off target 0.379");
 }
 
-/// Every fixture set in one table, so a recipe change is read as one before/after sheet rather than
-/// three pinned numbers. A set whose fixtures carry no labels is reported as such, never as kappa 0.
-/// Prints only — the three gates above are what fail on drift.
+/// Every EPOCH-LABELLED set the corpus holds, each with what its labels are worth, so a set cannot sit
+/// in the tree unnamed. `whoop4` was doing exactly that: 20 nights of real 4.0 live BLE that no Rust
+/// harness read and no dataset matrix listed. A set whose fixtures carry no labels is reported as such,
+/// never as kappa 0. Prints only — the three gates above are what fail on drift.
 #[test]
 #[ignore = "reads external fixtures; run with --ignored for the full sheet"]
 fn v2_all_datasets_report() {
+    // (set, what its truth column IS, and therefore what a kappa against it may be used for)
+    const SETS: [(&str, &str); 7] = [
+        ("dreamt", "PSG hypnogram — accuracy"),
+        ("aauwss", "PSG hypnogram — accuracy"),
+        ("sleep-accel", "PSG hypnogram — accuracy"),
+        ("e9night", "unlabelled — nothing"),
+        ("killa5", "our own stagesJSON — CIRCULAR, consistency only"),
+        ("strap", "our own stagesJSON — CIRCULAR, consistency only"),
+        ("whoop4", "our own on-board stagesJSON — CIRCULAR, consistency only"),
+    ];
     println!("fixture root: {}", fixtures_root().display());
-    println!("{:<14} {:>8} {:>10}", "dataset", "kappa", "subjects");
-    for ds in ["dreamt", "aauwss", "e9night", "killa5", "sleep-accel"] {
+    println!("{:<14} {:>8} {:>10}   what its truth is", "dataset", "kappa", "subjects");
+    for (ds, what) in SETS {
         let root = fixtures_root().join(ds);
         if !root.is_dir() {
-            println!("{ds:<14} {:>8} {:>10}", "-", "missing");
+            println!("{ds:<14} {:>8} {:>10}   {what}", "-", "missing");
             continue;
         }
         let (kappa, n) = run_dataset(ds);
         if n == 0 {
-            println!("{ds:<14} {:>8} {:>10}   no ground truth", "-", 0);
+            println!("{ds:<14} {:>8} {:>10}   {what}", "-", 0);
             continue;
         }
-        println!("{ds:<14} {kappa:>8.3} {n:>10}");
+        println!("{ds:<14} {kappa:>8.3} {n:>10}   {what}");
     }
 }

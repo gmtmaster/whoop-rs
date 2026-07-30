@@ -165,6 +165,13 @@ pub fn read_steps(dir: &Path) -> Vec<StepSample> {
         .collect()
 }
 
+/// The strap's own on-chip ENMO, `(ts, g)`, one row a second where the column is populated. Grafted onto
+/// the pinned corpus by `sleep-benchmark/graft_dynaccel.py`; absent on every set but three `continuous`
+/// blocks, so a reader must treat empty as "this block cannot answer" rather than "no motion".
+pub fn read_dyn_accel(dir: &Path) -> Vec<(i64, f64)> {
+    read_csv(&dir.join("dynaccel.csv")).iter().map(|r| (r[0] as i64, r[1])).collect()
+}
+
 /// One night as WHOOP's own app reports it: its in-bed window and its stage shares, in `STAGE_ORDER`.
 pub struct Export {
     pub owner: String,
