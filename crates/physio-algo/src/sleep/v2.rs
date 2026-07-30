@@ -25,6 +25,10 @@ const REM: usize = 1;
 const LIGHT: usize = 2;
 const AWAKE: usize = 3;
 
+/// Column order of every emission row and of both transition-matrix axes.
+pub const STAGE_ORDER: [SleepStage; 4] =
+    [SleepStage::Deep, SleepStage::Rem, SleepStage::Light, SleepStage::Wake];
+
 /// Deep-eligibility HR-flatness percentile gate of the shipped recipe.
 pub const DEEP_GATE_THRESH: f64 = Params::SHIPPED.deep_gate_thresh;
 
@@ -73,6 +77,29 @@ pub fn stage_prepared(prep: &Prepared, p: &Params) -> Vec<StageSegment> {
     }
     let labels = stage_epochs(&prep.feats, p);
     segments_from(&prep.feats, &labels, prep.start, prep.end)
+}
+
+/// The per-epoch log-emissions a prepared night hands the decoder, in [`STAGE_ORDER`] columns.
+/// [`viterbi`] over these reproduces [`stage_prepared`]'s labels exactly, so a caller can score the path
+/// search and the emissions feeding it apart.
+pub fn emissions_prepared(prep: &Prepared, p: &Params) -> Vec<[f64; 4]> {
+    final_emissions(&prep.feats, p)
+}
+
+/// The unix second each prepared epoch opens at, index-for-index with [`emissions_prepared`]. An epoch
+/// with neither HR nor gravity is dropped, so the sequence can skip and a reference has to be aligned by
+/// time rather than by position.
+pub fn epoch_starts(prep: &Prepared) -> Vec<i64> {
+    prep.feats.iter().map(|f| f.start).collect()
+}
+
+/// Tile the prepared span from one label per epoch — staging's last step, so a caller that decoded its own
+/// path gets the segments [`stage_prepared`] would have returned. `labels` must be one per prepared epoch.
+pub fn segments_of(prep: &Prepared, labels: &[SleepStage]) -> Vec<StageSegment> {
+    if prep.feats.is_empty() {
+        return vec![StageSegment { start: prep.start, end: prep.end, stage: SleepStage::Light }];
+    }
+    segments_from(&prep.feats, labels, prep.start, prep.end)
 }
 
 /// Stage with an explicit recipe. The tuning path; `stage` is what everything else calls.
@@ -445,9 +472,10 @@ fn dz(z: f64, deadzone: f64) -> f64 {
 }
 
 /// Viterbi most-likely path over the per-epoch log-emissions with the sticky transition matrix and a
-/// uniform start. Ties resolve to the earlier stage (deep < rem < light < awake).
+/// uniform start. Columns are [`STAGE_ORDER`]; ties resolve to the earlier stage. A zero transition is
+/// floored at 1e-9 rather than forbidden, so no path is unreachable.
 #[allow(clippy::needless_range_loop)]
-fn viterbi(em_seq: &[[f64; 4]], transition: &[[f64; 4]; 4]) -> Vec<SleepStage> {
+pub fn viterbi(em_seq: &[[f64; 4]], transition: &[[f64; 4]; 4]) -> Vec<SleepStage> {
     if em_seq.is_empty() {
         return Vec::new();
     }
@@ -504,19 +532,23 @@ fn idx_to_stage(i: usize) -> SleepStage {
     }
 }
 
+/// The log-emissions the decoder is handed, under whichever anchor `p` selects. An onset-anchored prior
+/// needs a staging to find the onset, so it stages once with the guard off first.
+fn final_emissions(feats: &[Epoch], p: &Params) -> Vec<[f64; 4]> {
+    if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
+        let probe = viterbi(&emissions(feats, p, Anchor::Probe), &p.transition);
+        return emissions(feats, p, Anchor::Onset(sustained_onset(&probe).unwrap_or(0)));
+    }
+    emissions(feats, p, Anchor::Window)
+}
+
 /// Run the full recipe over a night's epochs and return one stage label per epoch. All normalisation
 /// (z-scores, the HR-flatness percentile) is within the night.
 fn stage_epochs(feats: &[Epoch], p: &Params) -> Vec<SleepStage> {
     if feats.is_empty() {
         return Vec::new();
     }
-    // An onset-anchored prior needs a staging to find the onset, so stage once without one first.
-    if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
-        let probe = viterbi(&emissions(feats, p, Anchor::Probe), &p.transition);
-        let anchor = Anchor::Onset(sustained_onset(&probe).unwrap_or(0));
-        return viterbi(&emissions(feats, p, anchor), &p.transition);
-    }
-    viterbi(&emissions(feats, p, Anchor::Window), &p.transition)
+    viterbi(&final_emissions(feats, p), &p.transition)
 }
 
 /// Per-epoch log-emissions under `p`, with the time-of-night priors read from `anchor`.
@@ -660,6 +692,169 @@ mod tests {
             "rebased onto the onset epoch's own fraction"
         );
         assert_eq!(0.0, cycle_clock(0.0, &feats, Anchor::Onset(1), &from_onset), "clamped below onset");
+    }
+
+    // ── the decoder, isolated from the emissions feeding it ───────────────────────────────────────
+
+    /// Column index of a stage — the inverse of [`STAGE_ORDER`], so a test can talk in indices.
+    fn idx_of(s: SleepStage) -> usize {
+        STAGE_ORDER.iter().position(|&x| x == s).unwrap()
+    }
+
+    /// Total log-score of one path: its emissions plus every transition it takes. Written independently
+    /// of the decoder, so a test can rank paths without using the thing under test.
+    fn path_score(em: &[[f64; 4]], t: &[[f64; 4]; 4], path: &[usize]) -> f64 {
+        let mut s = em[0][path[0]];
+        for i in 1..path.len() {
+            s += t[path[i - 1]][path[i]].max(1e-9).ln() + em[i][path[i]];
+        }
+        s
+    }
+
+    /// Best path and its score by exhaustive enumeration of all 4^n. The oracle the decoder is checked
+    /// against; feasible only for a handful of epochs, which is why it lives in a test.
+    fn brute_force(em: &[[f64; 4]], t: &[[f64; 4]; 4]) -> (Vec<usize>, f64) {
+        let n = em.len();
+        let mut best = (Vec::new(), f64::NEG_INFINITY);
+        for code in 0..4usize.pow(n as u32) {
+            let path: Vec<usize> = (0..n).map(|i| (code >> (2 * i)) & 3).collect();
+            let s = path_score(em, t, &path);
+            if s > best.1 {
+                best = (path, s);
+            }
+        }
+        best
+    }
+
+    /// Deterministic LCG in [-4, 4) — the same emission sequences on every run, at a spread comparable to
+    /// the log-transitions so neither term trivially dominates.
+    fn lcg(state: &mut u64) -> f64 {
+        *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        ((*state >> 33) as f64) / ((1u64 << 31) as f64) * 8.0 - 4.0
+    }
+
+    /// A second matrix beside the shipped one, with a hard zero row so the 1e-9 floor is exercised.
+    const PROBE_T: [[f64; 4]; 4] = [
+        [0.50, 0.20, 0.20, 0.10],
+        [0.10, 0.40, 0.40, 0.10],
+        [0.25, 0.25, 0.25, 0.25],
+        [0.00, 0.00, 0.50, 0.50],
+    ];
+
+    #[test]
+    fn the_decoder_returns_the_maximum_likelihood_path_on_every_crafted_sequence() {
+        // 80 sequences of 7 epochs, alternating between the shipped matrix and one with a zero row, each
+        // checked against exhaustive enumeration of all 16,384 paths. A decoder that matched once would
+        // prove nothing.
+        let mut state = 0x5eed_1234_u64;
+        let mut checked = 0usize;
+        for case in 0..80 {
+            let t = if case % 2 == 0 { Params::SHIPPED.transition } else { PROBE_T };
+            let em: Vec<[f64; 4]> =
+                (0..7).map(|_| [lcg(&mut state), lcg(&mut state), lcg(&mut state), lcg(&mut state)]).collect();
+            let got: Vec<usize> = viterbi(&em, &t).into_iter().map(idx_of).collect();
+            let (want, best) = brute_force(&em, &t);
+            assert_eq!(path_score(&em, &t, &got), best, "case {case}: decoded path is not optimal");
+            assert_eq!(got, want, "case {case}: decoded path differs from the enumerated best");
+            checked += 1;
+        }
+        assert_eq!(80, checked);
+    }
+
+    #[test]
+    fn every_injected_path_is_recovered_when_the_emissions_name_it() {
+        // All 1,024 paths over 5 epochs, injected as an emission margin large enough to outweigh any
+        // transition (the 1e-9 floor is worth 20.7 log units, and a deviation can gain at most two of
+        // them). Recovery of one path is an anecdote; this is the whole space.
+        let t = Params::SHIPPED.transition;
+        let mut recovered = 0usize;
+        for code in 0..1024usize {
+            let want: Vec<usize> = (0..5).map(|i| (code >> (2 * i)) & 3).collect();
+            let em: Vec<[f64; 4]> = want
+                .iter()
+                .map(|&s| {
+                    let mut row = [0.0; 4];
+                    row[s] = 200.0;
+                    row
+                })
+                .collect();
+            let got: Vec<usize> = viterbi(&em, &t).into_iter().map(idx_of).collect();
+            assert_eq!(got, want, "path {code} not recovered");
+            recovered += 1;
+        }
+        assert_eq!(1024, recovered);
+    }
+
+    #[test]
+    fn the_transitions_override_a_one_epoch_emission_blip() {
+        // Hand-computable: REM-REM-REM scores 10 + 2*ln(0.92) = 9.83, while following the middle epoch's
+        // own argmax into deep scores 11 + ln(0.00333) + ln(0.012) = 0.87. Without the transition term the
+        // decoder would be a per-epoch argmax, so this is what separates the two.
+        let t = Params::SHIPPED.transition;
+        let mut em = [[0.0f64; 4]; 3];
+        em[0][REM] = 5.0;
+        em[1][DEEP] = 1.0;
+        em[2][REM] = 5.0;
+        let got: Vec<usize> = viterbi(&em, &t).into_iter().map(idx_of).collect();
+        assert_eq!(vec![REM, REM, REM], got, "the sticky diagonal must smooth a single blip");
+        assert_eq!(DEEP, (0..4).max_by(|a, b| em[1][*a].total_cmp(&em[1][*b])).unwrap(), "argmax disagrees");
+        // And it is not unconditional: widen the blip's margin past the two transitions it must pay for
+        // and the decoder follows the evidence instead.
+        em[1][DEEP] = 12.0;
+        assert_eq!(DEEP, idx_of(viterbi(&em, &t)[1]), "a large enough margin must win");
+    }
+
+    #[test]
+    fn the_decoder_is_total_on_degenerate_input() {
+        let t = Params::SHIPPED.transition;
+        assert!(viterbi(&[], &t).is_empty(), "no epochs, no labels");
+        // One epoch has no transition to pay, so it is the emission argmax alone.
+        assert_eq!(SleepStage::Wake, viterbi(&[[0.0, 1.0, 2.0, 3.0]], &t)[0]);
+        // Everything equal under a uniform matrix: every path ties and the earliest column wins.
+        let uniform = [[0.25; 4]; 4];
+        assert!(viterbi(&[[0.0; 4]; 6], &uniform).iter().all(|&s| s == SleepStage::Deep));
+    }
+
+    /// Twenty minutes of HR and gravity, still for the first half and jittering in the second, so the
+    /// staging has a path to search rather than one flat answer.
+    fn crafted_night() -> Prepared {
+        let start = 1_749_513_600i64;
+        let (mut hr, mut accel) = (Vec::new(), Vec::new());
+        for i in 0..1200i64 {
+            let bpm = if i < 600 { 52 + (i % 3) as u16 } else { 66 + (i % 5) as u16 };
+            hr.push(HrSample { ts: start + i, bpm });
+            let jitter = if i < 600 { 0.0 } else { 0.02 * (i % 7) as f64 };
+            accel.push(AccelSample { ts: start + i, x: jitter, y: 0.0, z: 1.0 - jitter });
+        }
+        let input = SleepInput { start, end: start + 1200, hr, rr: Vec::<RrRun>::new(), accel };
+        prepare(&input, &Params::SHIPPED)
+    }
+
+    #[test]
+    fn the_exported_emissions_decode_to_the_labels_the_stager_ships() {
+        // The exported pair has to BE the shipped staging, or a harness scoring them scores a
+        // reconstruction of the pipeline instead of the pipeline.
+        let prep = crafted_night();
+        let p = Params::SHIPPED;
+        let em = emissions_prepared(&prep, &p);
+        assert_eq!(em.len(), prep.feats.len(), "one emission row per epoch");
+        assert_eq!(em.len(), epoch_starts(&prep).len(), "one epoch start per emission row");
+        assert!(em.len() >= 30, "a night long enough for the path search to matter");
+        let via_decoder = segments_of(&prep, &viterbi(&em, &p.transition));
+        assert_eq!(stage_prepared(&prep, &p), via_decoder);
+    }
+
+    #[test]
+    fn every_transition_row_is_a_distribution_and_a_zero_is_only_a_floor() {
+        // The rows are read as probabilities and logged, so a row that does not sum to 1 would weight one
+        // stage's whole outgoing mass. A 0 cell is floored, not forbidden.
+        for (i, row) in Params::SHIPPED.transition.iter().enumerate() {
+            assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-9, "row {i} is not a distribution");
+        }
+        let t = Params::SHIPPED.transition;
+        assert_eq!(0.0, t[AWAKE][DEEP], "the awake row's zeros are what the floor has to cover");
+        let em = [[0.0, 0.0, 0.0, 50.0], [50.0, 0.0, 0.0, 0.0]];
+        assert_eq!(vec![SleepStage::Wake, SleepStage::Deep], viterbi(&em, &t), "a zero cell is traversable");
     }
 
     #[test]
