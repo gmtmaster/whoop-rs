@@ -1252,9 +1252,9 @@ pattern = 'pre-hysteresis opening run of a group n=\d+  median \+([\d.]+) min'
 
 [[figure]]
 run = "select_bridge"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "B"
-section = "B3, the nap-length distribution"
+section = "Step B debt, B3"
 label = "band asleep runs at tol 300 s"
 documented = "205"
 pattern = '^    300\s+(\d+)'
@@ -2891,6 +2891,15 @@ pattern = 'POOLED PSG, measured\n(?:[^\n]*\n){3}\s+light\s+([\d.]+)'
 run = "viterbi_decode"
 doc = "SLEEP-FLOW-AZ.md"
 step = "G"
+section = "the transition matrix against a measured one"
+label = "measured light->REM (shipped is 0.080)"
+documented = "0.0107"
+pattern = 'POOLED PSG, measured\n(?:[^\n]*\n){3}\s+light\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "viterbi_decode"
+doc = "SLEEP-FLOW-AZ.md"
+step = "G"
 section = "the base rates against the same hypnograms"
 label = "shipped base_rate normalised, deep"
 documented = "0.124"
@@ -3719,54 +3728,54 @@ pattern = '^\s+E: window sensitivity, 5\.2% of labels\s+[-+][\d.]+\s+([-+][\d.]+
 
 [[figure]]
 run = "motion_channel"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "H"
-section = "the motion channel's input"
+section = "what is left, 3 the motion channel's INPUT"
 label = "derived jerk, band kappa2"
 documented = "0.038"
 pattern = '^\s+\|delta gravity\|, derived \(SHIPPED\)\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
 run = "motion_channel"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "H"
-section = "the motion channel's input"
+section = "what is left, 3 the motion channel's INPUT"
 label = "on-chip ENMO, band kappa2"
 documented = "0.142"
 pattern = '^\s+dynAccelG, the strap.s own ENMO\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
 run = "motion_channel"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "H"
-section = "the motion channel's input"
+section = "what is left, 3 the motion channel's INPUT"
 label = "positive control: the derived series through the same construction"
 documented = "0.038"
 pattern = '^\s+the same, through the synthetic stream\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
 run = "motion_channel"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "H"
-section = "the motion channel's input"
+section = "what is left, 3 the motion channel's INPUT"
 label = "our wake% under the on-chip series"
 documented = "3.6%"
 pattern = '^\s+dynAccelG, the strap.s own ENMO\s+\d+\s+([\d.]+%)'
 
 [[figure]]
 run = "motion_channel"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "H"
-section = "the motion channel's input"
+section = "what is left, 3 the motion channel's INPUT"
 label = "the band's own wake rate over the same seconds"
 documented = "5.5%"
 pattern = '^\s+\|delta gravity\|, derived \(SHIPPED\)\s+\d+\s+[\d.]+%\s+([\d.]+%)'
 
 [[figure]]
 run = "motion_channel"
-doc = "SLEEP-FLOW-AZ.md"
+doc = "SLEEP-AZ-PHASE-PLAN.md"
 step = "H"
-section = "the motion channel's input"
+section = "what is left, 3 the motion channel's INPUT"
 label = "pooled median of the derived jerks"
 documented = "0.00488"
 pattern = '^\s+pooled: \d+ derived jerks, median ([\d.]+) g'
