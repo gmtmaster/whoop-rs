@@ -14,7 +14,7 @@
 
 mod common;
 
-use common::{read_accel, read_csv, read_hr, read_rr};
+use common::{asleep_runs, pct, read_accel, read_csv, read_hr, read_rr};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -25,7 +25,6 @@ use physio_algo::sleep::{
     DetectedSpan, HrSample, RrRun, SleepInput, SleepStage,
 };
 
-const BAND_ASLEEP: i32 = 2;
 const PSG_WAKE: i32 = 0;
 const RUN_MIN_MINUTES: i64 = 90;
 /// A scored non-wake stretch this long fixes PSG onset, matching the staging rule.
@@ -108,44 +107,8 @@ fn load_psg_nights() -> Vec<PsgNight> {
     out
 }
 
-/// Contiguous stretches the strap itself called asleep, at least `min_min` long, tolerating a 5-minute
-/// interruption. This is the band-side reference.
-fn asleep_runs(band: &[(i64, i32)], min_min: i64) -> Vec<(i64, i64)> {
-    let (mut out, mut start, mut last) = (Vec::new(), None::<i64>, 0i64);
-    for &(ts, st) in band {
-        if st != BAND_ASLEEP {
-            continue;
-        }
-        match start {
-            None => start = Some(ts),
-            Some(s) if ts - last > 300 => {
-                if last - s >= min_min * 60 {
-                    out.push((s, last));
-                }
-                start = Some(ts);
-            }
-            _ => {}
-        }
-        last = ts;
-    }
-    if let Some(s) = start {
-        if last - s >= min_min * 60 {
-            out.push((s, last));
-        }
-    }
-    out
-}
-
 fn median(v: &mut [f64]) -> f64 {
     pct(v, 0.5)
-}
-
-fn pct(v: &mut [f64], p: f64) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[((v.len() - 1) as f64 * p) as usize]
 }
 
 #[derive(Default)]
@@ -166,8 +129,8 @@ fn score_band(blocks: &[Block], p: &DetectParams) -> BandScore {
     let mut s = BandScore::default();
     for b in blocks {
         let spans = detect_sessions_with(&b.hr, &b.accel, 0, &[], &b.band, None, p);
-        let runs = asleep_runs(&b.band, RUN_MIN_MINUTES);
-        let any_run = asleep_runs(&b.band, 10);
+        let runs = asleep_runs(&b.band, RUN_MIN_MINUTES, 300);
+        let any_run = asleep_runs(&b.band, 10, 300);
         s.runs += runs.len();
         for &(a, z) in &runs {
             let cov: Vec<&DetectedSpan> = spans.iter().filter(|x| x.start < z && x.end > a).collect();
@@ -232,7 +195,7 @@ fn head_by_run(blocks: &[Block], p: &DetectParams) -> BTreeMap<(usize, i64), f64
     let mut out = BTreeMap::new();
     for (bi, b) in blocks.iter().enumerate() {
         let spans = detect_sessions_with(&b.hr, &b.accel, 0, &[], &b.band, None, p);
-        let runs = asleep_runs(&b.band, RUN_MIN_MINUTES);
+        let runs = asleep_runs(&b.band, RUN_MIN_MINUTES, 300);
         for &(a, z) in &runs {
             let cov: Vec<&DetectedSpan> = spans.iter().filter(|x| x.start < z && x.end > a).collect();
             if cov.len() != 1 {
@@ -254,7 +217,7 @@ fn window_churn(blocks: &[Block], p: &DetectParams) -> (f64, usize) {
     let (mut moved, mut shared) = (0usize, 0usize);
     for b in blocks {
         let spans = detect_sessions_with(&b.hr, &b.accel, 0, &[], &b.band, None, p);
-        for (a, z) in asleep_runs(&b.band, RUN_MIN_MINUTES) {
+        for (a, z) in asleep_runs(&b.band, RUN_MIN_MINUTES, 300) {
             let cov: Vec<&DetectedSpan> = spans.iter().filter(|x| x.start < z && x.end > a).collect();
             if cov.len() != 1 {
                 continue;
@@ -333,7 +296,7 @@ const PSG_HEAD: &str = "  pre-scored  missed";
 fn main() {
     let blocks = load_blocks();
     let nights = load_psg_nights();
-    let runs: usize = blocks.iter().map(|b| asleep_runs(&b.band, RUN_MIN_MINUTES).len()).sum();
+    let runs: usize = blocks.iter().map(|b| asleep_runs(&b.band, RUN_MIN_MINUTES, 300).len()).sum();
     println!(
         "band: {} wear blocks, {runs} strap asleep runs >= {RUN_MIN_MINUTES} min   PSG: {} nights",
         blocks.len(),

@@ -184,6 +184,48 @@ pub fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
     segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
 }
 
+/// The strap's `sleep_state` code for asleep. Every other code is non-asleep, which is the two-class
+/// fold every band-scored figure in the chain uses.
+pub const BAND_ASLEEP: i32 = 2;
+
+/// The strap's own asleep runs of at least `min_min` minutes, joining across gaps up to `tol_s`. The
+/// reference every detection and wake figure is scored against.
+pub fn asleep_runs(band: &[(i64, i32)], min_min: i64, tol_s: i64) -> Vec<(i64, i64)> {
+    let (mut out, mut start, mut last) = (Vec::new(), None::<i64>, 0i64);
+    for &(ts, st) in band {
+        if st != BAND_ASLEEP {
+            continue;
+        }
+        match start {
+            None => start = Some(ts),
+            Some(s) if ts - last > tol_s => {
+                if last - s >= min_min * 60 {
+                    out.push((s, last));
+                }
+                start = Some(ts);
+            }
+            _ => {}
+        }
+        last = ts;
+    }
+    if let Some(s) = start {
+        if last - s >= min_min * 60 {
+            out.push((s, last));
+        }
+    }
+    out
+}
+
+/// The `p`-quantile by nearest rank, sorting in place. `pct(v, 0.5)` is the LOWER middle on an even
+/// count, so it is a third thing again from [`median`] and [`median_avg`].
+pub fn pct(v: &mut [f64], p: f64) -> f64 {
+    if v.is_empty() {
+        return f64::NAN;
+    }
+    v.sort_by(f64::total_cmp);
+    v[((v.len() - 1) as f64 * p) as usize]
+}
+
 /// The upper-middle order statistic, sorting in place. NOT the same as [`median_avg`] on an even count,
 /// and published figures were taken under each, so the two are not interchangeable.
 pub fn median(v: &mut [f64]) -> f64 {

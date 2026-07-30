@@ -15,7 +15,8 @@
 mod common;
 
 use common::{
-    dirs_of, kappa4, median, read_csv, read_rr, read_steps, stage_at, stage_idx, RefineCensus, TwoClass,
+    dirs_of, kappa4, median, read_csv, read_rr, read_steps, stage_at, stage_idx, BAND_ASLEEP, RefineCensus,
+    TwoClass,
 };
 
 use std::collections::BTreeMap;
@@ -30,7 +31,6 @@ use physio_algo::sleep::{
 const EPOCH_SEC: i64 = 30;
 /// One epoch in minutes, for reporting an epoch index as a time.
 const EPOCH_MIN_F: f64 = 0.5;
-const BAND_ASLEEP: i32 = 2;
 const WAKE: usize = 0;
 /// The PSG cohorts, named so every kappa below says which population it came from.
 const PSG: [&str; 3] = ["dreamt", "aauwss", "sleep-accel"];

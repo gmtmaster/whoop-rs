@@ -20,7 +20,8 @@
 mod common;
 
 use common::{
-    dirs_of, median, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, stage_idx, RefineCensus,
+    dirs_of, median, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, stage_idx, BAND_ASLEEP,
+    RefineCensus,
 };
 
 use std::collections::BTreeMap;
@@ -35,7 +36,6 @@ use physio_algo::sleep::{
 
 /// The stager's epoch width, and the band code for asleep.
 const EPOCH_SEC: i64 = 30;
-const BAND_ASLEEP: i32 = 2;
 /// Shortest band asleep run the flow is scored against (minutes).
 const MIN_RUN_MIN: i64 = 90;
 

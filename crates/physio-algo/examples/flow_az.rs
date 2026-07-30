@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::{median, read_csv, root, RefineCensus};
+use common::{asleep_runs, median, pct, read_csv, root, RefineCensus};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -74,42 +74,6 @@ fn load(dir: &Path) -> Option<Block> {
     Some(Block { stored, hr, rr, accel, steps, band })
 }
 
-/// Contiguous stretches the strap itself called asleep, at least `min_min` long, tolerating a 5-minute
-/// interruption. This is the reference the whole flow is scored against.
-fn asleep_runs(band: &[(i64, i32)], min_min: i64) -> Vec<(i64, i64)> {
-    let (mut out, mut start, mut last) = (Vec::new(), None::<i64>, 0i64);
-    for &(ts, st) in band {
-        if st != 2 {
-            continue;
-        }
-        match start {
-            None => start = Some(ts),
-            Some(s) if ts - last > 300 => {
-                if last - s >= min_min * 60 {
-                    out.push((s, last));
-                }
-                start = Some(ts);
-            }
-            _ => {}
-        }
-        last = ts;
-    }
-    if let Some(s) = start {
-        if last - s >= min_min * 60 {
-            out.push((s, last));
-        }
-    }
-    out
-}
-
-fn pct(v: &mut [f64], p: f64) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[((v.len() - 1) as f64 * p) as usize]
-}
-
 fn main() {
     let params = Params::SHIPPED;
     let mut dirs: Vec<PathBuf> = fs::read_dir(root("continuous"))
@@ -135,7 +99,7 @@ fn main() {
         }
         blocks += 1;
         let spans = detect_sessions(&b.hr, &b.accel, 0, &[], &b.band, None);
-        let runs = asleep_runs(&b.band, 90);
+        let runs = asleep_runs(&b.band, 90, 300);
         runs_total += runs.len();
 
         for &(a, z) in &runs {
@@ -160,7 +124,7 @@ fn main() {
         }
         // A span matching no >=90 min run is only a false positive if it matches no asleep stretch at
         // all; the strap's short runs are naps, which a detector is right to find.
-        let any_run = asleep_runs(&b.band, 10);
+        let any_run = asleep_runs(&b.band, 10, 300);
         for s in &spans {
             let n = runs.iter().filter(|(a, z)| s.start < *z && s.end > *a).count();
             if n == 0 {

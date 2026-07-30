@@ -22,7 +22,9 @@
 
 mod common;
 
-use common::{dirs_of, kappa4, read_csv, read_rr, read_steps, root, stage_at, RefineCensus, TwoClass};
+use common::{
+    dirs_of, kappa4, read_csv, read_rr, read_steps, root, stage_at, BAND_ASLEEP, RefineCensus, TwoClass,
+};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -33,7 +35,6 @@ use physio_algo::sleep::{
 };
 
 const EPOCH_SEC: i64 = 30;
-const BAND_ASLEEP: i32 = 2;
 /// Emission/transition columns, mirroring `STAGE_ORDER`.
 const DEEP: usize = 0;
 const REM: usize = 1;

@@ -22,7 +22,10 @@
 
 mod common;
 
-use common::{dirs_of, median, read_accel, read_band, read_hr, read_rr, read_steps, RefineCensus};
+use common::{
+    asleep_runs, dirs_of, median, pct, read_accel, read_band, read_hr, read_rr, read_steps, BAND_ASLEEP,
+    RefineCensus,
+};
 
 use std::path::Path;
 
@@ -32,7 +35,6 @@ use physio_algo::sleep::{
     RrRun, SleepInput, SleepStage, StageSegment, StepSample,
 };
 
-const BAND_ASLEEP: i32 = 2;
 /// Interruption a band asleep run tolerates before it counts as two runs (seconds).
 const RUN_TOLERANCE_S: i64 = 300;
 
@@ -53,34 +55,6 @@ fn load(dir: &Path) -> Option<Block> {
     }
     let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     Some(Block { name, hr: read_hr(dir), rr: read_rr(dir), accel, steps: read_steps(dir), band })
-}
-
-/// Contiguous stretches the strap itself called asleep, at least `min_min` long, tolerating a `tol_s`
-/// interruption. This is the reference the whole flow is scored against.
-fn asleep_runs(band: &[(i64, i32)], min_min: i64, tol_s: i64) -> Vec<(i64, i64)> {
-    let (mut out, mut start, mut last) = (Vec::new(), None::<i64>, 0i64);
-    for &(ts, st) in band {
-        if st != BAND_ASLEEP {
-            continue;
-        }
-        match start {
-            None => start = Some(ts),
-            Some(s) if ts - last > tol_s => {
-                if last - s >= min_min * 60 {
-                    out.push((s, last));
-                }
-                start = Some(ts);
-            }
-            _ => {}
-        }
-        last = ts;
-    }
-    if let Some(s) = start {
-        if last - s >= min_min * 60 {
-            out.push((s, last));
-        }
-    }
-    out
 }
 
 /// Fraction of banded seconds in `(a, b)` the strap called asleep; `None` when the band does not cover it.
@@ -399,14 +373,6 @@ fn section_open_edge(bs: &[Block], runs_total: usize, p: &DetectParams, label: &
         interior.len(),
         first.len() + interior.len() + unhit,
     );
-}
-
-fn pct(v: &mut [f64], p: f64) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[((v.len() - 1) as f64 * p) as usize]
 }
 
 // ── 6  main-night selection ────────────────────────────────────────────────────────────────────────

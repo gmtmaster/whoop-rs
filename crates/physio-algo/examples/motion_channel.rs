@@ -24,7 +24,7 @@
 mod common;
 
 use common::{
-    dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, stage_at,
+    dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, stage_at, BAND_ASLEEP,
     RefineCensus, TwoClass,
 };
 
@@ -33,7 +33,6 @@ use physio_algo::sleep::{
     SleepInput, SleepStage, StepSample,
 };
 
-const BAND_ASLEEP: i32 = 2;
 /// The shipped move multiplier, and the sweep either side of it.
 const MOVE_MULTS: [f64; 7] = [8.0, 16.0, 24.0, 32.0, 38.0, 48.0, 64.0];
 
