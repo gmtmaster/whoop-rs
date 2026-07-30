@@ -14,11 +14,11 @@
 
 mod common;
 
-use common::{kappa4, RefineCensus};
+use common::{dirs_of, kappa4, median, read_csv, read_rr, read_steps, stage_idx, RefineCensus};
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use physio_algo::sleep::{
     detect_sessions, motion_dense, params::Params, prepare_v2, refine_wake, stage_v2_prepared, AccelSample,
@@ -37,70 +37,6 @@ const PSG: [&str; 3] = ["dreamt", "aauwss", "sleep-accel"];
 const PROPENSITY: &str = "propensity";
 const MOTION_GATE: &str = "motion gate";
 const BLIP_FILTER: &str = "blip filter";
-
-fn root(set: &str) -> PathBuf {
-    common::fixtures_root().join(set)
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn dirs_of(set: &str) -> Vec<PathBuf> {
-    let mut d: Vec<PathBuf> = fs::read_dir(root(set))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    d.sort();
-    d
-}
-
-fn read_rr(path: &Path) -> Vec<RrRun> {
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(path) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    rr
-}
-
-/// The strap's own step stream. `-1` in column 3 means the class was not decoded, which is not "still".
-fn read_steps(path: &Path) -> Vec<StepSample> {
-    read_csv(path)
-        .iter()
-        .map(|r| StepSample {
-            ts: r[0] as i64,
-            counter: r[1] as u16,
-            activity_class: (r[2] >= 0.0).then(|| r[2] as u8),
-        })
-        .collect()
-}
-
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[v.len() / 2]
-}
 
 /// Two-class scoreboard against a wake/asleep reference. Raw accuracy rewards a config that rarely says
 /// wake, so kappa is the number to read and the reference's own wake rate is printed beside it.
@@ -187,7 +123,7 @@ fn load_block(d: &Path) -> Option<Block> {
     }
     let hr: Vec<HrSample> =
         read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-    Some(Block { hr, rr: read_rr(&d.join("rr.csv")), accel, steps: read_steps(&d.join("steps.csv")), band })
+    Some(Block { hr, rr: read_rr(d), accel, steps: read_steps(d), band })
 }
 
 /// One detected span with its staging, the band over it, and the streams the refinement reads.
@@ -442,8 +378,8 @@ fn load_ours(d: &Path) -> Option<Night> {
     Some(Night {
         w0: m[1],
         n: m[3] as usize,
-        input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d.join("rr.csv")), accel },
-        steps: read_steps(&d.join("steps.csv")),
+        input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(d), accel },
+        steps: read_steps(d),
         truth,
     })
 }
@@ -582,7 +518,7 @@ fn load_psg(d: &Path) -> Option<PsgNight> {
     Some(PsgNight {
         w0: m[1],
         n: m[3] as usize,
-        input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d.join("rr.csv")), accel },
+        input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(d), accel },
         truth,
     })
 }

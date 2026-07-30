@@ -121,12 +121,9 @@ fn analyze_still_night_stages_and_tiles_the_span() {
     }
 }
 
-/// The golden above carries no step stream, so `analyze`'s last stage declines on it and the frozen
-/// hypnogram cannot see the refinement at all. This drives the same night WITH one.
-///
-/// The golden night's only wake run is its last, 5,309 s of post-wake in-bed time. The shipped rule
-/// leaves it; the rule H opened with converted all of it to light. So the fix is pinned end to end, on
-/// the same crafted night the recipe is frozen against.
+/// The golden above carries no step stream, so `analyze`'s last stage declines on it. This drives the
+/// same night WITH one. Its only wake run is its last, 5,309 s of post-wake in-bed time: the shipped
+/// rule leaves it and the rule H opened with took all of it, so the fix is pinned end to end here.
 #[test]
 fn analyze_keeps_the_golden_night_trailing_wake_when_the_step_stream_is_dense() {
     let input = golden_input();

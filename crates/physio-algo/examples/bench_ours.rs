@@ -12,18 +12,15 @@
 
 mod common;
 
+use common::{median_avg, read_csv, root, stage_idx};
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
     params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, Prepared, RrRun, SleepInput,
-    SleepStage,
 };
-
-fn root() -> PathBuf {
-    common::fixtures_root().join("ours")
-}
 
 struct Night {
     owner: String,
@@ -31,17 +28,6 @@ struct Night {
     w0: i64,
     n_epochs: usize,
     truth: BTreeMap<usize, i32>,
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn load(dir: &Path) -> Option<Night> {
@@ -72,15 +58,6 @@ fn load(dir: &Path) -> Option<Night> {
     Some(Night { owner, input: SleepInput { start: w0, end: w1, hr, rr, accel }, w0, n_epochs, truth })
 }
 
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
-}
-
 fn labels(n: &Night, prep: &Prepared, p: &Params) -> Vec<usize> {
     let segs = stage_v2_prepared(prep, p);
     (0..n.n_epochs)
@@ -96,23 +73,14 @@ fn labels(n: &Night, prep: &Prepared, p: &Params) -> Vec<usize> {
         .collect()
 }
 
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = v.len();
-    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
-}
-
 fn main() {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();
     let nights: Vec<Night> = dirs.iter().filter_map(|d| load(d)).collect();
     if nights.is_empty() {
-        println!("no nights under {}", root().display());
+        println!("no nights under {}", root("ours").display());
         return;
     }
 
@@ -180,7 +148,7 @@ fn main() {
             "{:<19} {:>6.1}{:>6.1}{:>6.1}{:>7.1} {:>7.1} min {:>10.1}{:>9.1}{:>9.1} {:>9.1}",
             name,
             pct(frac[0]), pct(frac[1]), pct(frac[2]), pct(frac[3]),
-            median(&mut lat),
+            median_avg(&mut lat),
             100.0 * frac_lab[0] as f64 / all_lab as f64,
             100.0 * wake_true as f64 / tot as f64,
             100.0 * wake_hit as f64 / wake_true.max(1) as f64,

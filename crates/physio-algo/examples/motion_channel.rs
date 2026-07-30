@@ -23,7 +23,7 @@
 
 mod common;
 
-use common::{dirs_of, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, RefineCensus};
+use common::{dirs_of, median, read_accel, read_band, read_dyn_accel, read_hr, read_rr, read_steps, RefineCensus};
 
 use physio_algo::sleep::{
     detect_sessions, params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun,
@@ -120,14 +120,6 @@ impl TwoClass {
         let expect = (pw * tw + (n - pw) * (n - tw)) / (n * n);
         if expect >= 1.0 { 0.0 } else { (agree - expect) / (1.0 - expect) }
     }
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(f64::total_cmp);
-    v[v.len() / 2]
 }
 
 /// The derived series in the same `(ts, magnitude)` shape the on-chip column arrives in, so it can be

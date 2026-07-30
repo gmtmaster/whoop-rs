@@ -22,7 +22,7 @@
 
 mod common;
 
-use common::{dirs_of, read_accel, read_band, read_hr, read_rr, read_steps, RefineCensus};
+use common::{dirs_of, median, read_accel, read_band, read_hr, read_rr, read_steps, RefineCensus};
 
 use std::path::Path;
 
@@ -95,14 +95,6 @@ fn band_asleep_frac(band: &[(i64, i32)], a: i64, b: i64) -> Option<f64> {
 /// Seconds the strap called asleep inside `[a, b]`, on a 1 Hz band.
 fn band_asleep_secs(band: &[(i64, i32)], a: i64, b: i64) -> i64 {
     band.iter().filter(|(t, s)| *t >= a && *t <= b && *s == BAND_ASLEEP).count() as i64
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[v.len() / 2]
 }
 
 fn local_day(ts: i64, offset_s: i64) -> i64 {

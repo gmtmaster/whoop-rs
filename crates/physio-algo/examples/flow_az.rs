@@ -16,7 +16,7 @@
 
 mod common;
 
-use common::RefineCensus;
+use common::{median, read_csv, root, RefineCensus};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,21 +25,6 @@ use physio_algo::sleep::{
     detect_sessions, params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun,
     SleepInput, SleepStage, StepSample,
 };
-
-fn root() -> PathBuf {
-    common::fixtures_root().join("continuous")
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// One row of `sessions.csv`: the window the app kept, and whether the user set it by hand. A
 /// hand-corrected window is frozen against re-detection by design, so scoring it against the strap
@@ -117,14 +102,6 @@ fn asleep_runs(band: &[(i64, i32)], min_min: i64) -> Vec<(i64, i64)> {
     out
 }
 
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[v.len() / 2]
-}
-
 fn pct(v: &mut [f64], p: f64) -> f64 {
     if v.is_empty() {
         return f64::NAN;
@@ -135,7 +112,7 @@ fn pct(v: &mut [f64], p: f64) -> f64 {
 
 fn main() {
     let params = Params::SHIPPED;
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root("continuous"))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();

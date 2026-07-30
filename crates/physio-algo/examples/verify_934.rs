@@ -10,6 +10,8 @@
 
 mod common;
 
+use common::{median_avg, read_csv, stage_idx};
+
 use common::kappa4 as kappa;
 
 use std::collections::BTreeMap;
@@ -18,7 +20,6 @@ use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
     params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, Prepared, RrRun, SleepInput,
-    SleepStage,
 };
 
 const PSG: [&str; 3] = ["sleep-accel", "dreamt", "aauwss"];
@@ -34,17 +35,6 @@ struct Night {
     w0: i64,
     n_epochs: usize,
     truth: BTreeMap<usize, i32>,
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn load_night(dir: &Path, need_truth: bool) -> Option<Night> {
@@ -85,15 +75,6 @@ fn load_dataset(ds: &str, need_truth: bool) -> Vec<Night> {
     dirs.iter().filter_map(|d| load_night(d, need_truth)).collect()
 }
 
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
-}
-
 fn labels(n: &Night, prep: &Prepared, p: &Params) -> Vec<usize> {
     let segs = stage_v2_prepared(prep, p);
     (0..n.n_epochs)
@@ -119,15 +100,6 @@ fn onset_of(seq: &[usize]) -> Option<usize> {
         }
     }
     None
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = v.len();
-    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
 }
 
 fn mean(v: &[f64]) -> f64 {
@@ -192,7 +164,7 @@ fn units_claim(ds: &str, nights: &[Night]) {
         ds, lat_min.len(),
         pearson(&lat_min, &spans), pearson(&rl, &rs),
         sd(&lat_min) / mean(&lat_min), sd(&lat_frac) / mean(&lat_frac),
-        median(&mut lat_min.clone()), median(&mut spans.clone()),
+        median_avg(&mut lat_min.clone()), median_avg(&mut spans.clone()),
     );
 }
 
@@ -266,7 +238,7 @@ fn score(nights: &[Night], p: &Params, base: Option<&Vec<Vec<usize>>>) -> (Row, 
     }
     let lo = lat.iter().cloned().fold(f64::INFINITY, f64::min);
     (
-        Row { kappa: kappa(&cm), frac: f, lat_from_onset: median(&mut lat), lat_min_of_nights: lo, changed },
+        Row { kappa: kappa(&cm), frac: f, lat_from_onset: median_avg(&mut lat), lat_min_of_nights: lo, changed },
         all,
     )
 }
@@ -339,7 +311,7 @@ fn main() {
             let pc = |s: i32| 100.0 * t.iter().filter(|&&x| x == s).count() as f64 / tot;
             println!(
                 "{:<22} {:>6} {:>6.1}{:>6.1}{:>6.1}{:>7.1} {:>9.1} min   <- truth",
-                "TRUTH", "-", pc(0), pc(1), pc(2), pc(3), median(&mut lat)
+                "TRUTH", "-", pc(0), pc(1), pc(2), pc(3), median_avg(&mut lat)
             );
         }
     }

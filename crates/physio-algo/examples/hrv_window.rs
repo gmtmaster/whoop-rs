@@ -13,8 +13,10 @@
 
 mod common;
 
+use common::{median, read_csv, root};
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use physio_algo::hrv::HrvReadiness;
 use physio_algo::sleep::{
@@ -26,26 +28,6 @@ const MATCH_SLACK_S: i64 = 4 * 3600;
 
 fn fixtures() -> PathBuf {
     common::fixtures_root()
-}
-
-fn root() -> PathBuf {
-    fixtures().join("ours")
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').filter_map(|c| c.trim().parse::<f64>().ok()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    if v.is_empty() { f64::NAN } else { v[v.len() / 2] }
 }
 
 /// A half-open span of unix seconds.
@@ -108,7 +90,7 @@ fn last_deep_run(deep: &[Span]) -> Vec<Span> {
 }
 
 fn main() {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();

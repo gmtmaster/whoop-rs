@@ -19,7 +19,9 @@
 
 mod common;
 
-use common::{dirs_of, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, RefineCensus};
+use common::{
+    dirs_of, median, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, stage_idx, RefineCensus,
+};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -36,14 +38,6 @@ const EPOCH_SEC: i64 = 30;
 const BAND_ASLEEP: i32 = 2;
 /// Shortest band asleep run the flow is scored against (minutes).
 const MIN_RUN_MIN: i64 = 90;
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[v.len() / 2]
-}
 
 /// The stager's first epoch start for a window opening at `start`: the first multiple of `EPOCH_SEC`
 /// at or after it. Mirrors `v2::features`, which anchors the grid to ABSOLUTE unix time, not to `start`.
@@ -98,15 +92,6 @@ fn load_night(d: &Path) -> Option<Night> {
 
 fn nights() -> Vec<Night> {
     dirs_of("ours").iter().filter_map(|d| load_night(d)).collect()
-}
-
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
 }
 
 /// One label per epoch of `[w0, w0 + n*EPOCH_SEC)`, read at each epoch's MIDPOINT out of a staging's

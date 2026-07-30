@@ -11,6 +11,8 @@
 
 mod common;
 
+use common::{median_avg, read_csv};
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,17 +33,6 @@ struct Night {
     w0: i64,
     n_epochs: usize,
     truth: BTreeMap<usize, i32>,
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn load_night(dir: &Path) -> Option<Night> {
@@ -134,15 +125,6 @@ fn labels(night: &Night, prep: &Prepared, p: &Params) -> Vec<usize> {
         .collect()
 }
 
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = v.len();
-    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
-}
-
 struct Score {
     kappa: f64,
     /// Predicted share of scored epochs per stage, and the same for the truth column.
@@ -192,8 +174,8 @@ fn score(nights: &[Night], prep: &[Prepared], p: &Params) -> Score {
         pred_frac,
         truth_frac,
         recall,
-        lat_pred: median(&mut lp),
-        lat_truth: median(&mut lt),
+        lat_pred: median_avg(&mut lp),
+        lat_truth: median_avg(&mut lt),
         rem_nights,
         n_nights: nights.len(),
     }

@@ -11,6 +11,8 @@
 
 mod common;
 
+use common::{read_csv};
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::fs;
@@ -32,17 +34,6 @@ struct Night {
     w0: i64,
     n_epochs: usize,
     truth: BTreeMap<usize, i32>,
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn load_night(dir: &Path) -> Option<Night> {

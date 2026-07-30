@@ -17,8 +17,8 @@
 mod common;
 
 use common::{
-    dirs_of, kappa4, night_id, pair_nearest, pre_retune, read_accel, read_hr, read_meta, read_rr,
-    read_steps, RefineCensus,
+    dirs_of, kappa4, night_id, pair_nearest, pre_retune, read_accel, read_hr, read_meta, read_rr, read_steps,
+     stage_idx, RefineCensus,
 };
 
 use std::fs;
@@ -77,15 +77,6 @@ struct PsgScore {
     ours: [f64; 4],
     truth: [f64; 4],
     kappa: f64,
-}
-
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
 }
 
 fn load_ours() -> Vec<Night> {

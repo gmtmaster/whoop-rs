@@ -21,6 +21,8 @@
 
 mod common;
 
+use common::{median, read_csv, root};
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,21 +33,6 @@ const BAND_ASLEEP: i32 = 2;
 const RUN_TOLERANCE_S: i64 = 300;
 /// A close this far before the strap's own asleep end is the truncation Step D exists to find.
 const EARLY_CLOSE_MIN: f64 = 15.0;
-
-fn root() -> PathBuf {
-    common::fixtures_root().join("continuous")
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// One row of `sessions.csv`: the window the app kept, and whether the user set it by hand.
 #[derive(Clone, Copy)]
@@ -114,14 +101,6 @@ fn asleep_runs(band: &[(i64, i32)], min_min: i64, tol_s: i64) -> Vec<(i64, i64)>
     out
 }
 
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    v[v.len() / 2]
-}
-
 fn pct(v: &mut [f64], p: f64) -> f64 {
     if v.is_empty() {
         return f64::NAN;
@@ -131,7 +110,7 @@ fn pct(v: &mut [f64], p: f64) -> f64 {
 }
 
 fn blocks() -> Vec<Block> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root("continuous"))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();

@@ -18,8 +18,10 @@
 
 mod common;
 
-use common::{dirs_of, night_id, pair_nearest, read_accel, read_band, read_hr, read_meta, read_rr, read_steps,
-    Export, RefineCensus};
+use common::{
+    dirs_of, median, night_id, pair_nearest, read_accel, read_band, read_hr, read_meta, read_rr, read_steps,
+     Export, RefineCensus,
+};
 
 use physio_algo::sleep::{
     detect_sessions, epoch_starts_v2, motion_density, params::Params, prepare_v2, refine_wake_with,
@@ -145,14 +147,6 @@ fn continuous_spans(p: &Params) -> Vec<Span> {
 
 fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
     segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(f64::total_cmp);
-    v[v.len() / 2]
 }
 
 // ── 1  the pass reproduced ────────────────────────────────────────────────────────────────────────

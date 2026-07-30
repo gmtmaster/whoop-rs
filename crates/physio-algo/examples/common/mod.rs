@@ -11,8 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
-    motion_density, params::Params, refine_wake, AccelSample, HrSample, RrRun, StageSegment, StepSample,
-    MIN_DENSE_FRACTION,
+    motion_density, params::Params, refine_wake, AccelSample, HrSample, RrRun, SleepStage, StageSegment,
+    StepSample, MIN_DENSE_FRACTION,
 };
 
 /// The de-duplicated corpus, and the default for every harness. The raw `fixtures_multi` root holds each
@@ -130,6 +130,36 @@ pub fn pre_retune(base: &Params) -> Params {
             [0.01, 0.02, 0.27, 0.70],
         ],
         ..*base
+    }
+}
+
+/// The upper-middle order statistic, sorting in place. NOT the same as [`median_avg`] on an even count,
+/// and published figures were taken under each, so the two are not interchangeable.
+pub fn median(v: &mut [f64]) -> f64 {
+    if v.is_empty() {
+        return f64::NAN;
+    }
+    v.sort_by(f64::total_cmp);
+    v[v.len() / 2]
+}
+
+/// The median that averages the two middles on an even count. See [`median`] for why both exist.
+pub fn median_avg(v: &mut [f64]) -> f64 {
+    if v.is_empty() {
+        return f64::NAN;
+    }
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
+}
+
+/// `STAGE_ORDER`'s index for a stage: the column order every confusion matrix and fraction table uses.
+pub fn stage_idx(s: SleepStage) -> usize {
+    match s {
+        SleepStage::Wake => 0,
+        SleepStage::Light => 1,
+        SleepStage::Deep => 2,
+        SleepStage::Rem => 3,
     }
 }
 

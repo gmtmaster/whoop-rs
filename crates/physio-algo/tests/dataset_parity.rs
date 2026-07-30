@@ -186,10 +186,9 @@ fn v2_sleep_accel_kappa_matches_shipped() {
     assert!((kappa - 0.379).abs() < 0.008, "V2 sleep-accel kappa {kappa:.3} off target 0.379");
 }
 
-/// Every EPOCH-LABELLED set the corpus holds, each with what its labels are worth, so a set cannot sit
-/// in the tree unnamed. `whoop4` was doing exactly that: 20 nights of real 4.0 live BLE that no Rust
-/// harness read and no dataset matrix listed. A set whose fixtures carry no labels is reported as such,
-/// never as kappa 0. Prints only — the three gates above are what fail on drift.
+/// Every epoch-labelled set the corpus holds, with what its labels are worth, so none sits unnamed —
+/// `whoop4` was doing exactly that, 20 nights no harness read. A set with no labels says so rather than
+/// scoring kappa 0. Prints only; the three gates above are what fail on drift.
 #[test]
 #[ignore = "reads external fixtures; run with --ignored for the full sheet"]
 fn v2_all_datasets_report() {

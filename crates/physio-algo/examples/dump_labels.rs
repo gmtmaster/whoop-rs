@@ -11,27 +11,14 @@
 
 mod common;
 
+use common::{read_csv, root};
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use physio_algo::sleep::{
     params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun, SleepInput, SleepStage,
 };
-
-fn root() -> PathBuf {
-    common::fixtures_root().join("ours")
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 fn main() {
     let shipped = Params::SHIPPED;
@@ -39,7 +26,7 @@ fn main() {
     let mut capped = shipped;
     capped.cycle_rem_ramp_cap = 0.7;
 
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();

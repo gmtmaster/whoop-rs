@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{dirs_of, night_id, read_accel, read_hr, read_meta, read_rr, read_steps};
+use common::{dirs_of, night_id, read_accel, read_hr, read_meta, read_rr, read_steps, stage_idx};
 
 use physio_algo::hrv::HrvReadiness;
 use physio_algo::recovery::{recovery, DriverBaseline, RecoveryInput, W_HRV, W_SLEEP};
@@ -48,15 +48,6 @@ struct Night {
     /// sample types, so the conversion happens once here rather than per perturbation.
     rhr_hr: Vec<physio_algo::HrSample>,
     refined: bool,
-}
-
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
 }
 
 fn load_ours() -> Vec<Night> {

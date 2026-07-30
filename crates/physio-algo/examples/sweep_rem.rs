@@ -12,6 +12,8 @@
 
 mod common;
 
+use common::{median_avg, read_csv, stage_idx};
+
 use common::kappa4 as kappa;
 
 use std::collections::BTreeMap;
@@ -20,7 +22,6 @@ use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
     params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, Prepared, RrRun, SleepInput,
-    SleepStage,
 };
 
 const SETS: [&str; 3] = ["sleep-accel", "dreamt", "aauwss"];
@@ -36,17 +37,6 @@ struct Night {
     w0: i64,
     n_epochs: usize,
     truth: BTreeMap<usize, i32>,
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 fn load_night(dir: &Path) -> Option<Night> {
@@ -87,15 +77,6 @@ fn load(ds: &str) -> Vec<Night> {
     dirs.iter().filter_map(|d| load_night(d)).collect()
 }
 
-fn stage_idx(s: SleepStage) -> usize {
-    match s {
-        SleepStage::Wake => 0,
-        SleepStage::Light => 1,
-        SleepStage::Deep => 2,
-        SleepStage::Rem => 3,
-    }
-}
-
 fn labels(n: &Night, prep: &Prepared, p: &Params) -> Vec<usize> {
     let segs = stage_v2_prepared(prep, p);
     (0..n.n_epochs)
@@ -120,15 +101,6 @@ fn onset_of(seq: &[usize]) -> Option<usize> {
         }
     }
     None
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    if v.is_empty() {
-        return f64::NAN;
-    }
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = v.len();
-    if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2.0 }
 }
 
 struct Set {
@@ -165,7 +137,7 @@ fn score(sets: &[Set], p: &Params) -> (f64, f64, f64, f64) {
         rem += srem;
         all += sall;
         rem_err.push((100.0 * srem as f64 / sall as f64 - s.truth_rem).abs());
-        lat_err.push((median(&mut lats) - s.truth_lat).abs());
+        lat_err.push((median_avg(&mut lats) - s.truth_lat).abs());
     }
     (
         kappa(&cm),
@@ -196,7 +168,7 @@ fn main() {
                     }
                 }
             }
-            Some(Set { nights, prep, truth_rem: 100.0 * rem / tot, truth_lat: median(&mut lats) })
+            Some(Set { nights, prep, truth_rem: 100.0 * rem / tot, truth_lat: median_avg(&mut lats) })
         })
         .collect();
     for (ds, s) in SETS.iter().zip(&sets) {

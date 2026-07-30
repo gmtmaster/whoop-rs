@@ -14,9 +14,11 @@
 
 mod common;
 
+use common::{read_accel, read_csv, read_hr, read_rr};
+
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use physio_algo::sleep::{
     detect_sessions_with, params::Params, prepare_v2, stage_v2_prepared, AccelSample, DetectParams,
@@ -31,40 +33,6 @@ const ONSET_RUN_EPOCHS: usize = 10;
 
 fn fixtures_root() -> PathBuf {
     common::fixtures_root()
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn read_hr(dir: &Path) -> Vec<HrSample> {
-    read_csv(&dir.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect()
-}
-
-fn read_accel(dir: &Path) -> Vec<AccelSample> {
-    read_csv(&dir.join("gravity.csv"))
-        .iter()
-        .map(|r| AccelSample { ts: r[0] as i64, x: r[1], y: r[2], z: r[3] })
-        .collect()
-}
-
-fn read_rr(dir: &Path) -> Vec<RrRun> {
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(&dir.join("rr.csv")) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    rr
 }
 
 fn subdirs(ds: &str) -> Vec<PathBuf> {

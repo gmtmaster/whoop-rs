@@ -22,15 +22,14 @@
 
 mod common;
 
-use common::{kappa4, RefineCensus};
+use common::{dirs_of, kappa4, read_csv, read_rr, read_steps, root, RefineCensus};
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use physio_algo::sleep::{
     decode_v2, detect_sessions, emissions_v2, epoch_starts_v2, params::Params, prepare_v2, segments_v2,
-    AccelSample, HrSample, Prepared, RrRun, SleepInput, SleepStage, StageSegment, StepSample,
+    AccelSample, HrSample, Prepared, SleepInput, SleepStage, StageSegment, StepSample,
 };
 
 const EPOCH_SEC: i64 = 30;
@@ -50,52 +49,6 @@ const PSG: [&str; 3] = ["dreamt", "aauwss", "sleep-accel"];
 const TRUTH_TO_COL: [usize; 4] = [AWAKE, LIGHT, DEEP, REM];
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────────
-
-fn root(set: &str) -> PathBuf {
-    common::fixtures_root().join(set)
-}
-
-fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn dirs_of(set: &str) -> Vec<PathBuf> {
-    let mut d: Vec<PathBuf> = fs::read_dir(root(set))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    d.sort();
-    d
-}
-
-fn read_rr(path: &Path) -> Vec<RrRun> {
-    let mut rr: Vec<RrRun> = Vec::new();
-    for row in read_csv(path) {
-        let (ts, ms) = (row[0] as i64, row[1] as u16);
-        match rr.last_mut() {
-            Some(l) if l.ts == ts => l.intervals.push(ms),
-            _ => rr.push(RrRun { ts, intervals: vec![ms] }),
-        }
-    }
-    rr
-}
-
-fn read_steps(path: &Path) -> Vec<StepSample> {
-    read_csv(path)
-        .iter()
-        .map(|r| StepSample {
-            ts: r[0] as i64,
-            counter: r[1] as u16,
-            activity_class: (r[2] >= 0.0).then(|| r[2] as u8),
-        })
-        .collect()
-}
 
 /// One detected span off a continuous block: the prepared features, the streams the refinement reads, and
 /// the band per second and per epoch.
@@ -125,8 +78,8 @@ fn continuous_spans(p: &Params) -> Vec<Span> {
         }
         let hr: Vec<HrSample> =
             read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
-        let rr = read_rr(&d.join("rr.csv"));
-        let steps = read_steps(&d.join("steps.csv"));
+        let rr = read_rr(&d);
+        let steps = read_steps(&d);
         for s in detect_sessions(&hr, &accel, 0, &[], &band, None) {
             let input = SleepInput {
                 start: s.start,
@@ -200,7 +153,7 @@ fn load_psg(set: &str) -> Vec<PsgNight> {
             read_csv(&d.join("hr.csv")).iter().map(|r| HrSample { ts: r[0] as i64, bpm: r[1] as u16 }).collect();
         out.push(PsgNight {
             name: d.file_name().unwrap().to_string_lossy().to_string(),
-            input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d.join("rr.csv")), accel },
+            input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d), accel },
             truth,
         });
     }

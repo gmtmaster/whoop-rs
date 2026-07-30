@@ -3414,3 +3414,359 @@ section = "the corpus"
 label = "0.953 rule: continuous blocks cleaned, and beats in -> out"
 documented = "36 of 64, 6499433 -> 5657121"
 note = "same command; and the per-rule false-positive control is the same script with a gate of 0 and one rule named"
+
+# ─────────────────────────── H, Z and the debt items closed at the end ───────────────────────────
+
+[[run]]
+id = "wake_refine"
+example = "wake_refine"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
+step = "H"
+what = "the wake refinement: what it converts, on both references, and the three bounded rescues"
+
+[[run]]
+id = "sleep_to_charge"
+example = "sleep_to_charge"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
+step = "Z"
+what = "a known sleep error followed into Rest and Charge, with the two channels separated"
+
+[[run]]
+id = "motion_channel"
+example = "motion_channel"
+fixtures = "sleep-benchmark/fixtures_multi_clean2"
+step = "H"
+what = "the motion channel's INPUT: the strap's on-chip ENMO against the derived jerk, with a control"
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "1 the refinement reproduced"
+label = "unrefined, gate-accepted, kappa2"
+documented = "0.162"
+pattern = '^\s+stage_v2, gate-accepted\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "1 the refinement reproduced"
+label = "pre-H rule, gate-accepted, kappa2"
+documented = "0.130"
+pattern = '^\s+\+ refine_wake pre-H, gate-accepted\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "1 the refinement reproduced"
+label = "SHIPPED rule, gate-accepted, kappa2"
+documented = "0.193"
+pattern = '^\s+\+ refine_wake SHIPPED, gate-accepted\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "1 the refinement reproduced"
+label = "SHIPPED rule, gate-accepted, precision"
+documented = "23.4"
+pattern = '^\s+\+ refine_wake SHIPPED, gate-accepted\s+[\d.]+%\s+[\d.]+%\s+[\d.]+\s+[\d.]+\s+([\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "1 the refinement reproduced"
+label = "our wake%, SHIPPED, gate-accepted"
+documented = "15.7%"
+pattern = '^\s+\+ refine_wake SHIPPED, gate-accepted\s+([\d.]+%)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "1 the refinement reproduced"
+label = "spans the density gate accepts"
+documented = "28"
+pattern = 'the refinement: (\d+) of 34 spans REFINED'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "2 what the pre-H pass converts"
+label = "seconds the pre-H rule flips"
+documented = "24039"
+pattern = '^\s+FLIPPED to light by the pass\s+(\d+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "2 what the pre-H pass converts"
+label = "share of flipped seconds the band calls asleep"
+documented = "75.8%"
+pattern = '^\s+FLIPPED to light by the pass\s+\d+\s+([\d.]+%)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "2 what the pre-H pass converts"
+label = "share of KEPT wake the band calls asleep"
+documented = "80.6%"
+pattern = '^\s+KEPT as wake\s+\d+\s+([\d.]+%)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "2 what the pre-H pass converts"
+label = "flipped seconds sitting at a span edge"
+documented = "5822"
+pattern = '^\s+(\d+) of the \d+ flipped seconds sit at an edge'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "2 what the pre-H pass converts"
+label = "edge flips that are right"
+documented = "0"
+pattern = 'flipped seconds sit at an edge, and (\d+) of those are right'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "2 what the pre-H pass converts"
+label = "interior flips, all of them right"
+documented = "18217"
+pattern = '^\s+interior\s+(\d+)\s+\d+\s+100\.0%'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "3 the export reference"
+label = "export wake error, unrefined, gate-accepted nights"
+documented = "+1.8"
+pattern = '^\s+stage_v2, gate-accepted nights\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "3 the export reference"
+label = "export wake error, pre-H rule"
+documented = "+0.8"
+pattern = '^\s+\+ refine_wake pre-H\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "3 the export reference"
+label = "export wake error, SHIPPED rule"
+documented = "+0.9"
+pattern = '^\s+\+ refine_wake SHIPPED \(the app\)\s+\d+\s+[\d.]+\s+[\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "3 the export reference"
+label = "the four efficiency readings"
+documented = "efficiency: WHOOP 93.8%, stage_v2 92.1%, pre-H 93.1%, SHIPPED 93.0%"
+pattern = '^\s+(efficiency: WHOOP [\d.]+%, stage_v2 [\d.]+%, pre-H [\d.]+%, SHIPPED [\d.]+%)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "4 why no PSG cohort can score it"
+label = "dreamt nights the density gate declines"
+documented = "100"
+pattern = '^\s+dreamt\s+\d+\s+(\d+)\s+0\s'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "5 three bounded rescues"
+label = "the adopted rule, band delta-kappa2 against pre-H"
+documented = "+0.062"
+pattern = 'ADOPTED \*\*\s+([-+][\d.]+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "6 the adopted rule second by second"
+label = "seconds held back as wake"
+documented = "8412"
+pattern = '^\s+held back as wake\s+(\d+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "6 the adopted rule second by second"
+label = "share of the held-back seconds the band calls asleep"
+documented = "37.9%"
+pattern = '^\s+held back as wake\s+\d+\s+([\d.]+%)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "6 the adopted rule second by second"
+label = "flips the adopted rule still makes"
+documented = "15627"
+pattern = '^\s+still flipped\s+(\d+)'
+
+[[figure]]
+run = "wake_refine"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "6 the adopted rule second by second"
+label = "share of those the band calls asleep"
+documented = "96.2%"
+pattern = '^\s+still flipped\s+\d+\s+([\d.]+%)'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "2 the unperturbed population"
+label = "nights scored"
+documented = "85"
+pattern = 'the unperturbed population, (\d+) nights'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "3 the transfer"
+label = "10 pp of wake, change in Charge"
+documented = "-2.36"
+pattern = '^\s+light -> wake 10 pp\s+\S+\s+\S+\s+\S+\s+\S+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "3 the transfer"
+label = "10 pp of wake, gain"
+documented = "0.24"
+pattern = '^\s+light -> wake 10 pp\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+([\d.]+)'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "3 the transfer"
+label = "10 pp of deep, change in Charge"
+documented = "+2.31"
+pattern = '^\s+light -> deep 10 pp\s+\S+\s+\S+\s+\S+\s+\S+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "4 the two channels separated"
+label = "10 pp of wake, the HRV channel is inert"
+documented = "+0.00"
+pattern = '^\s+light -> wake 10 pp\s+[-+][\d.]+\s+([-+][\d.]+)\s+[-+][\d.]+\s+[-+][\d.]+\s*$'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "4 the two channels separated"
+label = "10 pp of deep, the HRV channel"
+documented = "+1.58"
+pattern = '^\s+light -> deep 10 pp\s+[-+][\d.]+\s+([-+][\d.]+)\s+[-+][\d.]+\s+[-+][\d.]+\s*$'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "4 the two channels separated"
+label = "10 pp of deep, the Rest channel"
+documented = "+0.72"
+pattern = '^\s+light -> deep 10 pp\s+[-+][\d.]+\s+[-+][\d.]+\s+([-+][\d.]+)\s+[-+][\d.]+\s*$'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "5 the chain's own errors priced"
+label = "I's 6.6 pp deep under-call, in points of Charge"
+documented = "+1.80"
+pattern = '^\s+I: deep under-called 6\.6 pp vs the export\s+[-+][\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "sleep_to_charge"
+doc = "SLEEP-FLOW-AZ.md"
+step = "Z"
+section = "5 the chain's own errors priced"
+label = "E's window sensitivity, in points of Charge"
+documented = "-1.19"
+pattern = '^\s+E: window sensitivity, 5\.2% of labels\s+[-+][\d.]+\s+([-+][\d.]+)'
+
+[[figure]]
+run = "motion_channel"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "the motion channel's input"
+label = "derived jerk, band kappa2"
+documented = "0.038"
+pattern = '^\s+\|delta gravity\|, derived \(SHIPPED\)\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "motion_channel"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "the motion channel's input"
+label = "on-chip ENMO, band kappa2"
+documented = "0.142"
+pattern = '^\s+dynAccelG, the strap.s own ENMO\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "motion_channel"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "the motion channel's input"
+label = "positive control: the derived series through the same construction"
+documented = "0.038"
+pattern = '^\s+the same, through the synthetic stream\s+\d+\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
+
+[[figure]]
+run = "motion_channel"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "the motion channel's input"
+label = "our wake% under the on-chip series"
+documented = "3.6%"
+pattern = '^\s+dynAccelG, the strap.s own ENMO\s+\d+\s+([\d.]+%)'
+
+[[figure]]
+run = "motion_channel"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "the motion channel's input"
+label = "the band's own wake rate over the same seconds"
+documented = "5.5%"
+pattern = '^\s+\|delta gravity\|, derived \(SHIPPED\)\s+\d+\s+[\d.]+%\s+([\d.]+%)'
+
+[[figure]]
+run = "motion_channel"
+doc = "SLEEP-FLOW-AZ.md"
+step = "H"
+section = "the motion channel's input"
+label = "pooled median of the derived jerks"
+documented = "0.00488"
+pattern = '^\s+pooled: \d+ derived jerks, median ([\d.]+) g'

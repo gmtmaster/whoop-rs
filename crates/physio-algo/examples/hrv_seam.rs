@@ -11,22 +11,15 @@
 
 mod common;
 
+use common::{median, root};
+
 use std::fs;
 use std::path::PathBuf;
 
 use physio_algo::hrv::HrvReadiness;
 
-fn root() -> PathBuf {
-    common::fixtures_root().join("ours")
-}
-
-fn median(v: &mut [f64]) -> f64 {
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    if v.is_empty() { f64::NAN } else { v[v.len() / 2] }
-}
-
 fn main() {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root())
+    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     dirs.sort();
