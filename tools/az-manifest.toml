@@ -896,7 +896,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "absorb 0, + refine_wake (the app), accuracy"
-documented = "81.88%"
+documented = "81.70%"
 pattern = 'absorb 0 \(before\), \+ refine_wake \(the app\)\s+\d+\s+([\d.]+)%'
 
 [[figure]]
@@ -905,7 +905,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "absorb 0, + refine_wake (the app), kappa2"
-documented = "0.115"
+documented = "0.139"
 pattern = 'absorb 0 \(before\), \+ refine_wake \(the app\)\s+\d+\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
@@ -914,7 +914,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "absorb 45, + refine_wake (the app), accuracy"
-documented = "81.62%"
+documented = "81.97%"
 pattern = 'absorb 45 \(shipped\), \+ refine_wake \(the app\)\s+\d+\s+([\d.]+)%'
 
 [[figure]]
@@ -923,7 +923,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "absorb 45, + refine_wake (the app), kappa2"
-documented = "0.130"
+documented = "0.193"
 pattern = 'absorb 45 \(shipped\), \+ refine_wake \(the app\)\s+\d+\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
@@ -950,7 +950,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "absorb 45, PAIRED + refine_wake, accuracy"
-documented = "81.89%"
+documented = "82.22%"
 pattern = 'absorb 45 \(shipped\), PAIRED seconds, \+ refine_wake\s+\d+\s+([\d.]+)%'
 
 [[figure]]
@@ -959,7 +959,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "absorb 45, PAIRED + refine_wake, kappa2"
-documented = "0.112"
+documented = "0.176"
 pattern = 'absorb 45 \(shipped\), PAIRED seconds, \+ refine_wake\s+\d+\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
@@ -986,7 +986,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "the absorb's worth, + refine_wake, accuracy delta"
-documented = "-0.26"
+documented = "+0.27"
 pattern = '\+ refine_wake, dense spans               accuracy ([-+][\d.]+) pp'
 
 [[figure]]
@@ -995,7 +995,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "the absorb's worth, + refine_wake, kappa2 delta"
-documented = "+0.016"
+documented = "+0.054"
 pattern = '\+ refine_wake, dense spans               accuracy [-+][\d.]+ pp   kappa2 ([-+][\d.]+)'
 
 [[figure]]
@@ -1004,7 +1004,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "C"
 section = "section 9, on the path the app runs"
 label = "the absorb's worth, PAIRED + refine_wake, kappa2 delta"
-documented = "-0.002"
+documented = "+0.038"
 pattern = '\+ refine_wake, PAIRED seconds            accuracy [-+][\d.]+ pp   kappa2 ([-+][\d.]+)'
 
 [[figure]]
@@ -1530,7 +1530,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "grid PHASE sensitivity"
 label = "+ refine_wake median labels moved"
-documented = "8.71%"
+documented = "8.32%"
 pattern = '\+ refine_wake: median ([\d.]+)%'
 
 [[figure]]
@@ -1539,7 +1539,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "grid PHASE sensitivity"
 label = "+ refine_wake worst shift"
-documented = "10.25%"
+documented = "10.01%"
 pattern = '\+ refine_wake: median [\d.]+%, worst ([\d.]+)%'
 
 [[figure]]
@@ -1584,7 +1584,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "grid PHASE sensitivity"
 label = "refined agreement across 30 phases, low"
-documented = "85.75%"
+documented = "85.05%"
 pattern = 'the same refined: ([\d.]+)%'
 
 [[figure]]
@@ -1593,7 +1593,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "grid PHASE sensitivity"
 label = "refined agreement across 30 phases, high"
-documented = "86.43%"
+documented = "86.05%"
 pattern = 'the same refined: [\d.]+% to ([\d.]+)%'
 
 [[figure]]
@@ -1683,7 +1683,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "the ablation"
 label = "SHIPPED, + refine_wake agreement full"
-documented = "86.80%"
+documented = "86.16%"
 pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+[\d.]+%\s+([\d.]+)%'
 
 [[figure]]
@@ -1692,7 +1692,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "the ablation"
 label = "SHIPPED, + refine_wake agreement trimmed"
-documented = "86.47%"
+documented = "85.83%"
 pattern = '^   SHIPPED\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+[\d.]+%\s+[\d.]+% / ([\d.]+)%'
 
 [[figure]]
@@ -1710,7 +1710,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "the ablation"
 label = "- clock prior, + refine_wake moved"
-documented = "1.5%"
+documented = "1.9%"
 pattern = '^   - clock prior[^\n]*?\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+([\d.]+)%'
 
 [[figure]]
@@ -1764,7 +1764,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "E"
 section = "the ablation"
 label = "cardiac z-scores ONLY, + refine_wake moved"
-documented = "1.9%"
+documented = "2.3%"
 pattern = '^   cardiac z-scores ONLY\s+\d+\s+\d+\s+[\d.]+%\s+[\d.]+%\s+[\d.]+% / [\d.]+%\s+([\d.]+)%'
 
 [[figure]]
@@ -1874,7 +1874,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "every A-Z wake figure was the wrong code path"
 label = "band seconds the refinement moves"
-documented = "24039"
+documented = "15627"
 pattern = 'the refinement moves (\d+) band seconds'
 
 [[figure]]
@@ -1919,7 +1919,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "on the app's real path over all 34"
 label = "the app's path, wake%"
-documented = "14.1%"
+documented = "15.5%"
 pattern = "stage_v2 \\+ refine_wake \\(the app's path\\)\\s+([\\d.]+)%"
 
 [[figure]]
@@ -1928,7 +1928,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "on the app's real path over all 34"
 label = "the app's path, kappa2"
-documented = "0.134"
+documented = "0.195"
 pattern = "stage_v2 \\+ refine_wake \\(the app's path\\)\\s+[\\d.]+%\\s+[\\d.]+%\\s+([\\d.]+)"
 
 [[figure]]
@@ -1937,7 +1937,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "on the app's real path over all 34"
 label = "the app's path, recall"
-documented = "28.8"
+documented = "38.1"
 pattern = "stage_v2 \\+ refine_wake \\(the app's path\\)\\s+[\\d.]+%\\s+[\\d.]+%\\s+[\\d.]+\\s+([\\d.]+)"
 
 [[figure]]
@@ -1955,7 +1955,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "on the app's real path over all 34"
 label = "over-call ratio, refined"
-documented = "1.48x"
+documented = "1.63x"
 pattern = 'over-call ratio [\d.]+x unrefined -> ([\d.]+)x refined'
 
 [[figure]]
@@ -1982,7 +1982,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "H"
 section = "over the 28 gate-accepted spans"
 label = "gate-accepted, refined wake%"
-documented = "14.2%"
+documented = "15.7%"
 pattern = '\+ refine_wake, gate-accepted spans only\s+([\d.]+)%'
 
 [[figure]]
@@ -1991,7 +1991,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "H"
 section = "over the 28 gate-accepted spans"
 label = "gate-accepted, refined kappa2"
-documented = "0.130"
+documented = "0.193"
 pattern = '\+ refine_wake, gate-accepted spans only\s+[\d.]+%\s+[\d.]+%\s+([\d.]+)'
 
 [[figure]]
@@ -2000,7 +2000,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "H"
 section = "over the 28 gate-accepted spans"
 label = "gate-accepted over-call ratio, refined"
-documented = "1.46x"
+documented = "1.62x"
 pattern = 'over-call ratio [\d.]+x -> ([\d.]+)x on those spans'
 
 [[figure]]
@@ -2009,7 +2009,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "where the excess sits"
 label = "head, we say wake"
-documented = "10.6%"
+documented = "15.6%"
 pattern = 'head: span open -> first strap-asleep second\s+([\d.]+)%'
 
 [[figure]]
@@ -2018,7 +2018,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "where the excess sits"
 label = "interior, we say wake"
-documented = "13.2%"
+documented = "13.8%"
 pattern = "interior: inside the strap's asleep run\\s+([\\d.]+)%"
 
 [[figure]]
@@ -2036,7 +2036,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "where the excess sits"
 label = "tail, we say wake"
-documented = "53.6%"
+documented = "82.9%"
 pattern = 'tail: after the last strap-asleep second\s+([\d.]+)%'
 
 [[figure]]
@@ -2045,7 +2045,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "where the excess sits"
 label = "interior wake runs"
-documented = "370"
+documented = "365"
 pattern = "our wake runs inside the strap's asleep run: (\\d+) runs"
 
 [[figure]]
@@ -2063,7 +2063,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "where the excess sits"
 label = "interior wake run total hours"
-documented = "19.9"
+documented = "19.6"
 pattern = '(\d+\.\d+) h total'
 
 [[figure]]
@@ -2513,7 +2513,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "F"
 section = "RE-VERIFIED after F"
 label = "wake fraction on the app's path, cross-checked against emit_wake"
-documented = "14.1%"
+documented = "15.5%"
 pattern = 'the same \+ refine_wake \(the app\): ours ([\d.]+)%'
 
 [[figure]]
@@ -2740,7 +2740,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "G"
 section = "what the decoder is worth"
 label = "shipped kappa2"
-documented = "0.134"
+documented = "0.195"
 pattern = 'band kappa2 [\d.]+ -> ([\d.]+)'
 
 [[figure]]
@@ -2785,7 +2785,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "G"
 section = "the two axes swept"
 label = "gamma 4, band kappa2"
-documented = "0.202"
+documented = "0.248"
 pattern = 'decoder: gamma 4\s+([\d.]+)'
 
 [[figure]]
@@ -2830,7 +2830,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "G"
 section = "the two axes swept"
 label = "no base rate, band kappa2 (the band prefers it deleted)"
-documented = "0.160"
+documented = "0.190"
 pattern = 'emissions: no base rate\s+([\d.]+)'
 
 [[figure]]
@@ -2929,7 +2929,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "G"
 section = "three bounded rescues"
 label = "rescue 1, the pooled PSG matrix, band delta"
-documented = "-0.006"
+documented = "-0.046"
 pattern = '1  the pooled PSG matrix[^\n]*d ([-+][\d.]+)'
 
 [[figure]]
@@ -2938,7 +2938,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "G"
 section = "three bounded rescues"
 label = "rescue 2, 50/50, band delta"
-documented = "+0.029"
+documented = "-0.003"
 pattern = '2  50/50 with the PSG matrix[^\n]*d ([-+][\d.]+)'
 
 [[figure]]
@@ -2947,7 +2947,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "G"
 section = "three bounded rescues"
 label = "rescue 3, PSG stickiness, band delta"
-documented = "+0.008"
+documented = "+0.016"
 pattern = '3  PSG stickiness, shipped shape[^\n]*d ([-+][\d.]+)'
 
 # ─────────────────────── flow_az: every stage beside the others ───────────────────────
@@ -3205,7 +3205,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "I"
 section = "the gate-accepted nights, both paths"
 label = "shipped wake, + refine_wake"
-documented = "6.9"
+documented = "7.0"
 pattern = '^shipped, \+ refine_wake\s+15\s+([\d.]+)'
 
 [[figure]]
@@ -3331,7 +3331,7 @@ doc = "SLEEP-FLOW-AZ.md"
 step = "I"
 section = "efficiency"
 label = "ours, + refine_wake"
-documented = "93.1"
+documented = "93.0"
 pattern = '^shipped, \+ refine_wake\s+15\s+([\d.]+)$'
 
 [[figure]]
