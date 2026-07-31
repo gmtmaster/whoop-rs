@@ -30,8 +30,6 @@ pub const W_ACTIVITY_BALANCE: f64 = 0.05;
 /// Logistic spread and offset so Z = 0 maps to ~58% (population-average recovery).
 pub const LOGISTIC_K: f64 = 1.6;
 pub const LOGISTIC_Z0: f64 = -0.20;
-/// Cold-start fallback recovery (%).
-pub const POPULATION_MEAN: f64 = 58.0;
 
 /// Recovery-band thresholds (WHOOP colour scheme).
 pub const BAND_RED_MAX: f64 = 34.0;

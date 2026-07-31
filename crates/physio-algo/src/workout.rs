@@ -37,9 +37,6 @@ pub struct ActivityPoint {
     pub intensity: f64,
 }
 
-/// Edwards zone breakdown: map of zone number (0-5) to percentage.
-pub type ZoneTimePct = [(i32, f64); 6];
-
 /// One detected workout session.
 #[derive(Clone, Debug)]
 pub struct ExerciseSession {

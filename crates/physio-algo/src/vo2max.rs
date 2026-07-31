@@ -6,9 +6,6 @@
 const MEN: Coeffs = Coeffs { intercept: 100.27, age: 0.296, wc: 0.369, rhr: 0.155, pai: 0.226 };
 const WOMEN: Coeffs = Coeffs { intercept: 74.74, age: 0.247, wc: 0.259, rhr: 0.114, pai: 0.198 };
 
-pub const SEE_MEN: f64 = 5.70;
-pub const SEE_WOMEN: f64 = 5.14;
-
 // Normative "average peer" the Fitness Age compares against.
 pub const RESTING_HR_REFERENCE: f64 = 65.0;
 pub const PAI_REFERENCE: f64 = 5.0;

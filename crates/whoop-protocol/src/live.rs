@@ -79,13 +79,8 @@ pub fn event_payload_hex(f: &Frame) -> Option<String> {
     if f.family != crate::family::Family::Gen5 {
         return None;
     }
-    use std::fmt::Write;
     let tail = f.inner().get(8..).filter(|t| !t.is_empty())?;
-    let mut s = String::with_capacity(tail.len() * 2);
-    for b in tail {
-        let _ = write!(s, "{b:02x}");
-    }
-    Some(s)
+    Some(crate::bytes::to_hex(tail))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

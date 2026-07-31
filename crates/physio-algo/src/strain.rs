@@ -9,7 +9,6 @@ pub const MAX_STRAIN: f64 = 100.0;
 pub const STRAIN_DENOMINATOR: f64 = 7201.0;
 pub const FALLBACK_SAMPLE_MIN: f64 = 1.0 / 60.0;
 pub const DEFAULT_AGE: i32 = 30;
-pub const DEFAULT_RESTING_HR: f64 = 60.0;
 pub const HRMAX_MIN_SAMPLES: usize = 600;
 pub const HRMAX_PERCENTILE: f64 = 99.5;
 pub const BANISTER_SCALE: f64 = 0.64;
