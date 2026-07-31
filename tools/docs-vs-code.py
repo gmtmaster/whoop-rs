@@ -100,6 +100,24 @@ def codec_methods_called(names: list[str]) -> int:
     return sum(1 for n in names if camel(n) in called)
 
 
+def kotlin_backlog_rows() -> int | None:
+    """Rows in noop-tan's own Kotlin-still-owns-maths table — the border's OTHER direction.
+
+    `algorithms.md` claimed no metric the frontend still computes itself while that table listed 17,
+    a contradiction between two shipped documents that neither gate could see: both stop at this
+    repo. The table itself is re-derived against the Kotlin by `audit_kotlin_algorithms.py`, so
+    pinning the sentence to the table is the missing edge, not a second count of the same thing.
+    """
+    doc = WHOOP / "noop-wt-tan" / "docs" / "ALGORITHMS.md"
+    if not doc.is_file():
+        return None
+    t = doc.read_text(encoding="utf-8")
+    if "## Remaining" not in t or "**The counts above are re-derived**" not in t:
+        return -1
+    section = t[t.index("## Remaining"): t.index("**The counts above are re-derived**")]
+    return len(re.findall(r"^\| `([\w./]+)`", section, re.M))
+
+
 def kappa_targets() -> dict[str, str]:
     """Each cohort's asserted kappa, straight out of the parity gate's own assertions."""
     t = (ROOT / "crates" / "physio-algo" / "tests" / "dataset_parity.rs").read_text(encoding="utf-8")
@@ -141,6 +159,8 @@ def main() -> int:
     claims: list[tuple[str, str, str, object]] = [
         ("algorithms.md", "ignored dataset gates", r"\*\*(\w+)\*\* sleep-dataset tests read external fixtures", "four"),
         ("algorithms.md", "FFI free-fn exports", r"all (\d+) exported functions have a Kotlin", len(exports)),
+        ("algorithms.md", "Kotlin still owning maths", r"\*\*(\d+) Kotlin engines still carry maths",
+         kotlin_backlog_rows()),
         ("sleep.md", "physio-algo tests", r"\*\*(\d+) `physio-algo` tests", None),
         ("sleep.md", "whoop-ffi tests", r"`physio-algo` tests \+ (\d+) `whoop-ffi` tests", None),
         ("data-flow.md", "FFI free-fn exports", r"\*\*(\d+) exported functions, all", len(exports)),
@@ -231,7 +251,7 @@ def main() -> int:
     # was built on that was not a member of the workspace.
     text = doc("sleep.md")
     checked += 1
-    named, absent = set(), []
+    named, files, absent = set(), set(), []
     if "## Modules" not in text:
         print(f"  NOPIN  {'sleep.md':<16} {'module table symbols':<26} the section this gate reads is GONE")
         bad += 1
@@ -240,7 +260,10 @@ def main() -> int:
         table = table[: table.index("\n## ", 1)]
         src = "\n".join(p.read_text(encoding="utf-8") for p in rs_files("crates/physio-algo/src"))
         for tok in re.findall(r"`([^`]+)`", table):
-            if tok.endswith(".rs") or " " in tok:
+            if tok.endswith(".rs"):
+                files.add(tok)
+                continue
+            if " " in tok:
                 continue
             for part in re.split(r"::|\.", tok):
                 if re.fullmatch(r"[A-Za-z_]\w*", part) and part not in {"crate", "stats"}:
@@ -253,6 +276,24 @@ def main() -> int:
         bad += 1
     else:
         print(f"  ok     {'sleep.md':<16} {'module table symbols':<26} {len(named)} named, all present")
+
+    # The same table's FILE column drifts in two directions the symbol check above cannot see, because it
+    # skips any token ending `.rs`. A row naming a file that is not there reads as ordinary prose, and a
+    # module declared in `sleep/mod.rs` with no row is invisible by construction - which is how `params.rs`
+    # stayed undocumented. Both sides are pinned against `mod.rs`, not against a count.
+    sleep_dir = ROOT / "crates" / "physio-algo" / "src" / "sleep"
+    body = re.sub(r"#\[cfg\(test\)\]\s*mod \w+;", "", (sleep_dir / "mod.rs").read_text(encoding="utf-8"))
+    declared = set(re.findall(r"^(?:pub )?mod (\w+);", body, re.M))
+    if files or declared:
+        checked += 1
+        phantom = sorted(f for f in files if not (sleep_dir / f).is_file())
+        unlisted = sorted(f"{m}.rs" for m in declared if f"{m}.rs" not in files)
+        if phantom or unlisted:
+            print(f"  WRONG  {'sleep.md':<16} {'module table files':<26} "
+                  f"named but not on disk: {phantom}; declared in mod.rs but unlisted: {unlisted}")
+            bad += 1
+        else:
+            print(f"  ok     {'sleep.md':<16} {'module table files':<26} {len(files)} rows == {len(declared)} modules")
 
     # Every fixture set on disk must be named in the parity sheet's matrix.
     disk, named = on_disk_sets(), named_sets()

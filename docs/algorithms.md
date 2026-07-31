@@ -306,9 +306,11 @@ eligibility gate (>= 20 rows, median inter-sample gap <= 90 s), the longest sust
 
 ## Status, sorted by strength of evidence
 
-Every algorithm the app displays is FFI-exported AND called by the app: there is no unwired backlog and no
-metric the frontend still computes itself. The one exception is not a backlog item — `HrWatch` has never
-been exported, because nothing shows it. What differs below is how strongly each is verified.
+Every algorithm this crate exports is called by the app: there is no unwired backlog, and the one
+never-exported item is not one either — `HrWatch`, because nothing shows it. That is the border in ONE
+direction. In the other, **17 Kotlin engines still carry maths of their own**, listed in
+`noop-wt-tan/docs/ALGORITHMS.md` and re-derived against the code by
+`dev-notes/noop-tan/audit_kotlin_algorithms.py`. What differs below is how strongly each is verified.
 
 ### ✅ Hardware-verified — run against a real 5.0/MG
 
