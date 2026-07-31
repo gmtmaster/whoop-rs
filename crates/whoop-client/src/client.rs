@@ -231,9 +231,6 @@ impl<T: BleTransport> WhoopClient<T> {
         result
     }
 
-    /// Pump every reassembled frame from an already-opened stream through `on_frame` until `secs` elapse.
-    /// The caller opens the stream before its triggering writes (race fix). Shared by `info`/`monitor`;
-    /// `sync_history` keeps its own loop (idle timeout + async ACK writes + early return).
     /// Collect + decode the COMMAND_RESPONSE frames arriving on an already-opened stream for `secs`.
     async fn collect_responses(
         &mut self,
@@ -252,6 +249,9 @@ impl<T: BleTransport> WhoopClient<T> {
         Ok(out)
     }
 
+    /// Pump every reassembled frame from an already-opened stream through `on_frame` until `secs` elapse.
+    /// The caller opens the stream before its triggering writes (race fix). Shared by `info`/`monitor`;
+    /// `sync_history` keeps its own loop (idle timeout + async ACK writes + early return).
     async fn collect_frames<F: FnMut(Frame)>(
         &mut self,
         mut notifications: BoxStream<'static, Notification>,

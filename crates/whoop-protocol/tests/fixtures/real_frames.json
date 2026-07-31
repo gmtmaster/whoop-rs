@@ -5,7 +5,7 @@
     "safe to commit. A field absent from a record's 'expect' is simply not asserted (the decoder emits a",
     "superset per family). gravity_unit=true asserts |g| is about 1. This is whoop-rs's own regression",
     "fixture; add a frame here rather than hard-coding hex in a test.",
-    "ppg_frames: real v26 optical bursts (consecutive strap-seconds); event_frames: real EVENT bodies; ppg_hr: derived HR golden (see whoop-metrics test)."
+    "ppg_frames: real v26 optical bursts (consecutive strap-seconds); event_frames: real EVENT bodies; ppg_hr: derived HR golden (see the physio-algo ppg tests)."
   ],
   "frames": [
     {
@@ -351,7 +351,7 @@
     }
   ],
   "ppg_hr": {
-    "_comment": "whoop_metrics::ppg_hr::estimate over the concatenated ppg_frames; first estimate is the deterministic golden anchor (sub-lag parabolic-refined).",
+    "_comment": "physio_algo::ppg::estimate over the concatenated ppg_frames; first estimate is the deterministic golden anchor (sub-lag parabolic-refined).",
     "estimate_count": 22,
     "first": {
       "ts": 1783955687,

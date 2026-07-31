@@ -1,5 +1,6 @@
-//! WHOOP 4.0 historical records, decoded inner-relative (frame-absolute − 4). UNVERIFIED: not yet
-//! exercised against a real 4.0 offload (the connect/bond path is 5/MG-only so far).
+//! WHOOP 4.0 historical records, decoded inner-relative (frame-absolute − 4). v24 and v25 are pinned to
+//! real captured 4.0 frames (`tests/fixtures/real_frames.json`); the desktop connect/bond path is still
+//! 5/MG-only, so these frames reached the decoder from an app offload rather than from `whoop-client`.
 
 use super::{accept_gravity, gravity3, HistoryRecord};
 use crate::bytes::{i16_at, nonzero_u8_at, rr_intervals, u16_at, unix_at};

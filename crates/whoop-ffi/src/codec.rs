@@ -182,8 +182,9 @@ impl WhoopCodec {
         self.inner.lock().expect("Mutex poisoned — a prior codec panic left the inner state corrupted").offload.abort_frame()
     }
 
-    /// GET_HELLO (identity + firmware), family-forked. The `[0x00]` payload matches the client's default
-    /// no-arg body (frame-identical to empty on Gen5 after padding; it is the trailing byte Gen4 expects).
+    /// GET_HELLO (identity + firmware), family-forked: Gen5 takes the `[0x01]` b3 selector, Gen4 the
+    /// GET_HELLO_HARVARD opcode. The Gen4 body here is one byte; `whoop-client`'s `info` sends nine
+    /// (its comment says a shorter one draws silence), and which is right is unsettled on hardware.
     pub fn get_hello_frame(&self, seq: u8) -> Vec<u8> {
         match self.family {
             Family::Gen5 => framing::command(self.family, seq, command::GET_HELLO, &[0x01]),

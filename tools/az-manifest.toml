@@ -433,7 +433,7 @@ step = "A"
 section = "rrInterval.seq, live-flush split exposure"
 label = "0 split seconds, 0 beats lost under the per-second arrival model"
 documented = "0 / 0"
-note = "the documented path `whoop-rs/tools/rr-live-split-exposure.py` DOES NOT EXIST; the script is at whoop/tools/"
+note = "printed by `python tools/rr-live-split-exposure.py` from the whoop root, not by a cargo example; the docs named whoop-rs/tools/ until 2026-07-30 and now name the right path"
 
 # ───────────────────────────────── B: detection finds the nights ─────────────────────────────────
 

@@ -1,7 +1,8 @@
-//! Generation as a closed runtime enum. Every per-generation wire difference is data on `HeaderSpec`,
-//! consumed in exactly one place (`framing`). Adding a third generation makes every `match` a
-//! compiler-enforced porting checklist. Session/policy differences (bond, clock, epoch) do NOT live
-//! here — they belong to `whoop-client` — this stays pure wire framing.
+//! Generation as a closed runtime enum. `HeaderSpec` carries the frame-HEADER shape only, consumed in
+//! one place (`framing`); opcodes, the GEN5 event residual and the GEN5-only record versions each branch
+//! at their own site. Adding a third generation makes every `match` a compiler-enforced porting
+//! checklist, but an `if family ==` would compile and be silently wrong — `architecture.md` counts them.
+//! Session/policy differences (bond, clock, epoch) belong to `whoop-client`; this stays pure framing.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Family {

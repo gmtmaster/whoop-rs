@@ -18,13 +18,17 @@ whoopctl info --sn <serial>           # bonded read: serial, firmware, hardware,
 whoopctl pack --sn <serial>           # battery-pack fuel gauge: serial, SOC%, millivolts
 whoopctl sync --sn <serial>           # offload stored history to JSON Lines (keep-mode)
 whoopctl sync --wipe --raw out.jsonl  # drain the full backlog incl. raw frames
-whoopctl monitor --sn <serial>        # live HR, R-R, events streaming to stdout
+whoopctl monitor --sn <serial>        # stream reassembled frames to stdout (optionally --type)
+whoopctl hr --sn <serial>             # live bpm from the standard 2a37 char (--broadcast to enable it)
 whoopctl metrics --sn <serial>        # sync, then compute HRV/SpO2/PPG-HR on-device
 whoopctl r22on --sn <serial>          # unlock deep R22 biometric streams
+whoopctl raw --sn <serial>            # switch optical collection on, capture v20/v21, switch it off
+whoopctl wrist --set right --sn ...   # read the strap's wear block, optionally write the wrist
 whoopctl buzz --sn <serial>           # haptic buzz
 whoopctl reboot --sn <serial>         # soft reboot
-whoopctl send <hex> --sn <serial>     # raw command (gated — see Safety)
+whoopctl send <op-hex> [payload-hex]  # raw command (gated — see Safety)
 whoopctl ingest capture.jsonl         # decode a raw-capture file to history records
+whoopctl decode-capture deep.jsonl    # decode a deep-buffer capture and report the v20/v21 breakdown
 whoopctl --hr-watch monitor --sn ...  # wellness HR-at-rest watch (display only, no buzz)
 ```
 
@@ -42,9 +46,10 @@ linear-fit coefficients. All exposed through the uniffi FFI for Kotlin and Swift
 ### Protocol codec (pure, sans-IO)
 
 The wire codec (`whoop-protocol`) has zero runtime dependencies besides `thiserror`. It handles
-framing, CRC (CRC8/CRC16-Modbus/CRC32), 35 command types, the historical offload state machine,
-and record decode for v18/v24/v26 plus the 100 Hz 6-axis IMU deep buffer. Everything is
-inner-relative — one decoder serves both generations for shared record versions.
+framing, CRC (CRC8/CRC16-Modbus/CRC32), 40 command opcodes, the historical offload state machine,
+and record decode for the 4.0 v5/v7/v9/v12/v24/v25 and 5.0/MG v18/v20/v26 layouts plus the 100 Hz
+6-axis IMU deep buffer. Everything is inner-relative — one decoder serves both generations for
+shared record versions.
 
 ## Quick start
 
@@ -74,7 +79,6 @@ whoopctl sync --wipe --raw capture.jsonl --sn <serial>
 |---|---|
 | `whoop-protocol` | Pure sans-IO wire codec: framing, CRC, records, offload state machine, config/alarm/haptic builders |
 | `physio-algo` | Pure derived metrics + scoring: HRV, resting HR, SpO2, PPG-HR, recovery, strain, stress, sleep staging, IMU features, calibration timeline |
-| `whoop-metrics` | Compatibility re-export shim over `physio-algo` |
 | `ble-core` | `BleTransport` async trait + `Notification`/`BleError` + `MockTransport` |
 | `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (the only crate that links a radio) |
 | `whoop-client` | `WhoopClient<T>` — bond, history sync, monitor, gated writes, capture, backfill policy |
@@ -98,18 +102,20 @@ The write surface is gated in `whoop-protocol` + `whoop-client`:
 
 ## Status
 
-The codec, btleplug backend, robustness layer, and `whoopctl` CLI are done. The mobile FFI
-compiles on host. Validated on real 5.0 bands end-to-end — scan, identify, bond, info, buzz,
-and a full overnight drain (35,310 records, 11.6 h) that decoded v18 and located the sleep SpO2
-(363 readings, 95-100%). v26 raw-PPG and v21 IMU decoders verified against real captures.
+The codec, btleplug backend, robustness layer, and `whoopctl` CLI are done. The uniffi surface is
+the shipped decode + scoring core of the Android app. Validated on real 5.0 bands end-to-end —
+scan, identify, bond, info, buzz, and a full overnight drain (35,310 records, 11.6 h) that decoded
+v18 and located the sleep SpO2 (363 readings, 95-100%). v26 raw-PPG and v21 IMU decoders verified
+against real captures; the 4.0 v24/v25 decoders are pinned to real captured 4.0 frames.
 
-`cargo test` (100 tests) + `cargo clippy --all-targets` are green. Zero warnings.
+`cargo test --workspace` (425 passed, 4 `#[ignore]`d dataset gates) + `cargo clippy --workspace
+--all-targets` are green. Zero warnings.
 
 ## Build notes
 
 Pinned to the **MSVC** toolchain on Windows (btleplug's WinRT deps need the MSVC linker). On a
 fresh clone: `rustup override set stable-x86_64-pc-windows-msvc` (requires VS Build Tools). The
-pure crates (`whoop-protocol`, `physio-algo`, `whoop-metrics`, `ble-core`, `whoop-ffi`) build on
+pure crates (`whoop-protocol`, `physio-algo`, `ble-core`, `whoop-ffi`) build on
 any toolchain. macOS and Linux build as-is (btleplug uses CoreBluetooth / BlueZ respectively).
 
 The workspace currently patches btleplug to a sibling `../btleplug` fork for a WinRT
