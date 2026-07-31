@@ -153,7 +153,10 @@ pub async fn scan_whoops(services: &[Uuid], secs: u64) -> Result<Vec<Scanned>, B
             firmware: String::new(),
             hardware: String::new(),
         };
-        if p.connect().await.is_ok() && p.discover_services().await.is_ok() {
+        // Capped like every other connect here: a band held by another central (a phone running the
+        // vendor app) otherwise stalls the whole scan on the first candidate.
+        let connected = tokio::time::timeout(CONNECT_TIMEOUT, p.connect()).await.is_ok_and(|r| r.is_ok());
+        if connected && p.discover_services().await.is_ok() {
             let name = read_char(&p, DEVICE_NAME).await;
             if !name.is_empty() {
                 band.name = name;
