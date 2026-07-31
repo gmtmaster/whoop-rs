@@ -120,6 +120,18 @@ def surface_table_rows() -> set[str]:
     return set(re.findall(r"^\| `(\w+)` \|", section, re.M))
 
 
+def sleep_api_called_beyond_analyze() -> int:
+    """`sleep_api` exports the app calls, less `analyze_sleep` itself.
+
+    `sleep.md` called the app a frontend over "the single `analyzeSleep` FFI" while it drives the
+    main-night family, the single-span restage and the debt/regularity/nap doors as well.
+    """
+    t = (ROOT / "crates" / "whoop-ffi" / "src" / "sleep_api.rs").read_text(encoding="utf-8")
+    names = re.findall(r"#\[uniffi::export\][^\n]*\n(?:\s*//[^\n]*\n)*\s*pub fn (\w+)", t)
+    reached = set(re.findall(r"uniffi\.whoop_ffi\.(\w+)", kotlin_blob()))
+    return sum(1 for n in names if n != "analyze_sleep" and camel(n) in reached)
+
+
 def exports_in_no_doc(names: list[str]) -> list[str]:
     """Exports named in neither shipped surface document.
 
@@ -326,6 +338,8 @@ def main() -> int:
         ("data-flow.md", "Kotlin files crossing the FFI",
          r"\*\*(\d+) hand-written Kotlin files under `main/` reach `uniffi\.whoop_ffi` directly\*\*",
          len(ffi_touching_files())),
+        ("sleep.md", "sleep_api exports the app calls",
+         r"\*\*(\d+) further `sleep_api` exports\*\*", sleep_api_called_beyond_analyze()),
         ("data-flow.md", "surface-table rows", r"tables below carry \*\*(\d+)\*\* of them",
          len(surface_table_rows() & set(exports))),
         ("data-flow.md", "exports in no shipped doc", r"\*\*(\d+) of the 79 appear in no shipped document\*\*",
