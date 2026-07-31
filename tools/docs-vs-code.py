@@ -87,21 +87,43 @@ def free_fns_called(names: list[str]) -> int:
     return sum(1 for n in names if camel(n) in reached)
 
 
-def codec_methods_called(names: list[str]) -> int:
-    """A `WhoopCodec` method is called as `.<name>(` in a file that HOLDS a codec.
+def codec_receivers(src: str) -> set[str]:
+    """The identifiers in one Kotlin file that actually hold a `WhoopCodec`.
 
-    Requiring the call parenthesis was not enough. `.<name>(` on any receiver counted, so
-    `reassembler.feed(bytes)` (Kotlin's own `Reassembler`) read as `WhoopCodec::feed`, and nine
-    unrelated `.reset()` calls read as `WhoopCodec::reset` — the published figure said 18 called
-    while the true count is 16. Only a file naming `WhoopCodec` can hold one, so that is the scope.
+    `val gen5 by lazy { WhoopCodec(Gen.GEN5) }` binds `gen5`; nothing else in the file does.
     """
-    holders = [re.sub(r"/\*[\s\S]*?\*/", "", t) for t in kotlin_files() if "WhoopCodec" in t]
-    holders = ["\n".join(line.split("//")[0] for line in t.splitlines()) for t in holders]
-    blob = "\n".join(holders)
-    called = set(re.findall(r"\.(\w+)\s*\(", blob))
-    # No space before the paren: a KDoc sentence writes "WhoopCodec (decode history/live/response)",
-    # which is prose, not a construction.
-    if re.search(r"\bWhoopCodec\(", blob):
+    return set(re.findall(r"\bva[lr]\s+(\w+)[^\n=]*(?:=|by\s+lazy\s*\{)[^\n]*\bWhoopCodec\(", src))
+
+
+def codec_methods_called(names: list[str]) -> int:
+    """A `WhoopCodec` method counts only when the RECEIVER is known to be a codec.
+
+    Twice this matched a namesake instead. Round 3 added the call parenthesis; round 7 narrowed the
+    scope to files naming `WhoopCodec`. Both fixed the instance, not the class: `.<name>(` cannot
+    know its receiver's type, so `reassembler.feed(bytes)` read as `WhoopCodec::feed` and nine
+    unrelated `.reset()` calls read as `WhoopCodec::reset`, publishing 18 called against a true 16.
+    Scoping by file only postpones it, because a holder file may also hold a `Reassembler`.
+
+    So bind the receiver, the same standard [free_fns_called] already holds itself to: learn which
+    identifiers are constructed as a codec, then require the call to sit on one of them.
+    """
+    called: set[str] = set()
+    constructed = False
+    for src in kotlin_files():
+        if "WhoopCodec" not in src:
+            continue
+        src = re.sub(r"/\*[\s\S]*?\*/", "", src)
+        src = "\n".join(line.split("//")[0] for line in src.splitlines())
+        # No space before the paren: a KDoc sentence writes "WhoopCodec (decode history/live/…)",
+        # which is prose, not a construction.
+        if re.search(r"\bWhoopCodec\(", src):
+            constructed = True
+        recv = codec_receivers(src)
+        if not recv:
+            continue
+        alt = "|".join(sorted(map(re.escape, recv)))
+        called |= set(re.findall(rf"\b(?:{alt})\s*\.\s*(\w+)\s*\(", src))
+    if constructed:
         called.add("new")
     return sum(1 for n in names if camel(n) in called)
 
