@@ -1,6 +1,8 @@
-//! Pure offload-cadence + reconnect policy (no BLE, no clock): a strap that keeps offloading nothing
-//! (off-wrist / not banking) or whose RTC reads future-dated stops being re-polled every 90 s, without
-//! ever delaying a user- or connection-driven sync.
+//! Pure offload-cadence policy (no BLE, no clock). Two floors: 900 s for the periodic timer, 90 s for
+//! an event trigger. A strap that keeps completing empty offloads (off-wrist / not banking) stretches
+//! the periodic and strap floors, doubling per empty past the third up to 4x; one whose RTC reads
+//! future-dated has those two skipped outright. Neither reaches a manual or auto-continue sync, which
+//! are unfloored, nor a connect/foreground one, which keeps its plain 90 s floor.
 
 /// What prompted a historical-offload attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
