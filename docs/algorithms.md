@@ -306,8 +306,11 @@ eligibility gate (>= 20 rows, median inter-sample gap <= 90 s), the longest sust
 
 ## Status, sorted by strength of evidence
 
-Every algorithm this crate exports is called by the app: there is no unwired backlog, and the one
-never-exported item is not one either — `HrWatch`, because nothing shows it. That is the border in ONE
+Every algorithm this crate exports is called by the app: there is no unwired backlog. **1 public
+function in the crate is reached by no other crate** — `resting_hr::floor_mean_log_line`, which is a
+byte-for-byte twin of a Kotlin log line that ships, so the Rust half is a parity control with no
+caller rather than an algorithm going unused. `HrWatch` is off the FFI too but is not orphaned:
+`whoopctl --hr-watch` prints it. That is the border in ONE
 direction. In the other, **17 Kotlin engines still carry maths of their own**, listed in
 `noop-wt-tan/docs/ALGORITHMS.md` and re-derived against the code by
 `dev-notes/noop-tan/audit_kotlin_algorithms.py`. What differs below is how strongly each is verified.

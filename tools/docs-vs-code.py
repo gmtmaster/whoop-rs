@@ -165,6 +165,33 @@ def command_opcodes() -> int:
     return len(re.findall(r"^pub const [A-Z0-9_]+: u8 = \d+;", t, re.M))
 
 
+def physio_algo_orphans() -> list[str]:
+    """`physio-algo` public free fns reached by no other crate and by nothing inside `physio-algo`.
+
+    The Rust shape of the failure that cost noop-tan three shipped capabilities: an item survives a
+    green build and a green suite while its last caller is gone. Comments are stripped first, so a KDoc
+    mention is not a use; the count includes each declaration, so a name at its own declaration count is
+    referenced by nothing.
+    """
+    src = sorted((ROOT / "crates" / "physio-algo" / "src").rglob("*.rs"))
+    def bare(p: Path) -> str:
+        return "\n".join(line.split("//")[0] for line in p.read_text(encoding="utf-8").splitlines())
+    declared: dict[str, int] = {}
+    for p in src:
+        for m in re.finditer(r"^\s*pub fn (\w+)", bare(p), re.M):
+            declared[m.group(1)] = declared.get(m.group(1), 0) + 1
+    inside = "\n".join(bare(p) for p in src)
+    outside = "\n".join(
+        bare(p) for c in ("whoop-ffi", "whoopctl", "whoop-store", "whoop-client")
+        for p in sorted((ROOT / "crates" / c / "src").rglob("*.rs"))
+    )
+    seen_out = set(re.findall(r"\b\w+\b", outside))
+    return sorted(
+        n for n, d in declared.items()
+        if n not in seen_out and len(re.findall(rf"\b{re.escape(n)}\b", inside)) <= d
+    )
+
+
 def workspace_members() -> set[str]:
     """Crate directories under `crates/`, which is what the root Cargo.toml globs."""
     return {p.name for p in (ROOT / "crates").iterdir() if (p / "Cargo.toml").exists()}
@@ -211,6 +238,8 @@ def main() -> int:
         ("data-flow.md", "codec methods not called", r"the other (\d+) are frame builders",
          len(methods) - codec_methods_called(methods)),
         ("README.md", "command opcodes", r"CRC32\), (\d+) command opcodes", command_opcodes()),
+        ("algorithms.md", "physio-algo orphans", r"\*\*(\d+) public\s+function[s]? in the crate (?:is|are) reached by no other crate\*\*",
+         len(physio_algo_orphans())),
     ]
 
     n_ignored = ignored_gates()
