@@ -125,7 +125,12 @@ def main() -> int:
 
     out = Path(args.out).resolve() if args.out else OUT
     man = load()
-    cargo_root = WHOOP / man["meta"]["cargo_root"]
+    # Anchored to THIS script, so running a worktree's copy measures that worktree. Resolving the
+    # manifest name against the parent instead always reached the live tree, which silently made a
+    # verification run read a tree another agent was editing.
+    cargo_root = CARGO_ROOT
+    if cargo_root.name != man["meta"]["cargo_root"]:
+        print(f"  note: running from {cargo_root.name}, manifest names {man['meta']['cargo_root']}")
     runs = {r["id"]: r for r in man["run"]}
     figs = man["figure"]
 
