@@ -36,12 +36,18 @@ WHOOP = ROOT.parent
 JNILIBS = WHOOP / "noop-wt-tan" / "android" / "app" / "src" / "main" / "jniLibs"
 BINDINGS = WHOOP / "noop-wt-tan" / "android" / "app" / "src" / "main" / "java" / "uniffi" / "whoop_ffi"
 STAMP = JNILIBS / ".fingerprint"
-ABIS = {"arm64-v8a": "arm64-v8a", "x86_64": "x86_64"}
+ABIS = ("arm64-v8a", "x86_64")
 LIB = "libwhoop_ffi.so"
 
 
 def fingerprint() -> str:
-    """A content hash of every input that can change what the shipped library does."""
+    """A content hash of every input IN THE REPOSITORY that can change what the shipped library does.
+
+    Verified a superset of what `whoop-ffi` links: no crate has a `build.rs`, no `include_str!`/
+    `include_bytes!` and no non-`.rs` file under `src/`, and the crate pulls only `whoop-protocol`,
+    `physio-algo` and `uniffi` (whose version is in the lock file). The build ENVIRONMENT - the rustc
+    and NDK versions - is outside it, so a toolchain bump reads as no change.
+    """
     h = hashlib.sha256()
     files = sorted((ROOT / "crates").rglob("*.rs"))
     files = [p for p in files if "/src/" in p.as_posix()]
@@ -94,8 +100,10 @@ def sync() -> int:
          "generate", "--library", str(lib), "--language", "kotlin",
          "--out-dir", str(BINDINGS.parent.parent)], ROOT)
 
-    run(["cargo", "ndk", "-t", "arm64-v8a", "-t", "x86_64", "-o", str(JNILIBS),
-         "build", "--release", "-p", "whoop-ffi"], ROOT)
+    # The `-t` list and the list [missing_libs] verifies are one constant, or the check guards an ABI
+    # the build never produced.
+    targets = [a for abi in ABIS for a in ("-t", abi)]
+    run(["cargo", "ndk", *targets, "-o", str(JNILIBS), "build", "--release", "-p", "whoop-ffi"], ROOT)
 
     if gone := missing_libs():
         raise SystemExit(f"error: cargo ndk did not produce {gone}; not stamping a build that did not happen.")

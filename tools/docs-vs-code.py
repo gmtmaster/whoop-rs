@@ -99,6 +99,12 @@ CHOICE_WORDS = frozenset({"if", "else", "when", "this", "it", "return"})
 CHOICE_COND = re.compile(r"\b(?:if|when)[ \t]*\([^()\n]*\)")
 # `recv.method(` or `accessor(args).method(`, the two receiver shapes Kotlin writes on one line.
 CODEC_CALL = re.compile(r"\b([A-Za-z_]\w*)[ \t]*(?:\([^()\n]*\))?[ \t]*\.[ \t]*([A-Za-z_]\w*)[ \t]*\(")
+# A declared return type, which is the ONE thing a block body cannot omit: `fun f(a: A): T {` and
+# `val p: T get() {`. Captured up to `=` so an expression body's initialiser is never read as a type.
+CODEC_TYPED = [
+    re.compile(r"^[ \t]*(?:\w+[ \t]+)*fun[ \t]+(\w+)[ \t]*\([^\n]*?\)[ \t]*:[ \t]*([^\n=]*)$", re.M),
+    re.compile(r"^[ \t]*(?:\w+[ \t]+)*va[lr][ \t]+(\w+)[ \t]*:[ \t]*([^\n=]*)$", re.M),
+]
 
 
 def strip_comments(src: str) -> str:
@@ -133,15 +139,20 @@ def codec_receivers(src: str) -> set[str]:
 
 
 def codec_escapes(src: str) -> list[str]:
-    """Bound receivers a file publishes, which would let a codec reach a file that never names one.
+    """Non-private declarations that hand a codec out, letting one reach a file that never names it.
 
-    Scanning only files that name `WhoopCodec` is safe exactly while this is empty: a codec is reached
-    by construction or by something a holder exposes, and nothing else. `RustCodec.kt` keeps both
-    codecs and its selector `private`, so the type cannot leave it - and if that changes, this says so
-    instead of the scope quietly under-counting.
+    Scanning only files that name `WhoopCodec` is sound while this is empty, so it is checked rather
+    than assumed. Two rules, because [codec_receivers] alone reads only expression bodies: a bound
+    receiver that is not `private`, and any declaration whose RETURN TYPE names the codec. Kotlin
+    requires that annotation on a block body, so `fun pick(g: Gen): WhoopCodec { return … }` and
+    `val current: WhoopCodec get() { … }` - both invisible to the inference - are caught by the second.
+
+    Residual, stated rather than claimed away: an inferred expression body whose result is a codec
+    inside a container (`val all = listOf(gen5, gen4)`) is bound by neither rule.
     """
+    typed = {n for rx in CODEC_TYPED for n, ty in rx.findall(src) if "WhoopCodec" in ty}
     return sorted(
-        n for n in codec_receivers(src)
+        n for n in codec_receivers(src) | typed
         if not re.search(rf"^[ \t]*(?:\w+[ \t]+)*private[ \t]+(?:\w+[ \t]+)*(?:fun|val|var)[ \t]+{re.escape(n)}\b",
                          src, re.M)
     )
@@ -349,6 +360,22 @@ def ffi_touching_files() -> list[str]:
     )
 
 
+def codec_naming_files() -> list[str]:
+    """Hand-written Kotlin files that name `WhoopCodec`, which is the OTHER half of the scope argument.
+
+    [codec_escapes] proves no holder hands a codec out; this proves there is only one holder. The
+    document rests on both, and a second file naming the type but calling nothing would leave the
+    escape check green while `the only file` quietly became false.
+    """
+    main = KOTLIN.parent / "main" / "java" if (KOTLIN.parent / "main").is_dir() else KOTLIN
+    if not main.is_dir():
+        return []
+    return sorted(
+        p.name for p in main.rglob("*.kt")
+        if p.name != "whoop_ffi.kt" and "WhoopCodec" in p.read_text(encoding="utf-8", errors="replace")
+    )
+
+
 def physio_algo_orphans() -> list[str]:
     """`physio-algo` public free fns reached by no other crate and by nothing inside `physio-algo`.
 
@@ -542,6 +569,18 @@ def main() -> int:
     else:
         print(f"  ok     {'RustCodec.kt':<16} {'codec receiver resolution':<26} "
               f"every codec-named call bound to a receiver, none escaping its file")
+
+    # The other half of the same argument. Reading one file is sound because nothing escapes it AND
+    # because it is the only one — and only the first half had a check, so a second holder that called
+    # nothing would leave this green while the document's "the only file" became false.
+    holders = codec_naming_files()
+    checked += 1
+    if holders != ["RustCodec.kt"]:
+        print(f"  WRONG  {'data-flow.md':<16} {'the only codec holder':<26} "
+              f"hand-written files naming WhoopCodec: {holders}")
+        bad += 1
+    else:
+        print(f"  ok     {'data-flow.md':<16} {'the only codec holder':<26} RustCodec.kt, and no other")
 
     # The surface table's ghost direction. Its shortfall is a counted claim above (the table is a map,
     # not an API reference), but a row naming an export that no longer exists reads as ordinary prose.

@@ -120,6 +120,18 @@ def main() -> int:
     leaky = HOLDER.replace("private fun codec(gen: Gen)", "fun codec(gen: Gen)")
     check("a published selector is reported as escaping",
           with_kotlin(leaky, lambda: gate.codec_calls(METHODS))[2], ["codec"])
+    # A block body is what the expression-body inference structurally cannot read, and it is exactly
+    # where a codec would leave the file unseen: the consumer never names the type, so it is skipped
+    # whole and its real calls are neither counted nor reported. Kotlin makes the annotation mandatory
+    # there, so the return type is the one handle that cannot be omitted.
+    check("a block-bodied public accessor is reported as escaping",
+          gate.codec_escapes(HOLDER + "\nfun pick(gen: Gen): WhoopCodec { return codec(gen) }\n"), ["pick"])
+    check("a block-bodied public getter is reported as escaping",
+          gate.codec_escapes(HOLDER + "\nval current: WhoopCodec get() { return gen5 }\n"), ["current"])
+    check("keeping either private is still no escape",
+          gate.codec_escapes(HOLDER + "\nprivate fun pick(gen: Gen): WhoopCodec { return codec(gen) }\n"), [])
+    check("a builder returning bytes off a codec is not an escape",
+          gate.codec_escapes(HOLDER + "\nfun raw(s: Int): ByteArray { return gen5.buzzFrame(s) }\n"), [])
     check("prose mention constructs nothing", with_kotlin(
         "// WhoopCodec (decode history) is described here.\nval r = Reassembler()\nr.feed(b)",
         lambda: gate.codec_calls(["new", "feed"]))[0], set())
