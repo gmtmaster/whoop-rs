@@ -2,8 +2,9 @@
 
 The whole WHOOP sleep pipeline lives here: detect the in-bed spans of a night, stage each into a
 per-30 s-epoch hypnogram, refine wake, and derive the day's main night. Pure and deterministic — no BLE,
-no IO, no async. The app (`noop-tan`) is a thin frontend over the single `analyzeSleep` FFI; see
-`noop-tan/android/SLEEP-BORDER.md` for what stays app-side.
+no IO, no async. The app (`noop-tan`) is a thin frontend: `analyzeSleep` is the whole-night door, and it
+calls 13 more sleep exports around it (single-span restage, the main-night family, rest/debt/regularity,
+naps); see `noop-tan/android/SLEEP-BORDER.md` for what stays app-side.
 
 ## One entry: `analyze`
 

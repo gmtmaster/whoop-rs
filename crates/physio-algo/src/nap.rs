@@ -3,7 +3,8 @@
 //! is deliberately conservative: tri-state (NAP / NONE / INCONCLUSIVE) that only PROPOSES a review card,
 //! never auto-writes a sleep session. Pure and deterministic. Approximate, non-clinical.
 
-use crate::workout::{activity_series, smoothed_intensity, GravitySample, HrSample};
+use crate::hr_sample::HrSample;
+use crate::workout::{activity_series, smoothed_intensity, GravitySample};
 
 // Defaults.
 pub const DEFAULT_MIN_NAP_MIN: i32 = 20;

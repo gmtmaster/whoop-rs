@@ -122,7 +122,8 @@ aliases (37/38/53/54/56) which `canonical()` folds onto their base so routing is
 **Historical record versions** (fork by version byte, `records/`): GEN4 = v5/7/9/12/24/25 (v24 = full
 DSP block: HR, R-R, gravity, SpO₂ red/IR, skin-temp, respiration); GEN5/MG = v18 (per-second HR, R-R,
 gravity, skin-temp, steps, activity, sleep-state, **and a sleep-only computed SpO₂ percent at inner 74** —
-a tri-mode byte, %-range only), v26 (raw 24 Hz optical buffer), and the
+a tri-mode byte, %-range only), v20 (the R22 optical block — decoded, but never seen on a worn capture),
+v26 (raw 24 Hz optical buffer), and the
 100 Hz raw 6-axis IMU deep buffer (accel + gyro; the live IMU stream is firmware-refused, so this
 historical path is the only way to reach it). The IMU buffer is identified by its own length + in-packet
 sample counts, **not** a version byte (its place in the version scheme is unconfirmed — noop #423/#455),
@@ -260,16 +261,20 @@ decoder:
 - **command frames to write** (the FFI never writes) — `client_hello` / `offload_start` / `offload_abort` /
   `r22_frames` / `get_hello`/`get_battery`/`get_data_range` / `stop_raw_flood` / `toggle_realtime_hr` /
   `reboot` / `buzz` / `broadcast_hr` / `set_config` / `alarm_set`/`alarm_disable`.
-- **derived metrics** — 79 free fns, every one of them called by the app. A few of the shapes:
+- **derived metrics** — 79 free fns, every one reached from hand-written Kotlin, one of them
+  (`spo2_rolling_reading`) only through a Kotlin wrapper the app never calls. A few of the shapes:
   `ppg_hr`, `hrv_rmssd_gap_aware`, `hrv_windowed_avg` (the app's stored session `avgHrv` — the mean of
   per-5-min-bucket gap-aware RMSSD over a span), `hrv_readiness`, `analyze_sleep`, `recovery_score`,
   `nightly_spo2_raw_means` (integer-truncated 4.0 raw red/IR ADC means over the in-bed spans — raw ADC,
-  never a calibrated percent). `data-flow.md` tables all of them; this is not the list.
+  never a calibrated percent). `data-flow.md` tables most of them with the count it covers; this is not
+  the list.
 
-Each platform does its own BLE natively and feeds notification bytes in; the app loop is: map notify UUID →
-`Chan`, call `feed`, and for each `Step` persist a record / write an `Ack` frame confirmed / stop on
-`Complete`. What stays native: the radio, write orchestration (seq/gates), JSONL capture, standard-GATT
-profiles, and timezone→epoch. Bindings generate via `uniffi-bindgen generate --language kotlin|swift`.
+Each platform does its own BLE natively and feeds notification bytes in. The loop this surface is built for
+is: map notify UUID → `Chan`, call `feed`, and for each `Step` persist a record / write an `Ack` frame
+confirmed / stop on `Complete` — `whoopctl` runs it; **noop-tan does not**, reassembling and driving the
+drain in Kotlin and calling the per-frame decoders instead (`data-flow.md`). What stays native: the radio,
+write orchestration (seq/gates), JSONL capture, standard-GATT profiles, and timezone→epoch. Bindings
+generate via `uniffi-bindgen generate --language kotlin|swift`.
 
 **Universal easy-connect** — "attach to a band already connected (held by the WHOOP app) without
 scanning" — is a per-OS primitive, wired natively behind the same `attachToConnectedWhoop()` contract:

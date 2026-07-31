@@ -3,7 +3,7 @@
 //! reading is `end_hr` minus the median bpm in a +/-15s window. Absent coverage stays `None` (never
 //! interpolated across a gap, never turned into zero). Wellness estimate, never medical.
 
-use crate::resting_hr::HrSample;
+use crate::hr_sample::HrSample;
 
 /// Recovery deltas after a bout: `end_hr` minus the median bpm at +1/+2/+5 minutes. A reading with too
 /// little post-workout coverage is `None`; a HR *rise* stays signed (negative), never clamped to zero.

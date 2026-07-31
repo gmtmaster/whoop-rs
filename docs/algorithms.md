@@ -122,7 +122,9 @@ banked no HR for; never overrides a stored HR.
 
 ## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_clean_*`, `hrv_analyze_raw`, `hrv_windowed_*`, `hrv_rolling_rmssd`, `hrv_rr_coverage`, `hrv_readiness`
 
-`hrv.rs`, the `HrvReadiness` type. Every HRV statistic the app shows is here; the app holds no second copy.
+`hrv.rs`, the `HrvReadiness` type. Every HRV statistic on the strap path is here. One second copy survives
+app-side: the Breathe screen's live readout calls Kotlin's own `Hrv.rmssd`, the unfiltered form
+`hrv_rmssd_plain` already exports.
 ```
 range_filter: keep 300-2000 ms;  clean_rr = range then Malik ectopic (|beat - local median| > 20%,
               centred 5-beat window);  clean_counts reports input / ranged / clean, ungated

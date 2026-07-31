@@ -183,8 +183,8 @@ impl WhoopCodec {
     }
 
     /// GET_HELLO (identity + firmware), family-forked: Gen5 takes the `[0x01]` b3 selector, Gen4 the
-    /// GET_HELLO_HARVARD opcode. The Gen4 body here is one byte; `whoop-client`'s `info` sends nine
-    /// (its comment says a shorter one draws silence), and which is right is unsettled on hardware.
+    /// GET_HELLO_HARVARD opcode. The Gen4 body here is one byte, matching what the app sends;
+    /// `whoop-client`'s `info` sends nine. Unsettled — no 4.0 has run against either on this radio.
     pub fn get_hello_frame(&self, seq: u8) -> Vec<u8> {
         match self.family {
             Family::Gen5 => framing::command(self.family, seq, command::GET_HELLO, &[0x01]),

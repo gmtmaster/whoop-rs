@@ -8,15 +8,27 @@ including two screens. Counted by `tools/docs-vs-code.py`, so the day a screen s
 or a new one starts — the number moves and this page has to say so.
 
 Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
-object carries a further **31 methods, 18 of them called**; the other 13 are frame builders, offload
-controls and one decoder (`decode_imu_frame`), kept as codec-parity API for the CLI and a later call
-site. Two of the 13 are a different thing and should not be filed under "awaiting a call site":
-`client_hello` and `r22_frames` each have a Kotlin twin holding the same wire bytes — `DeviceFamily.
-WHOOP5.clientHello` is `aa0108000001e67123019101363e5c8d`, the same 16 bytes as `GEN5_CLIENT_HELLO`,
-and `Whoop5Config.enableR22Sequence` is the same 16 flags in the same order as `config::R22_SEQUENCE`.
-The Kotlin copies are the ones with callers, so each table exists twice and only one side ships.
-Whether Kotlin should call across for them is a border decision, not drift.
-`tools/docs-vs-code.py` re-derives both counts and fails on drift.
+object carries a further **31 methods, 16 of them called**; the other 15 are frame builders, the offload
+machine and one decoder (`decode_imu_frame`), kept as codec-parity API for the CLI and a later call site.
+
+The 15 are three different things, and only the first is "awaiting a call site":
+
+- **A Kotlin twin holds the same wire bytes.** `client_hello` and `r22_frames`: `DeviceFamily.WHOOP5.clientHello`
+  is `aa0108000001e67123019101363e5c8d`, the same 16 bytes as `GEN5_CLIENT_HELLO`, and
+  `Whoop5Config.enableR22Sequence` is the same 16 flags in the same order as `config::R22_SEQUENCE`.
+- **A Kotlin twin holds the same state machine.** `feed`, `reset`, `offload_start` and `offload_abort` are the
+  sans-IO `Offload` door. The app reassembles in `protocol/Framing.kt` and drives the drain in
+  `ble/Backfiller.kt`, calling `decode_history` / `decode_metadata` per frame instead, so the Rust machine
+  runs for `whoopctl` only.
+- The rest are frame builders and `decode_imu_frame`, with no Kotlin equivalent yet.
+
+The Kotlin copies are the ones with callers, so each table and each machine exists twice and only one side
+ships. Whether Kotlin should call across for them is a border decision, not drift.
+
+The tables below carry **47** of them; **23 of the 79 appear in no shipped document**, which is a gap in the
+map rather than a claim about the code. `tools/docs-vs-code.py` re-derives every count here and fails on
+drift — including the receiver of a codec call, since `reassembler.feed(bytes)` once read as `WhoopCodec::feed`
+and published 18.
 
 ## The universal rule
 

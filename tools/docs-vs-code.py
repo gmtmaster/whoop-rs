@@ -66,11 +66,14 @@ def camel(s: str) -> str:
     return head + "".join(w.capitalize() for w in tail)
 
 
-def kotlin_blob() -> str:
+def kotlin_files() -> list[str]:
     if not KOTLIN.is_dir():
-        return ""
-    parts = [p.read_text(encoding="utf-8", errors="replace") for p in KOTLIN.rglob("*.kt") if p.name != "whoop_ffi.kt"]
-    return "\n".join(parts)
+        return []
+    return [p.read_text(encoding="utf-8", errors="replace") for p in KOTLIN.rglob("*.kt") if p.name != "whoop_ffi.kt"]
+
+
+def kotlin_blob() -> str:
+    return "\n".join(kotlin_files())
 
 
 def free_fns_called(names: list[str]) -> int:
@@ -85,19 +88,84 @@ def free_fns_called(names: list[str]) -> int:
 
 
 def codec_methods_called(names: list[str]) -> int:
-    """A `WhoopCodec` method is called as `.<name>(`; `new` is reached as the Kotlin constructor.
+    """A `WhoopCodec` method is called as `.<name>(` in a file that HOLDS a codec.
 
-    A bare-name search over-counted by one: it read `client_hello` as called because an unrelated
-    `DeviceFamily.clientHello` byte-array property exists, and the published figure said 19 for years
-    of that. Requiring the call parenthesis excludes a property read of the same name.
+    Requiring the call parenthesis was not enough. `.<name>(` on any receiver counted, so
+    `reassembler.feed(bytes)` (Kotlin's own `Reassembler`) read as `WhoopCodec::feed`, and nine
+    unrelated `.reset()` calls read as `WhoopCodec::reset` — the published figure said 18 called
+    while the true count is 16. Only a file naming `WhoopCodec` can hold one, so that is the scope.
     """
-    blob = kotlin_blob()
+    holders = [re.sub(r"/\*[\s\S]*?\*/", "", t) for t in kotlin_files() if "WhoopCodec" in t]
+    holders = ["\n".join(line.split("//")[0] for line in t.splitlines()) for t in holders]
+    blob = "\n".join(holders)
     called = set(re.findall(r"\.(\w+)\s*\(", blob))
     # No space before the paren: a KDoc sentence writes "WhoopCodec (decode history/live/response)",
     # which is prose, not a construction.
     if re.search(r"\bWhoopCodec\(", blob):
         called.add("new")
     return sum(1 for n in names if camel(n) in called)
+
+
+def surface_table_rows() -> set[str]:
+    """Rows in `data-flow.md`'s own surface section, one per `| \\`name\\` | what |`.
+
+    Scoped to that section: the Kotlin-stays table below it has the same row shape, so an unscoped
+    scan reads `ReadinessEngine` as a claimed export.
+    """
+    t = doc("data-flow.md")
+    if "## The whoop-rs surface" not in t:
+        return set()
+    section = t[t.index("## The whoop-rs surface"):]
+    section = section[: section.index("\n## ", 1)]
+    return set(re.findall(r"^\| `(\w+)` \|", section, re.M))
+
+
+def exports_in_no_doc(names: list[str]) -> list[str]:
+    """Exports named in neither shipped surface document.
+
+    `architecture.md` said `data-flow.md` tables all of them. It tables 47, and a quarter of the
+    surface is described nowhere at all — invisible to a count of the exports themselves.
+    """
+    text = doc("data-flow.md") + doc("algorithms.md") + doc("sleep.md")
+    return sorted(n for n in names if not re.search(rf"\b{re.escape(n)}\b", text))
+
+
+def exports_via_dead_wrapper(names: list[str]) -> list[str]:
+    """Exports whose every Kotlin crossing sits in a wrapper nothing else names, main or test.
+
+    `free_fns_called` asks whether a hand-written file crosses the FFI, which a wrapper satisfies on
+    its own. `architecture.md` makes the stronger claim that the app CALLS each one, and a wrapper
+    with no caller does not. Scans main AND test, so a parity test counts as a consumer; the
+    qualified crossing is cut before counting or every wrapper looks referenced by itself.
+    """
+    src = KOTLIN.parent.parent if KOTLIN.name == "java" else KOTLIN
+    if not src.is_dir():
+        return []
+    bodies = {}
+    for p in src.rglob("*.kt"):
+        if p.name == "whoop_ffi.kt":
+            continue
+        t = re.sub(r"/\*[\s\S]*?\*/", "", p.read_text(encoding="utf-8", errors="replace"))
+        bodies[p] = "\n".join(line.split("//")[0] for line in t.splitlines())
+    unqualified = re.sub(r"uniffi\.whoop_ffi\.\w+", "", "\n".join(bodies.values()))
+
+    def wrapper_at(text: str, idx: int) -> str | None:
+        """Name of the innermost `val`/`var`/`fun` declaration the crossing at `idx` belongs to."""
+        head = text[max(0, text.rfind("\n", 0, idx) - 300): idx + 1]
+        found = list(re.finditer(r"(?:val|var|fun)\s+(\w+)", head))
+        return found[-1].group(1) if found else None
+
+    out = []
+    for n in names:
+        wrappers = {
+            w
+            for t in bodies.values()
+            for m in re.finditer(rf"uniffi\.whoop_ffi\.{camel(n)}\b", t)
+            if (w := wrapper_at(t, m.start()))
+        }
+        if wrappers and all(len(re.findall(rf"\b{w}\b", unqualified)) <= 1 for w in wrappers):
+            out.append(n)
+    return sorted(out)
 
 
 def family_branches() -> int:
@@ -258,6 +326,13 @@ def main() -> int:
         ("data-flow.md", "Kotlin files crossing the FFI",
          r"\*\*(\d+) hand-written Kotlin files under `main/` reach `uniffi\.whoop_ffi` directly\*\*",
          len(ffi_touching_files())),
+        ("data-flow.md", "surface-table rows", r"tables below carry \*\*(\d+)\*\* of them",
+         len(surface_table_rows() & set(exports))),
+        ("data-flow.md", "exports in no shipped doc", r"\*\*(\d+) of the 79 appear in no shipped document\*\*",
+         len(exports_in_no_doc(exports))),
+        ("architecture.md", "exports reached only via a dead wrapper",
+         r"(\w+) of them\s+\(`spo2_rolling_reading`\) only through a Kotlin wrapper the app never calls",
+         "one" if len(exports_via_dead_wrapper(exports)) == 1 else str(exports_via_dead_wrapper(exports))),
     ]
 
     n_ignored = ignored_gates()
@@ -310,6 +385,16 @@ def main() -> int:
         bad += 1
     else:
         print(f"  ok     {'README.md':<16} {'crate table':<26} {len(rows)} rows == {len(members)} crates")
+
+    # The surface table's ghost direction. Its shortfall is a counted claim above (the table is a map,
+    # not an API reference), but a row naming an export that no longer exists reads as ordinary prose.
+    ghost_rows = sorted(surface_table_rows() - set(exports))
+    checked += 1
+    if ghost_rows:
+        print(f"  WRONG  {'data-flow.md':<16} {'surface-table ghosts':<26} rows for no export: {ghost_rows}")
+        bad += 1
+    else:
+        print(f"  ok     {'data-flow.md':<16} {'surface-table ghosts':<26} {len(surface_table_rows())} rows, all exported")
 
     # Each cohort kappa must be written the SAME way everywhere it appears. A document spells the four
     # cohorts across one comma-separated row, so a fragment is the unit: any decimal sharing a fragment
