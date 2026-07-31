@@ -46,8 +46,12 @@ pub fn default_max_hr(age: i32) -> i32 {
     220 - age
 }
 
-/// Linear-interpolated percentile of an already-sorted slice; `pct` on the 0..100 scale.
-pub fn percentile(sorted_values: &[f64], pct: f64) -> f64 {
+/// [`stats::percentile`] on the 0..100 scale, for the constants here that are written as percents.
+/// The unit is in the name because the two take the SAME argument on different scales, and a
+/// bare `percentile` imported from either would compile against both.
+///
+/// [`stats::percentile`]: crate::stats::percentile
+pub fn percentile_pct(sorted_values: &[f64], pct: f64) -> f64 {
     crate::stats::percentile(sorted_values, pct / 100.0)
 }
 
@@ -57,7 +61,7 @@ pub fn estimate_hrmax(hr_history: &[f64], age: Option<f64>) -> (f64, &'static st
     if hr_history.len() >= HRMAX_MIN_SAMPLES {
         let mut sorted = hr_history.to_vec();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let observed = percentile(&sorted, HRMAX_PERCENTILE);
+        let observed = percentile_pct(&sorted, HRMAX_PERCENTILE);
         return match tanaka {
             None => (observed, "observed"),
             Some(t) if observed >= t => (observed, "observed"),
@@ -329,7 +333,7 @@ mod tests {
     fn hrmax_and_percentile() {
         assert!((tanaka_hrmax(30.0) - 187.0).abs() < 1e-9);
         let sorted: Vec<f64> = (0..=100).map(|v| v as f64).collect();
-        assert!((percentile(&sorted, 50.0) - 50.0).abs() < 1e-9);
+        assert!((percentile_pct(&sorted, 50.0) - 50.0).abs() < 1e-9);
         assert_eq!(estimate_hrmax(&[], Some(40.0)).1, "tanaka");
         assert_eq!(estimate_hrmax(&[], None).1, "unknown");
     }
