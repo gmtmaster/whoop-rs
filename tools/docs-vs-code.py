@@ -244,12 +244,10 @@ def exports_via_dead_wrapper(names: list[str]) -> list[str]:
     src = KOTLIN.parent.parent if KOTLIN.name == "java" else KOTLIN
     if not src.is_dir():
         return []
-    bodies = {}
-    for p in src.rglob("*.kt"):
-        if p.name == "whoop_ffi.kt":
-            continue
-        t = re.sub(r"/\*[\s\S]*?\*/", "", p.read_text(encoding="utf-8", errors="replace"))
-        bodies[p] = "\n".join(line.split("//")[0] for line in t.splitlines())
+    bodies = {
+        p: strip_comments(p.read_text(encoding="utf-8", errors="replace"))
+        for p in src.rglob("*.kt") if p.name != "whoop_ffi.kt"
+    }
     unqualified = re.sub(r"uniffi\.whoop_ffi\.\w+", "", "\n".join(bodies.values()))
 
     def wrapper_at(text: str, idx: int) -> str | None:
