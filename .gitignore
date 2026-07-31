@@ -9,6 +9,9 @@
 *.log
 mon-*.txt
 
+# Python bytecode from the tools/ gates
+__pycache__/
+
 # Editor / OS
 *.swp
 .DS_Store
