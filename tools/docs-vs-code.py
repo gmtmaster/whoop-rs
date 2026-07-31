@@ -100,10 +100,11 @@ CHOICE_COND = re.compile(r"\b(?:if|when)[ \t]*\([^()\n]*\)")
 # `recv.method(` or `accessor(args).method(`, the two receiver shapes Kotlin writes on one line.
 CODEC_CALL = re.compile(r"\b([A-Za-z_]\w*)[ \t]*(?:\([^()\n]*\))?[ \t]*\.[ \t]*([A-Za-z_]\w*)[ \t]*\(")
 # A declared return type, which is the ONE thing a block body cannot omit: `fun f(a: A): T {` and
-# `val p: T get() {`. Captured up to `=` so an expression body's initialiser is never read as a type.
+# `val p: T get() {`. It stops at `=` so an initialiser is never read as a type, and ends at `=` OR the
+# line, so an annotated expression body whose value is on the NEXT line is still read.
 CODEC_TYPED = [
-    re.compile(r"^[ \t]*(?:\w+[ \t]+)*fun[ \t]+(\w+)[ \t]*\([^\n]*?\)[ \t]*:[ \t]*([^\n=]*)$", re.M),
-    re.compile(r"^[ \t]*(?:\w+[ \t]+)*va[lr][ \t]+(\w+)[ \t]*:[ \t]*([^\n=]*)$", re.M),
+    re.compile(r"^[ \t]*(?:\w+[ \t]+)*fun[ \t]+(\w+)[ \t]*\([^\n]*?\)[ \t]*:[ \t]*([^\n=]*)(?:=|$)", re.M),
+    re.compile(r"^[ \t]*(?:\w+[ \t]+)*va[lr][ \t]+(\w+)[ \t]*:[ \t]*([^\n=]*)(?:=|$)", re.M),
 ]
 
 

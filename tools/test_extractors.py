@@ -132,6 +132,10 @@ def main() -> int:
           gate.codec_escapes(HOLDER + "\nprivate fun pick(gen: Gen): WhoopCodec { return codec(gen) }\n"), [])
     check("a builder returning bytes off a codec is not an escape",
           gate.codec_escapes(HOLDER + "\nfun raw(s: Int): ByteArray { return gen5.buzzFrame(s) }\n"), [])
+    # Neither rule reaches this on its own: the inference wants the value on the declaration line, and
+    # the type stopped at the line end rather than at `=`.
+    check("an annotated expression body wrapping to the next line escapes",
+          gate.codec_escapes(HOLDER + "\nfun pick(gen: Gen): WhoopCodec =\n    codec(gen)\n"), ["pick"])
     check("prose mention constructs nothing", with_kotlin(
         "// WhoopCodec (decode history) is described here.\nval r = Reassembler()\nr.feed(b)",
         lambda: gate.codec_calls(["new", "feed"]))[0], set())
