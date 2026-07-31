@@ -11,12 +11,11 @@
 
 mod common;
 
-use common::{kappa4, read_accel, read_hr, read_meta, read_rr, read_truth, stage_idx};
+use common::{dirs_of, kappa4, read_accel, read_hr, read_meta, read_rr, read_truth, stage_idx};
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, Prepared, SleepInput};
 
@@ -43,11 +42,7 @@ fn load_night(dir: &Path) -> Option<Night> {
 }
 
 fn load_dataset(ds: &str) -> Vec<Night> {
-    let root = common::fixtures_root().join(ds);
-    let mut dirs: Vec<PathBuf> = fs::read_dir(&root)
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
+    let dirs = dirs_of(ds);
     dirs.iter().filter_map(|d| load_night(d)).collect()
 }
 

@@ -11,10 +11,8 @@
 
 mod common;
 
-use common::{read_accel, read_hr, read_meta, read_rr, root};
+use common::{dirs_of, read_accel, read_hr, read_meta, read_rr};
 
-use std::fs;
-use std::path::PathBuf;
 
 use physio_algo::sleep::{params::Params, prepare_v2, stage_v2_prepared, SleepInput, SleepStage};
 
@@ -24,10 +22,7 @@ fn main() {
     let mut capped = shipped;
     capped.cycle_rem_ramp_cap = 0.7;
 
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
+    let dirs = dirs_of("ours");
     println!("sid,recipe,epochs,labels");
     for d in dirs {
         let Some((w0, w1, n)) = read_meta(&d) else { continue };

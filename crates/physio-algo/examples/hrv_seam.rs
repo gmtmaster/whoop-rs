@@ -11,35 +11,22 @@
 
 mod common;
 
-use common::{median, root};
+use common::{dirs_of, median, read_rr};
 
-use std::fs;
-use std::path::PathBuf;
 
 use physio_algo::hrv::HrvReadiness;
 
 fn main() {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
+    let dirs = dirs_of("ours");
 
     let (mut shifts, mut befores, mut afters) = (Vec::new(), Vec::new(), Vec::new());
     let mut per_owner: std::collections::BTreeMap<String, Vec<(f64, f64)>> = std::collections::BTreeMap::new();
     let (mut seams, mut beats) = (0usize, 0usize);
     for d in &dirs {
-        let Ok(text) = fs::read_to_string(d.join("rr.csv")) else { continue };
-        // Beats sharing a second came from one report, which is the grouping the fix restores.
-        let mut reports: Vec<(u32, Vec<u16>)> = Vec::new();
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            let mut f = line.split(',');
-            let (Some(ts), Some(ms)) = (f.next(), f.next()) else { continue };
-            let (ts, ms) = (ts.trim().parse::<u32>().unwrap_or(0), ms.trim().parse::<u16>().unwrap_or(0));
-            match reports.last_mut() {
-                Some((t, v)) if *t == ts => v.push(ms),
-                _ => reports.push((ts, vec![ms])),
-            }
-        }
+        // Beats sharing a second came from one report, which is the grouping the fix restores, and which
+        // `read_rr` already applies. `rmssd_gap_aware` wants the pairs, not the run type.
+        let reports: Vec<(u32, Vec<u16>)> =
+            read_rr(d).into_iter().map(|r| (r.ts as u32, r.intervals)).collect();
         if reports.len() < 300 {
             continue;
         }

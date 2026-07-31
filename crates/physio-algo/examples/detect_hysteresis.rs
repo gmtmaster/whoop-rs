@@ -14,11 +14,9 @@
 
 mod common;
 
-use common::{asleep_runs, pct, read_accel, read_band, read_csv, read_hr, read_meta, read_rr};
+use common::{asleep_runs, dirs_of, pct, read_accel, read_band, read_csv, read_hr, read_meta, read_rr};
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
 
 use physio_algo::sleep::{
     detect_sessions_with, params::Params, prepare_v2, stage_v2_prepared, AccelSample, DetectParams,
@@ -29,14 +27,6 @@ const PSG_WAKE: i32 = 0;
 const RUN_MIN_MINUTES: i64 = 90;
 /// A scored non-wake stretch this long fixes PSG onset, matching the staging rule.
 const ONSET_RUN_EPOCHS: usize = 10;
-
-fn subdirs(ds: &str) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(common::fixtures_root().join(ds))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
-    dirs
-}
 
 struct Block {
     name: String,
@@ -56,7 +46,7 @@ struct PsgNight {
 }
 
 fn load_blocks() -> Vec<Block> {
-    subdirs("continuous")
+    dirs_of("continuous")
         .iter()
         .map(|d| Block {
             name: d.file_name().unwrap().to_string_lossy().into_owned(),
@@ -71,7 +61,7 @@ fn load_blocks() -> Vec<Block> {
 
 fn load_psg_nights() -> Vec<PsgNight> {
     let mut out = Vec::new();
-    for d in subdirs("dreamt") {
+    for d in dirs_of("dreamt") {
         let Some((w0, _, _)) = read_meta(&d) else { continue };
         let truth: BTreeMap<i64, i32> =
             read_csv(&d.join("truth.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect();

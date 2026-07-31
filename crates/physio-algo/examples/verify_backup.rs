@@ -78,7 +78,6 @@ fn main() {
 
 /// Run the CURRENT workout detector over a day's raw streams. Raw data is version-independent, so this
 /// answers "what would today's code find" on a backup taken from an older build.
-#[allow(dead_code)]
 fn workouts_for(dir: &Path, day: &str, resting_hr: f64, max_hr: f64) {
     let hr: Vec<physio_algo::HrSample> = fs::read_to_string(dir.join(format!("hr_{day}.csv")))
         .unwrap_or_default().lines().filter_map(|l| {

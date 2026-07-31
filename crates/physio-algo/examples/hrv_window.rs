@@ -13,10 +13,8 @@
 
 mod common;
 
-use common::{median, read_accel, read_hr, read_rr, root};
+use common::{dirs_of, median, read_accel, read_hr, read_published_hrv, read_rr};
 
-use std::fs;
-use std::path::PathBuf;
 
 use physio_algo::hrv::HrvReadiness;
 use physio_algo::sleep::{
@@ -25,10 +23,6 @@ use physio_algo::sleep::{
 
 /// How far a staged night's start may sit from a published sleep onset and still be the same night.
 const MATCH_SLACK_S: i64 = 4 * 3600;
-
-fn fixtures() -> PathBuf {
-    common::fixtures_root()
-}
 
 /// A half-open span of unix seconds.
 type Span = (u32, u32);
@@ -51,27 +45,6 @@ struct Night {
     deep: Option<f64>,
 }
 
-/// WHOOP's own published nightly HRV per wearer, keyed by the unix onset of the night it belongs to.
-fn published_hrv() -> Vec<(String, i64, f64)> {
-    let text = match fs::read_to_string(fixtures().join("whoop-hrv.json")) {
-        Ok(t) => t,
-        Err(_) => return Vec::new(),
-    };
-    let root: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let mut out = Vec::new();
-    for (owner, nights) in root.as_object().into_iter().flatten() {
-        for n in nights.as_array().into_iter().flatten() {
-            if let (Some(t), Some(h)) = (n["onset_unix"].as_i64(), n["hrv_ms"].as_f64()) {
-                out.push((owner.clone(), t, h));
-            }
-        }
-    }
-    out
-}
-
 /// The last contiguous run of deep spans, the comparator a strap-style "last slow-wave sleep" uses.
 fn last_deep_run(deep: &[Span]) -> Vec<Span> {
     let mut last: Vec<Span> = Vec::new();
@@ -90,10 +63,7 @@ fn last_deep_run(deep: &[Span]) -> Vec<Span> {
 }
 
 fn main() {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root("ours"))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
+    let dirs = dirs_of("ours");
     let params = Params::default();
 
     let (mut whole, mut deep_only, mut last_sws) = (Vec::new(), Vec::new(), Vec::new());
@@ -179,7 +149,7 @@ fn main() {
         );
     }
 
-    let published = published_hrv();
+    let published = read_published_hrv();
     println!();
     if published.is_empty() {
         println!("no whoop-hrv.json beside the fixtures — the published-HRV comparison is skipped");

@@ -23,12 +23,11 @@
 mod common;
 
 use common::{
-    dirs_of, kappa4, read_accel, read_band, read_csv, read_hr, read_rr, read_steps, root, stage_at,
-    BAND_ASLEEP, RefineCensus, TwoClass,
+    dirs_of, kappa4, read_accel, read_band, read_csv, read_hr, read_meta, read_rr, read_steps, root,
+    stage_at, BAND_ASLEEP, RefineCensus, TwoClass,
 };
 
 use std::collections::BTreeMap;
-use std::fs;
 
 use physio_algo::sleep::{
     decode_v2, detect_sessions, emissions_v2, epoch_starts_v2, params::Params, prepare_v2, segments_v2,
@@ -75,8 +74,7 @@ fn continuous_spans(p: &Params) -> Vec<Span> {
         if accel.len() < 120 {
             continue;
         }
-        let hr: Vec<HrSample> =
-            read_hr(&d);
+        let hr: Vec<HrSample> = read_hr(&d);
         let rr = read_rr(&d);
         let steps = read_steps(&d);
         for s in detect_sessions(&hr, &accel, 0, &[], &band, None) {
@@ -131,25 +129,20 @@ struct PsgNight {
 fn load_psg(set: &str) -> Vec<PsgNight> {
     let mut out = Vec::new();
     for d in dirs_of(set) {
-        let Ok(meta) = fs::read_to_string(d.join("meta.txt")) else { continue };
-        let m: Vec<i64> = meta.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-        if m.len() < 4 {
-            continue;
-        }
+        let Some((w0, w1, _)) = read_meta(&d) else { continue };
         let truth: BTreeMap<i64, usize> = read_csv(&d.join("truth.csv"))
             .iter()
             .filter(|r| (0.0..4.0).contains(&r[1]))
-            .map(|r| (m[1] + r[0] as i64 * EPOCH_SEC, r[1] as usize))
+            .map(|r| (w0 + r[0] as i64 * EPOCH_SEC, r[1] as usize))
             .collect();
         if truth.is_empty() {
             continue;
         }
         let accel: Vec<AccelSample> = read_accel(&d);
-        let hr: Vec<HrSample> =
-            read_hr(&d);
+        let hr: Vec<HrSample> = read_hr(&d);
         out.push(PsgNight {
             name: d.file_name().unwrap().to_string_lossy().to_string(),
-            input: SleepInput { start: m[1], end: m[2], hr, rr: read_rr(&d), accel },
+            input: SleepInput { start: w0, end: w1, hr, rr: read_rr(&d), accel },
             truth,
         });
     }

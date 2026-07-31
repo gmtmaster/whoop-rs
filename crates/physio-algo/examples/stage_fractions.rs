@@ -18,10 +18,9 @@ mod common;
 
 use common::{
     dirs_of, kappa4, night_id, pair_nearest, pre_retune, read_accel, read_hr, read_meta, read_rr, read_steps,
-    stage_idx, RefineCensus,
+    read_export, stage_idx, Export, RefineCensus,
 };
 
-use std::fs;
 
 use physio_algo::sleep::{
     epoch_starts_v2, params::Params, prepare_v2, stage_v2_prepared, AccelSample, Prepared, SleepInput,
@@ -45,14 +44,6 @@ struct Night {
     input: SleepInput,
     accel: Vec<AccelSample>,
     steps: Vec<StepSample>,
-}
-
-/// One night as WHOOP's app reports it: its own in-bed window and its own stage shares.
-struct Export {
-    owner: String,
-    onset: i64,
-    wake: i64,
-    frac: [f64; 4],
 }
 
 /// A PSG night: the streams, and the hypnogram keyed by epoch start.
@@ -99,27 +90,6 @@ fn load_ours() -> Vec<Night> {
             accel,
         });
     }
-    out
-}
-
-/// WHOOP's per-night stage shares, keyed to the in-bed window the app itself reports.
-fn load_export() -> Vec<Export> {
-    let path = common::fixtures_root().join("whoop-labels.json");
-    let Ok(text) = fs::read_to_string(&path) else { return Vec::new() };
-    let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
-    let mut out = Vec::new();
-    for (owner, nights) in root.as_object().into_iter().flatten() {
-        for n in nights.as_array().into_iter().flatten() {
-            let (Some(onset), Some(wake)) = (n["onset_unix"].as_i64(), n["wake_unix"].as_i64()) else {
-                continue;
-            };
-            let frac = ["awake", "light", "deep", "rem"].map(|k| n[k].as_f64().unwrap_or(f64::NAN));
-            if wake > onset && frac.iter().all(|v| v.is_finite()) {
-                out.push(Export { owner: owner.clone(), onset, wake, frac });
-            }
-        }
-    }
-    out.sort_by_key(|e| e.onset);
     out
 }
 
@@ -294,7 +264,7 @@ fn main() {
     let shipped = Params::SHIPPED;
     let pre = pre_retune(&shipped);
     let nights = load_ours();
-    let export = load_export();
+    let export = read_export();
     if nights.is_empty() || export.is_empty() {
         println!("need both `ours` and whoop-labels.json under {}", common::fixtures_root().display());
         return;

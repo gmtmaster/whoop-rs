@@ -323,7 +323,7 @@ been exported, because nothing shows it. What differs below is how strongly each
 
 | Algorithm | Evidence |
 |---|---|
-| Sleep detection + staging (V2) | Cohen's κ 0.311 DREAMT (100 PSG subjects), 0.412 AAUWSS, 0.537 killa5, 0.379 sleep-accel. A re-tune was attempted and **rejected**: it gained 0.044 on the fitting set and lost up to 0.372 on held-out sets |
+| Sleep detection + staging (V2) | Cohen's κ against PSG: **0.311** DREAMT (100 subjects), **0.412** AAUWSS, **0.379** sleep-accel. Those three are asserted by `tests/dataset_parity.rs`. Against our own stored hypnograms, which is a consistency read and not accuracy — the truth column is our own past output — the `--ignored` sheet prints 0.533 killa5 (13), 0.483 strap (46), 0.599 whoop4 (20); those three are printed, not asserted, and were measured on `fixtures_multi_clean2` on 2026-07-31. A re-tune was attempted and **rejected**: it gained 0.044 on the fitting set and lost up to 0.372 on held-out sets |
 
 ### ✅ Parity-tested — pinned to the previous implementation
 

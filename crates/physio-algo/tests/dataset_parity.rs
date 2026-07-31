@@ -186,35 +186,60 @@ fn v2_sleep_accel_kappa_matches_shipped() {
     assert!((kappa - 0.379).abs() < 0.008, "V2 sleep-accel kappa {kappa:.3} off target 0.379");
 }
 
-/// Every epoch-labelled set the corpus holds, with what its labels are worth, so none sits unnamed —
-/// `whoop4` was doing exactly that, 20 nights no harness read. A set with no labels says so rather than
-/// scoring kappa 0. Prints only; the three gates above are what fail on drift.
+/// What a set's truth column IS, and therefore whether a four-class kappa against it means anything.
+enum Truth {
+    /// wake / light / deep / REM. `run_dataset`'s 4x4 matrix is the right instrument.
+    FourClass,
+    /// wake / asleep only. A four-class kappa is a CATEGORY ERROR here: the `1` that means ASLEEP would
+    /// be scored against `light`. Such a set is named and left unscored rather than given a wrong number.
+    TwoClass,
+    /// No labels at all.
+    Unlabelled,
+}
+
+/// Every set the corpus holds, with what its labels are worth, so none sits unnamed — `whoop4` was doing
+/// exactly that, 20 nights no harness read, and `ours` was doing it again with 92. The three gates above
+/// are what fail on a kappa drift; what THIS one asserts is that the list below still covers the disk,
+/// because a set nobody has judged is how the last two got their wrong verdicts.
 #[test]
 #[ignore = "reads external fixtures; run with --ignored for the full sheet"]
 fn v2_all_datasets_report() {
-    // (set, what its truth column IS, and therefore what a kappa against it may be used for)
-    const SETS: [(&str, &str); 7] = [
-        ("dreamt", "PSG hypnogram — accuracy"),
-        ("aauwss", "PSG hypnogram — accuracy"),
-        ("sleep-accel", "PSG hypnogram — accuracy"),
-        ("e9night", "unlabelled — nothing"),
-        ("killa5", "our own stagesJSON — CIRCULAR, consistency only"),
-        ("strap", "our own stagesJSON — CIRCULAR, consistency only"),
-        ("whoop4", "our own on-board stagesJSON — CIRCULAR, consistency only"),
+    const SETS: [(&str, Truth, &str); 9] = [
+        ("dreamt", Truth::FourClass, "PSG hypnogram — accuracy"),
+        ("aauwss", Truth::FourClass, "PSG hypnogram — accuracy"),
+        ("sleep-accel", Truth::FourClass, "PSG hypnogram — accuracy"),
+        ("killa5", Truth::FourClass, "our own stagesJSON — CIRCULAR, consistency only"),
+        ("strap", Truth::FourClass, "our own stagesJSON — CIRCULAR, consistency only"),
+        ("whoop4", Truth::FourClass, "our own on-board stagesJSON — CIRCULAR, consistency only"),
+        ("ours", Truth::TwoClass, "the strap's own sleep_state — INDEPENDENT of us, but 0=wake/1=asleep"),
+        ("continuous", Truth::Unlabelled, "unlabelled — its band reference rides in band.csv, not truth.csv"),
+        ("e9night", Truth::Unlabelled, "unlabelled — nothing"),
     ];
     println!("fixture root: {}", fixtures_root().display());
     println!("{:<14} {:>8} {:>10}   what its truth is", "dataset", "kappa", "subjects");
-    for (ds, what) in SETS {
+    for (ds, truth, what) in SETS {
         let root = fixtures_root().join(ds);
         if !root.is_dir() {
             println!("{ds:<14} {:>8} {:>10}   {what}", "-", "missing");
             continue;
         }
-        let (kappa, n) = run_dataset(ds);
-        if n == 0 {
-            println!("{ds:<14} {:>8} {:>10}   {what}", "-", 0);
-            continue;
+        match truth {
+            Truth::FourClass => match run_dataset(ds) {
+                (_, 0) => println!("{ds:<14} {:>8} {:>10}   {what}", "-", 0),
+                (kappa, n) => println!("{ds:<14} {kappa:>8.3} {n:>10}   {what}"),
+            },
+            // Scored elsewhere, on the instrument its labels fit; a number here would be the wrong one.
+            _ => println!("{ds:<14} {:>8} {:>10}   {what}", "-", "n/a"),
         }
-        println!("{ds:<14} {kappa:>8.3} {n:>10}   {what}");
     }
+
+    let Ok(entries) = fs::read_dir(fixtures_root()) else { return };
+    let mut unnamed: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| !SETS.iter().any(|(s, _, _)| s == n))
+        .collect();
+    unnamed.sort();
+    assert!(unnamed.is_empty(), "fixture sets on disk that this matrix does not name: {unnamed:?}");
 }

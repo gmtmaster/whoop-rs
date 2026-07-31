@@ -1,9 +1,14 @@
 //! Shared fixture loading for the analysis harnesses, and the refinement guard.
 //!
-//! Every stream a harness reads has one reader here, `steps.csv` included — the app runs
-//! detect -> stage -> refine_wake, and a harness with no step stream stages only the first two.
-//! [`RefineCensus`] is the only route to the refinement: it counts which side of the density gate each
-//! span fell on, so an unrefined span can never be pooled into a figure labelled refined.
+//! Every stream a harness reads out of the fixture corpus has its one reader here, `steps.csv` included —
+//! the app runs detect -> stage -> refine_wake, and a harness with no step stream stages only the first
+//! two. `verify_backup` is the one exception and reads a user-supplied backup export, not the corpus.
+//! `tools/docs-vs-code.py` re-checks that, because this paragraph has now been false twice.
+//!
+//! [`RefineCensus`] is how a harness refines under SHIPPED params: it counts which side of the density
+//! gate each span fell on, so an unrefined span is never pooled into a figure LABELLED refined. Two
+//! harnesses reach past it on purpose — `wake_refine` sweeps `refine_wake_with` under other params, which
+//! is its subject, and `sleep_to_charge` runs its own `motion_density` gate at load time.
 
 #![allow(dead_code)]
 
@@ -369,6 +374,22 @@ pub fn read_export() -> Vec<Export> {
         }
     }
     out.sort_by_key(|e| e.onset);
+    out
+}
+
+/// WHOOP's own published nightly HRV per wearer as `(owner, night onset unix, ms)`. The sibling of
+/// [`read_export`]: same file shape, the other published quantity.
+pub fn read_published_hrv() -> Vec<(String, i64, f64)> {
+    let Ok(text) = fs::read_to_string(fixtures_root().join("whoop-hrv.json")) else { return Vec::new() };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (owner, nights) in root.as_object().into_iter().flatten() {
+        for n in nights.as_array().into_iter().flatten() {
+            if let (Some(t), Some(h)) = (n["onset_unix"].as_i64(), n["hrv_ms"].as_f64()) {
+                out.push((owner.clone(), t, h));
+            }
+        }
+    }
     out
 }
 

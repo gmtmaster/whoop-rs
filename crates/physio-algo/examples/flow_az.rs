@@ -16,10 +16,11 @@
 
 mod common;
 
-use common::{asleep_runs, median, pct, read_accel, read_band, read_csv, read_hr, read_rr, root, RefineCensus};
+use common::{
+    asleep_runs, dirs_of, median, pct, read_accel, read_band, read_csv, read_hr, read_rr, RefineCensus,
+};
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use physio_algo::sleep::{
     detect_sessions, params::Params, prepare_v2, stage_v2_prepared, AccelSample, HrSample, RrRun,
@@ -63,10 +64,7 @@ fn load(dir: &Path) -> Option<Block> {
 
 fn main() {
     let params = Params::SHIPPED;
-    let mut dirs: Vec<PathBuf> = fs::read_dir(root("continuous"))
-        .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect())
-        .unwrap_or_default();
-    dirs.sort();
+    let dirs = dirs_of("continuous");
 
     let (mut runs_total, mut runs_hit, mut split, mut merged, mut spurious) = (0, 0, 0, 0, 0);
     let (mut naps, mut head_bridged, mut unjudged) = (0, 0, 0);
