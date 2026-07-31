@@ -100,6 +100,24 @@ def codec_methods_called(names: list[str]) -> int:
     return sum(1 for n in names if camel(n) in called)
 
 
+def family_branches() -> int:
+    """Non-test `if family == Family::GenX` sites outside `framing`/`family`.
+
+    `architecture.md` claimed every per-generation wire difference is data on a `HeaderSpec` matched
+    in one place. `HeaderSpec` carries the frame HEADER shape only, so opcodes, the GEN5 event
+    residual and the GEN5-only record versions each branch at their own site — and unlike a `match`
+    on the closed enum, an `if ==` would compile silently against a third generation.
+    """
+    n = 0
+    for p in rs_files("crates"):
+        if p.stem in {"framing", "family"}:
+            continue
+        t = p.read_text(encoding="utf-8")
+        cut = t.find("#[cfg(test)]")
+        n += len(re.findall(r"(?:!=|==)\s*(?:crate::)?(?:family::)?Family::Gen[45]", t[:cut] if cut >= 0 else t))
+    return n
+
+
 def kotlin_backlog_rows() -> int | None:
     """Rows in noop-tan's own Kotlin-still-owns-maths table — the border's OTHER direction.
 
@@ -163,6 +181,7 @@ def main() -> int:
          kotlin_backlog_rows()),
         ("sleep.md", "physio-algo tests", r"\*\*(\d+) `physio-algo` tests", None),
         ("sleep.md", "whoop-ffi tests", r"`physio-algo` tests \+ (\d+) `whoop-ffi` tests", None),
+        ("architecture.md", "generation branches", r"there are \*\*(\d+)\*\* of those outside", family_branches()),
         ("data-flow.md", "FFI free-fn exports", r"\*\*(\d+) exported functions, all", len(exports)),
         ("data-flow.md", "FFI exports called", r"exported functions, all (\d+) called", free_fns_called(exports)),
         ("data-flow.md", "codec methods", r"further \*\*(\d+) methods", len(methods)),

@@ -59,9 +59,13 @@ gravity widen is asserted byte-for-byte on the worn v18 frame.
   `Stream`, BSD-3. Chosen over simpleble (C++/cmake build burden, BUSL-1.1, preview bindings).
   It only appears in `ble-btleplug`; swapping to another backend touches nothing else.
 - **One WHOOP module + a closed `Family { Gen4, Gen5 }` enum** — not split 4.0/5.0 modules, not
-  trait-objects, not per-gen crates. Every per-generation wire difference is *data* on a
-  `HeaderSpec`, matched in exactly one place (`framing`). Adding a third generation makes every
-  `match` a compiler-enforced porting checklist.
+  trait-objects, not per-gen crates. Every per-generation FRAME-HEADER difference is *data* on a
+  `HeaderSpec`, matched in exactly one place (`framing`). What is not header shape stays a branch at
+  its own site, and there are **8** of those outside `framing`/`family`: three in `whoop-client` (the
+  GEN5 client hello, the per-generation clock opcode, the GEN5-only R22 enable), the GEN5 event
+  residual in `live`, three GEN5-only record versions in `records`, and one label in `whoopctl`.
+  Adding a third generation makes every `match` a compiler-enforced porting checklist; those 8 are
+  `if family ==`, so they would compile and be wrong.
 - **Decode everything inner-relative.** GEN5 frame-absolute offsets = GEN4 + 4, and the inner
   record starts at byte 8 (GEN5) vs 4 (GEN4), so the +4 cancels — one decoder serves both
   generations for the shared types (realtime/event/metadata). Records fork by the **version byte**,
@@ -92,8 +96,8 @@ These converge with both mature Rust prior-art implementations (openwhoop, goose
 
 Every multi-byte integer is little-endian. A frame is `header + inner + CRC32(inner)`, where the
 inner record is `[type][seq][cmd][payload]`. The per-generation shape is the `HeaderSpec` in
-`whoop-protocol/src/family.rs`; framing/deframing consult it and never branch on generation
-elsewhere.
+`whoop-protocol/src/family.rs`; framing and deframing consult it and never branch on generation
+themselves.
 
 | | GEN4 (Harvard) | GEN5 (Maverick / puffin) |
 |---|---|---|
