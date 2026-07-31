@@ -225,6 +225,35 @@ def main() -> int:
     else:
         print(f"  ok     {'common/mod.rs':<16} {'owns every corpus reader':<26} {len(list(ex.glob('*.rs')))} harnesses, {sorted(allowed)} excepted")
 
+    # Every symbol `sleep.md`'s module table names must exist in `physio-algo`. A count check cannot see
+    # this: the table named `bridge_sparse_sleep` (the code calls it `bridge_sleep_gap`) and `RespSample`
+    # (never existed), and both read as ordinary prose. Same class as the crate the architecture diagram
+    # was built on that was not a member of the workspace.
+    text = doc("sleep.md")
+    checked += 1
+    named, absent = set(), []
+    if "## Modules" not in text:
+        print(f"  NOPIN  {'sleep.md':<16} {'module table symbols':<26} the section this gate reads is GONE")
+        bad += 1
+    else:
+        table = text[text.index("## Modules"):]
+        table = table[: table.index("\n## ", 1)]
+        src = "\n".join(p.read_text(encoding="utf-8") for p in rs_files("crates/physio-algo/src"))
+        for tok in re.findall(r"`([^`]+)`", table):
+            if tok.endswith(".rs") or " " in tok:
+                continue
+            for part in re.split(r"::|\.", tok):
+                if re.fullmatch(r"[A-Za-z_]\w*", part) and part not in {"crate", "stats"}:
+                    named.add(part)
+        absent = [n for n in sorted(named) if not re.search(rf"\b{re.escape(n)}\b", src)]
+    if not named:
+        pass
+    elif absent:
+        print(f"  WRONG  {'sleep.md':<16} {'module table symbols':<26} named but absent from physio-algo: {absent}")
+        bad += 1
+    else:
+        print(f"  ok     {'sleep.md':<16} {'module table symbols':<26} {len(named)} named, all present")
+
     # Every fixture set on disk must be named in the parity sheet's matrix.
     disk, named = on_disk_sets(), named_sets()
     if disk:
