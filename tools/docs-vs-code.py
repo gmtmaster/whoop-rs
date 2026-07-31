@@ -165,6 +165,21 @@ def command_opcodes() -> int:
     return len(re.findall(r"^pub const [A-Z0-9_]+: u8 = \d+;", t, re.M))
 
 
+def ffi_touching_files() -> list[str]:
+    """Hand-written Kotlin files under `main/` that reach `uniffi.whoop_ffi` directly.
+
+    `data-flow.md` called `RustScores.kt` the single adapter. It is the largest by far, but it is not
+    the only one, and a claim of singularity is worth a count rather than a reading.
+    """
+    main = KOTLIN.parent / "main" / "java" if (KOTLIN.parent / "main").is_dir() else KOTLIN
+    if not main.is_dir():
+        return []
+    return sorted(
+        p.name for p in main.rglob("*.kt")
+        if p.name != "whoop_ffi.kt" and "uniffi.whoop_ffi" in p.read_text(encoding="utf-8", errors="replace")
+    )
+
+
 def physio_algo_orphans() -> list[str]:
     """`physio-algo` public free fns reached by no other crate and by nothing inside `physio-algo`.
 
@@ -240,6 +255,9 @@ def main() -> int:
         ("README.md", "command opcodes", r"CRC32\), (\d+) command opcodes", command_opcodes()),
         ("algorithms.md", "physio-algo orphans", r"\*\*(\d+) public\s+function[s]? in the crate (?:is|are) reached by no other crate\*\*",
          len(physio_algo_orphans())),
+        ("data-flow.md", "Kotlin files crossing the FFI",
+         r"\*\*(\d+) hand-written Kotlin files under `main/` reach `uniffi\.whoop_ffi` directly\*\*",
+         len(ffi_touching_files())),
     ]
 
     n_ignored = ignored_gates()

@@ -1,8 +1,11 @@
 # Data & algorithm flow — whoop-rs (backend) + noop-tan (frontend)
 
 Two projects, one contract. **whoop-rs owns every algorithm, decode and score. noop-tan owns
-presentation, persistence, BLE transport and user policy.** The only seam is the uniffi FFI, surfaced in
-Kotlin by the single adapter object `RustScores.kt`.
+presentation, persistence, BLE transport and user policy.** The only seam is the uniffi FFI.
+`RustScores.kt` is the main adapter and holds most of the crossings, but it is **not** the only file
+that crosses: **16 hand-written Kotlin files under `main/` reach `uniffi.whoop_ffi` directly**,
+including two screens. Counted by `tools/docs-vs-code.py`, so the day a screen stops calling Rust —
+or a new one starts — the number moves and this page has to say so.
 
 Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
 object carries a further **31 methods, 18 of them called**; the other 13 are frame builders and offload
@@ -38,7 +41,8 @@ policy the user sets (recalibration date, profile fallbacks, dismissal state).
         |                            noop-tan: assemble a day's streams, decide WHICH window
         |                            and WHICH device owns the day
         v
-  RustScores.kt .................... THE SEAM. one thin adapter per engine, no arithmetic
+  RustScores.kt .................... the main adapter: one thin wrapper per engine, no arithmetic
+                                     (15 other main-source files also cross, two of them screens)
         |
         v
   whoop-rs physio-algo ............. every score, gate and statistic
