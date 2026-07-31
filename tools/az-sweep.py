@@ -66,9 +66,9 @@ def build(cargo_root: Path) -> bool:
     return True
 
 
-def run_one(run: dict, cargo_root: Path) -> tuple[int, float]:
+def run_one(run: dict, cargo_root: Path, out: Path) -> tuple[int, float]:
     """Execute one harness, writing stdout to the cache. Returns (exit code, seconds)."""
-    OUT.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     exe = cargo_root / "target" / "release" / "examples" / f"{run['example']}.exe"
     if not exe.exists():
         exe = cargo_root / "target" / "release" / "examples" / run["example"]
@@ -80,9 +80,9 @@ def run_one(run: dict, cargo_root: Path) -> tuple[int, float]:
     r = subprocess.run(
         [str(exe), *run.get("args", [])], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env
     )
-    (OUT / f"{run['id']}.txt").write_text(r.stdout, encoding="utf-8")
+    (out / f"{run['id']}.txt").write_text(r.stdout, encoding="utf-8")
     if r.stderr.strip():
-        (OUT / f"{run['id']}.err").write_text(r.stderr, encoding="utf-8")
+        (out / f"{run['id']}.err").write_text(r.stderr, encoding="utf-8")
     return r.returncode, time.time() - t0
 
 
@@ -120,8 +120,10 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="print every pinned figure and exit")
     ap.add_argument("--no-build", action="store_true")
     ap.add_argument("--jobs", type=int, default=1, help="run this many harnesses at once (default 1)")
+    ap.add_argument("--out", default=None, help="cache dir, so a parallel verify run cannot collide")
     args = ap.parse_args()
 
+    out = Path(args.out).resolve() if args.out else OUT
     man = load()
     cargo_root = WHOOP / man["meta"]["cargo_root"]
     runs = {r["id"]: r for r in man["run"]}
@@ -135,7 +137,7 @@ def main() -> int:
 
     wanted = [r for r in man["run"] if not args.only or r["id"] in args.only]
 
-    print(f"whoop-rs HEAD {head_sha(cargo_root)}   manifest {man['meta']['version']}")
+    print(f"whoop-rs HEAD {head_sha(cargo_root)}   manifest {man['meta']['version']}   cache {out}")
     if not args.reuse:
         if not args.no_build and not build(cargo_root):
             return 2
@@ -144,7 +146,7 @@ def main() -> int:
         # submission order, so the log reads the same at any --jobs.
         todo = [r for r in wanted if not r.get("skip")]
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-            done = pool.map(lambda x: run_one(x, cargo_root), todo)
+            done = pool.map(lambda x: run_one(x, cargo_root, out), todo)
             for r in wanted:
                 if r.get("skip"):
                     print(f"  {r['id']:<18} SKIPPED - {r['skip']}", flush=True)
@@ -154,7 +156,7 @@ def main() -> int:
 
     cache: dict[str, str] = {}
     for r in runs.values():
-        p = OUT / f"{r['id']}.txt"
+        p = out / f"{r['id']}.txt"
         cache[r["id"]] = p.read_text(encoding="utf-8") if p.exists() else ""
 
     tally = {"MATCH": 0, "MISMATCH": 0, "NOT-FOUND": 0, "UNREPRODUCIBLE": 0}
