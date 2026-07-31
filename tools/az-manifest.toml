@@ -406,7 +406,7 @@ step = "A"
 section = "against WHOOP's OWN published nightly HRV"
 label = "deep-only inside +-3 ms on N of 15"
 documented = "12 of 15"
-note = "counted by hand off the printed per-night table; the harness prints no such tally"
+pattern = 'deep-only within \+-3 ms on (\d+ of \d+)'
 
 [[figure]]
 run = "hrv_window"
@@ -415,7 +415,8 @@ step = "A"
 section = "against WHOOP's OWN published nightly HRV"
 label = "whole-night 'over on N of 16'"
 documented = "14 of 16"
-note = "counted by hand and AMBIGUOUS: 15 of 16 pairs are positive; 14 are over by more than 3 ms"
+pattern = 'whole-night over by more than 3 ms on (\d+ of \d+)'
+note = "AMBIGUOUS by wording, so the harness now prints both readings on one line: 14 of 16 are over by more than 3 ms, 15 of 16 are simply positive. This figure pins the >3 ms one"
 
 [[figure]]
 run = "hrv_seam"

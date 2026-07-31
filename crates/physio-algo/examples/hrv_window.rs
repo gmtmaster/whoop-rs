@@ -202,5 +202,16 @@ fn main() {
         "per-night difference from published: deep-only median {:+.1} ms (MAE {:.1}), whole-night median {:+.1} ms (MAE {:.1})",
         median(&mut dev_deep), mae_deep, median(&mut dev_whole), mae_whole,
     );
+    // How many nights land inside a tolerance, which a median cannot show. The whole-night column is
+    // counted two ways because "over" has two readings and they differ by one night.
+    println!(
+        "deep-only within +-3 ms on {} of {}; whole-night over by more than 3 ms on {} of {}, simply positive on {} of {}",
+        dev_deep.iter().filter(|d| d.abs() <= 3.0).count(),
+        dev_deep.len(),
+        dev_whole.iter().filter(|&&d| d > 3.0).count(),
+        dev_whole.len(),
+        dev_whole.iter().filter(|&&d| d > 0.0).count(),
+        dev_whole.len(),
+    );
     println!("both wrists at once, not both methods on one wrist: WHOOP is worn left, noop right.");
 }
