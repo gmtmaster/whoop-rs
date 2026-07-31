@@ -8,8 +8,14 @@ including two screens. Counted by `tools/docs-vs-code.py`, so the day a screen s
 or a new one starts — the number moves and this page has to say so.
 
 Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
-object carries a further **31 methods, 18 of them called**; the other 13 are frame builders and offload
-controls kept deliberately as codec-parity API for the CLI and a later call site, not dead code.
+object carries a further **31 methods, 18 of them called**; the other 13 are frame builders, offload
+controls and one decoder (`decode_imu_frame`), kept as codec-parity API for the CLI and a later call
+site. Two of the 13 are a different thing and should not be filed under "awaiting a call site":
+`client_hello` and `r22_frames` each have a Kotlin twin holding the same wire bytes — `DeviceFamily.
+WHOOP5.clientHello` is `aa0108000001e67123019101363e5c8d`, the same 16 bytes as `GEN5_CLIENT_HELLO`,
+and `Whoop5Config.enableR22Sequence` is the same 16 flags in the same order as `config::R22_SEQUENCE`.
+The Kotlin copies are the ones with callers, so each table exists twice and only one side ships.
+Whether Kotlin should call across for them is a border decision, not drift.
 `tools/docs-vs-code.py` re-derives both counts and fails on drift.
 
 ## The universal rule
