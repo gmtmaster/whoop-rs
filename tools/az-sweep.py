@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
@@ -118,6 +119,7 @@ def main() -> int:
     ap.add_argument("--only", action="append", default=[], help="run id (repeatable)")
     ap.add_argument("--list", action="store_true", help="print every pinned figure and exit")
     ap.add_argument("--no-build", action="store_true")
+    ap.add_argument("--jobs", type=int, default=1, help="run this many harnesses at once (default 1)")
     args = ap.parse_args()
 
     man = load()
@@ -137,12 +139,18 @@ def main() -> int:
     if not args.reuse:
         if not args.no_build and not build(cargo_root):
             return 2
-        for r in wanted:
-            if r.get("skip"):
-                print(f"  {r['id']:<18} SKIPPED - {r['skip']}", flush=True)
-                continue
-            rc, secs = run_one(r, cargo_root)
-            print(f"  {r['id']:<18} rc={rc} {secs:6.1f}s   {r['fixtures'].split('/')[-1]}", flush=True)
+        # Each harness is a single-threaded process writing only its own cache file, so they are safe to
+        # run at once. Wall time then floors at the LONGEST harness instead of the sum. `map` yields in
+        # submission order, so the log reads the same at any --jobs.
+        todo = [r for r in wanted if not r.get("skip")]
+        with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+            done = pool.map(lambda x: run_one(x, cargo_root), todo)
+            for r in wanted:
+                if r.get("skip"):
+                    print(f"  {r['id']:<18} SKIPPED - {r['skip']}", flush=True)
+                    continue
+                rc, secs = next(done)
+                print(f"  {r['id']:<18} rc={rc} {secs:6.1f}s   {r['fixtures'].split('/')[-1]}", flush=True)
 
     cache: dict[str, str] = {}
     for r in runs.values():
