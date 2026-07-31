@@ -38,7 +38,7 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 | `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~900 LOC | 17 |
 | `physio-algo` | Every derived metric, pure and sans-IO: the whole sleep pipeline (detect / stage / refine / main-night), HRV, recovery, strain, resting HR, respiration, SpO2, calories, workout, steps, IMU features, the ages and the calibration timeline. `algorithms.md` is its per-formula record | ~10680 LOC | 308 + 4 `#[ignore]`d |
 | `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~340 LOC | 4 |
-| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`pack`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`wrist`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~760 LOC | 4 |
+| `whoopctl` | clap CLI, 16 subcommands (`scan`/`identify`/`info`/`pack`/`sync`/`monitor`/`hr`/`send`/`metrics`/`raw`/`wrist`/`r22on`/`buzz`/`reboot`/`ingest`/`decode-capture`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~760 LOC | 4 |
 | `whoop-ffi` | uniffi surface (depends on whoop-protocol **and** physio-algo): `WhoopCodec` (31 methods — decode history/live/response + offload + command frames) plus 79 derived-metric free fns to Kotlin + iOS from one Rust source. `data-flow.md` tables the surface | ~2710 LOC | 23 |
 
 **425 tests, 4 `#[ignore]`d, 0 warnings, 0 clippy lints.** The per-crate column sums to 425 under a

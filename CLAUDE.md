@@ -11,12 +11,13 @@ is working notes.
 
 ## Layout (8 crates, deps point strictly inward)
 
-`whoop-protocol` (pure sans-IO codec, thiserror only) ← `ble-core` (transport trait + mock) ←
-`ble-btleplug` (the only crate that links a radio) → `whoop-client` (`WhoopClient<T: BleTransport>`) →
-`whoopctl` (CLI) + `whoop-ffi` (uniffi → Kotlin/Swift). `physio-algo` (every decode-to-metric
-algorithm: sleep, HRV, recovery, strain, SpO2 …) reads decoded records with no BLE/IO, and
-`whoop-store` persists per-(person, strap) calibration. The codec never sees BLE or async; only
-`ble-btleplug` links btleplug. There is no `whoop-metrics` crate — it became `physio-algo`.
+Two independent leaves: `whoop-protocol` (pure sans-IO codec, thiserror only) and `ble-core` (transport
+trait + mock), which knows nothing about WHOOP. On the codec sit `physio-algo` (every decode-to-metric
+algorithm: sleep, HRV, recovery, strain, SpO2 …, no BLE/IO), `whoop-store` (per-(person, strap)
+calibration), `whoop-ffi` (uniffi → Kotlin/Swift) and `whoop-client`; on `ble-core` sits `ble-btleplug`,
+the only crate that links a radio. `whoop-client` is `WhoopClient<T: BleTransport>` — generic over the
+transport, so it does NOT depend on `ble-btleplug`; `whoopctl` is the one crate that joins the two sides.
+There is no `whoop-metrics` crate — it became `physio-algo`. Full graph: `docs/architecture.md`.
 
 ## Build / test / toolchain
 

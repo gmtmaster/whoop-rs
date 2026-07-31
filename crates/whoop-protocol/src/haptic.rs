@@ -12,7 +12,8 @@ pub fn maverick_buzz_frame(seq: u8) -> Vec<u8> {
 }
 
 /// RUN_HAPTICS_PATTERN body (5 bytes): `[pattern_id][loops][0][0][0]`. The 4.0 preset buzz (pattern 2 =
-/// the graduated alarm buzz); on 5/MG the client remaps cmd 79 to the maverick opcode instead.
+/// the graduated alarm buzz). A 5/MG strap only honours [`maverick_buzz_frame`], so nothing in
+/// `whoop-client` sends this opcode; the caller picks the form for the family it is talking to.
 pub fn run_haptics_pattern(pattern_id: u8, loops: u8) -> [u8; 5] {
     [pattern_id, loops, 0, 0, 0]
 }
