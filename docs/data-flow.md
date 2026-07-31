@@ -4,7 +4,10 @@ Two projects, one contract. **whoop-rs owns every algorithm, decode and score. n
 presentation, persistence, BLE transport and user policy.** The only seam is the uniffi FFI, surfaced in
 Kotlin by the single adapter object `RustScores.kt`.
 
-Audited 2026-07-26: **57 FFI exports, all 57 called from Kotlin. Zero unused, zero Kotlin twins.**
+Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
+object carries a further **31 methods, 19 of them called**; the other 12 are frame builders and offload
+controls kept deliberately as codec-parity API for the CLI and a later call site, not dead code.
+`tools/docs-vs-code.py` re-derives both counts and fails on drift.
 
 ## The universal rule
 
@@ -62,10 +65,14 @@ Two rails run alongside it:
 | family | how the percent is produced |
 |---|---|
 | 5.0 / MG | the strap's own computed SpO2 rides v18; noop-tan takes the in-bed median |
-| 4.0 | no strap value exists, so the paired red/IR ADC goes through ratio-of-ratios in whoop-rs |
+| 4.0 | no strap value exists. The paired red/IR ADC goes through ratio-of-ratios in whoop-rs, but a pulsatility gate **withholds** the result — see below |
 
-Both land on one field and one card. The 4.0 figure is an **uncalibrated** estimate (generic curve
-constants), the 5.0/MG figure is the strap's own. Treat the 4.0 number as the weaker of the two.
+In practice only the 5.0/MG figure reaches the field. On 4.0 the pair arrives at 1 Hz, so the 0.5 Hz
+Nyquist limit sits below the 0.83-3.0 Hz cardiac band and the pulsatile component is aliased away before
+decode. `spo2.rs` requires `MIN_PULSATILE_FRACTION` (0.5) of the eligible 30 s windows to be pulsatile and
+returns `None` otherwise; measured on two straps and 2.1M samples, 89.3% and 98.2% of windows carried zero
+red amplitude, so the gate declines. What the app stores on 4.0 is the raw red/IR ADC means, never a
+percent. Withheld is not the same as uncalibrated: there is no weak number to treat with caution.
 
 Everything else is family-independent: the record decoders fork by version byte inside whoop-rs, and
 every algorithm above takes plain values.
@@ -199,9 +206,10 @@ Two displayed ages rest on a Gompertz slope, and both deserve scrutiny:
 
 ## Known deltas
 
-1. **4.0 SpO2 is uncalibrated.** The ratio-of-ratios curve constants are generic, so the 4.0 percent is
-   weaker evidence than the 5.0/MG strap-computed value sharing the same field. Worth a provenance flag
-   on the card if a 4.0 band is ever used in anger.
+1. ~~4.0 SpO2 is uncalibrated~~ **Superseded: it is WITHHELD, not weak.** The generic curve constants were
+   never the binding problem — the 1 Hz sample rate is. The pulsatility gate above returns `None`, so no
+   4.0 percent reaches the field and no provenance flag is needed for one. `spo2.rs` and
+   `algorithms.md` state it the same way.
 2. ~~Vitality coefficients unverified~~ **CLOSED 2026-07-26.** All six verified against Europe PMC and
    cited in `vitality.rs` with PMIDs and quoted figures. Two things that pass found and the code now
    states: only VO2max is published as a per-unit slope (steps, HRV and sleep regularity are quartile or

@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Re-derive every countable claim in `whoop-rs/docs/` from the source, and fail when the two disagree.
+
+    python whoop-rs/tools/docs-vs-code.py            # derive everything, including the two cargo runs
+    python whoop-rs/tools/docs-vs-code.py --no-tests  # skip the cargo runs, check the static claims only
+
+`az-sweep.py` pins the A-Z manifest against what the harnesses PRINT and `manifest-vs-docs.py` pins the
+manifest against the dev-notes documents. Both edges of that triangle end at the manifest, and the manifest
+names only the two dev-notes files - so the SHIPPED docs under `whoop-rs/docs/` were pinned by nothing.
+They drifted: a test count stale by 137, an `#[ignore]` count off by one, an FFI export count off by 22,
+one staging kappa written two ways in one document, and four algorithms tagged unwired that Kotlin calls.
+
+Every claim below names the document, the regex that extracts what the document says, and the command or
+source scan that says what is true. A claim whose regex no longer matches is a FAILURE, not a skip: a
+sentence rewritten out of the document must be re-pinned deliberately, or this gate quietly stops covering
+it. Exit status is 1 when anything disagrees.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+DOCS = ROOT / "docs"
+WHOOP = ROOT.parent
+KOTLIN = WHOOP / "noop-wt-tan" / "android" / "app" / "src" / "main" / "java"
+FIXTURES = WHOOP / "sleep-benchmark" / "fixtures_multi_clean2"
+
+
+def rs_files(rel: str) -> list[Path]:
+    return sorted((ROOT / rel).rglob("*.rs"))
+
+
+def ignored_gates() -> int:
+    """`#[ignore]`d tests across the workspace."""
+    return sum(len(re.findall(r"#\[ignore", p.read_text(encoding="utf-8"))) for p in rs_files("crates"))
+
+
+def ffi_exports() -> list[str]:
+    """Free functions on the uniffi surface (the `WhoopCodec` object's methods are counted separately)."""
+    out = []
+    for p in sorted((ROOT / "crates" / "whoop-ffi" / "src").glob("*.rs")):
+        t = p.read_text(encoding="utf-8")
+        out += re.findall(r"#\[uniffi::export\][^\n]*\n(?:\s*//[^\n]*\n)*\s*pub fn (\w+)", t)
+    return sorted(out)
+
+
+def codec_methods() -> list[str]:
+    t = (ROOT / "crates" / "whoop-ffi" / "src" / "codec.rs").read_text(encoding="utf-8")
+    return re.findall(r"\n    pub fn (\w+)", t[t.index("impl WhoopCodec {"):])
+
+
+def camel(s: str) -> str:
+    head, *tail = s.split("_")
+    return head + "".join(w.capitalize() for w in tail)
+
+
+def kotlin_blob() -> str:
+    if not KOTLIN.is_dir():
+        return ""
+    parts = [p.read_text(encoding="utf-8", errors="replace") for p in KOTLIN.rglob("*.kt") if p.name != "whoop_ffi.kt"]
+    return "\n".join(parts)
+
+
+def called_from_kotlin(names: list[str]) -> int:
+    blob = kotlin_blob()
+    return sum(1 for n in names if camel(n) in blob)
+
+
+def kappa_targets() -> dict[str, str]:
+    """Each cohort's asserted kappa, straight out of the parity gate's own assertions."""
+    t = (ROOT / "crates" / "physio-algo" / "tests" / "dataset_parity.rs").read_text(encoding="utf-8")
+    return dict(re.findall(r'run_dataset\("([\w-]+)"\)[\s\S]{0,400}?off target (\d\.\d+)"', t))
+
+
+def named_sets() -> set[str]:
+    t = (ROOT / "crates" / "physio-algo" / "tests" / "dataset_parity.rs").read_text(encoding="utf-8")
+    block = t[t.index("const SETS"):]
+    return set(re.findall(r'\("([\w-]+)",', block[: block.index("];")]))
+
+
+def on_disk_sets() -> set[str]:
+    return {p.name for p in FIXTURES.iterdir() if p.is_dir()} if FIXTURES.is_dir() else set()
+
+
+def cargo_passed(args: list[str]) -> int:
+    r = subprocess.run(["cargo", "test", *args], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"cargo test {' '.join(args)} failed:\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
+    return sum(int(m) for m in re.findall(r"^test result: ok\. (\d+) passed", r.stdout, re.M))
+
+
+def doc(name: str) -> str:
+    return (DOCS / name).read_text(encoding="utf-8")
+
+
+def main() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-tests", action="store_true", help="skip the two cargo runs")
+    a = ap.parse_args()
+
+    exports = ffi_exports()
+    methods = codec_methods()
+    kappas = kappa_targets()
+
+    # (document, what the claim is, regex with one capture, the derived truth)
+    claims: list[tuple[str, str, str, object]] = [
+        ("algorithms.md", "ignored dataset gates", r"\*\*(\w+)\*\* sleep-dataset tests read external fixtures", "four"),
+        ("algorithms.md", "FFI free-fn exports", r"all (\d+) exported functions have a Kotlin", len(exports)),
+        ("sleep.md", "physio-algo tests", r"\*\*(\d+) `physio-algo` tests", None),
+        ("sleep.md", "whoop-ffi tests", r"`physio-algo` tests \+ (\d+) `whoop-ffi` tests", None),
+        ("data-flow.md", "FFI free-fn exports", r"\*\*(\d+) exported functions, all", len(exports)),
+        ("data-flow.md", "FFI exports called", r"exported functions, all (\d+) called", called_from_kotlin(exports)),
+        ("data-flow.md", "codec methods", r"further \*\*(\d+) methods", len(methods)),
+        ("data-flow.md", "codec methods called", r"methods, (\d+) of them called", called_from_kotlin(methods)),
+    ]
+
+    n_ignored = ignored_gates()
+    if n_ignored != 4:
+        # the word above is spelled out; keep the two in step rather than hard-coding a number twice
+        claims[0] = ("algorithms.md", "ignored dataset gates", r"\*\*(\w+)\*\* sleep-dataset tests read external fixtures", f"{n_ignored} (not four)")
+
+    if not a.no_tests:
+        pa = cargo_passed(["-p", "physio-algo"])
+        ws = cargo_passed(["--workspace"])
+        claims += [
+            ("algorithms.md", "physio-algo tests", r"carries \*\*(\d+) unit tests\*\*", pa),
+            ("algorithms.md", "workspace tests", r"workspace runs \*\*(\d+)\*\*", ws),
+        ]
+        for i, c in enumerate(claims):
+            if c[0] == "sleep.md" and c[1] == "physio-algo tests":
+                claims[i] = (*c[:3], pa)
+            if c[0] == "sleep.md" and c[1] == "whoop-ffi tests":
+                claims[i] = (*c[:3], cargo_passed(["-p", "whoop-ffi"]))
+
+    bad = 0
+    checked = 0
+    for name, what, pattern, truth in claims:
+        if truth is None:
+            print(f"  SKIP   {name:<16} {what:<26} (needs a cargo run; re-run without --no-tests)")
+            continue
+        m = re.search(pattern, doc(name))
+        checked += 1
+        if not m:
+            print(f"  NOPIN  {name:<16} {what:<26} the sentence this gate pins is GONE from the document")
+            bad += 1
+            continue
+        said, is_ = m.group(1), str(truth)
+        if said.lower() != is_.lower():
+            print(f"  WRONG  {name:<16} {what:<26} document says {said}, source says {is_}")
+            bad += 1
+        else:
+            print(f"  ok     {name:<16} {what:<26} {is_}")
+
+    # Each cohort kappa must be written the SAME way everywhere it appears. A document spells the four
+    # cohorts across one comma-separated row, so a fragment is the unit: any decimal sharing a fragment
+    # with a cohort name is claiming to BE that cohort's kappa.
+    text = doc("algorithms.md")
+    fragments = re.split(r"[,|\n;]|(?<=[A-Za-z)])\.\s", text)
+    for cohort, target in sorted(kappas.items()):
+        checked += 1
+        others: set[str] = set()
+        for frag in fragments:
+            if re.search(re.escape(cohort), frag, re.I):
+                others |= set(re.findall(r"\d\.\d{2,3}", frag))
+        stale = {v for v in others if v != target and not target.startswith(v)}
+        if target not in text:
+            print(f"  WRONG  {'algorithms.md':<16} {'kappa ' + cohort:<26} gate asserts {target}, document never states it")
+            bad += 1
+        elif stale:
+            print(f"  WRONG  {'algorithms.md':<16} {'kappa ' + cohort:<26} gate asserts {target}, document also says {sorted(stale)}")
+            bad += 1
+        else:
+            print(f"  ok     {'algorithms.md':<16} {'kappa ' + cohort:<26} {target}")
+
+    # `examples/common/mod.rs` claims it owns every fixture-corpus reader. That sentence has been false
+    # twice, so it gets a command: no harness but the declared exception may touch the filesystem itself.
+    ex = ROOT / "crates" / "physio-algo" / "examples"
+    allowed = {"verify_backup.rs"}
+    rogue = sorted(
+        p.name
+        for p in ex.glob("*.rs")
+        if p.name not in allowed and re.search(r"fs::read_to_string|fs::read_dir|File::open", p.read_text(encoding="utf-8"))
+    )
+    checked += 1
+    if rogue:
+        print(f"  WRONG  {'common/mod.rs':<16} {'owns every corpus reader':<26} harnesses reading directly: {rogue}")
+        bad += 1
+    else:
+        print(f"  ok     {'common/mod.rs':<16} {'owns every corpus reader':<26} {len(list(ex.glob('*.rs')))} harnesses, {sorted(allowed)} excepted")
+
+    # Every fixture set on disk must be named in the parity sheet's matrix.
+    disk, named = on_disk_sets(), named_sets()
+    if disk:
+        checked += 1
+        missing = sorted(disk - named)
+        if missing:
+            print(f"  WRONG  {'dataset_parity.rs':<16} {'fixture-set matrix':<26} on disk but unnamed: {missing}")
+            bad += 1
+        else:
+            print(f"  ok     {'dataset_parity.rs':<16} {'fixture-set matrix':<26} {len(named)} sets, none unnamed")
+    else:
+        print(f"  SKIP   {'dataset_parity.rs':<16} {'fixture-set matrix':<26} fixture root absent")
+
+    print(f"\n{checked} claims checked | {bad} disagree with the source")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

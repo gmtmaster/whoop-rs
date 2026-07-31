@@ -1,6 +1,7 @@
 //! SpO2 (%) from dual-wavelength PPG via ratio-of-ratios, from the 4.0 v24 paired red/IR samples. 5.0/MG
 //! has no SpO2 path: its v26 optical buffer is a single AC-coupled waveform (one wavelength), not a red/IR
-//! pair, so `from_paired`/`from_history` only produce a value on 4.0. Uncalibrated wellness estimate, never clinical.
+//! pair, so `from_paired`/`from_history` only produce a value on 4.0 — and there a pulsatility gate
+//! withholds it, because the 1 Hz pair aliases the cardiac band away. Wellness estimate, never clinical.
 
 use whoop_protocol::HistoryRecord;
 

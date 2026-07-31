@@ -29,9 +29,10 @@ the app's edit self-heal) and the main-night functions (`main_night_index/_group
 |---|---|
 | `detect.rs` | the gravity-stillness detection spine (`gravity_deltas`→`classify_still`→`build_runs`→`merge_periods`→`bridge_sparse_sleep`) + the `detect_sessions` gate loop, and the per-epoch `session_epoch_motion`/`session_epoch_sleep_state` grids |
 | `v2.rs` | the V2 (cardiorespiratory) staging recipe — the DREAMT-tuned emissions + Viterbi; stages **every** strap |
-| `refine.rs` | motion-aware wake post-pass (hot-but-still WAKE → light; density self-gated on the observed streams) |
+| `refine.rs` | motion-aware wake post-pass (hot-but-still WAKE → light; density self-gated on the observed streams). `RefineParams::SHIPPED.skip_window_edges` exempts the first and last epoch of a span, which is where sleep-onset latency and the final wake legitimately sit |
 | `mainnight.rs` | main-night selection by a learned-timing score, the two-tier gap bridge, and the circular-mean habitual midsleep |
-| `common.rs` | shared numerics (`population_std`, `median`, `ZScore`, `flatten_rr`) |
+| `params.rs` | every V2 emission weight, gate and transition in one `Params` struct. `Params::SHIPPED` is the tuned recipe; `stage` with anything else is the tuning path only |
+| `common.rs` | the per-night `ZScore` and the R-R run flattener `flatten_rr`. The numeric primitives (`median`, `population_sd`) live in `crate::stats` |
 | `input.rs` | the protocol-free sample types (`HrSample`/`RrRun`/`AccelSample`/`RespSample`/`StepSample`) |
 
 ## The detection gate loop (order is load-bearing)
@@ -55,8 +56,9 @@ needed. V1 (Cole-Kripke) is retired. Detection is a **gravity-stillness** spine,
 app's Kotlin gate/main-night suites (off-wrist, daytime guard, sparse-gravity, night-continuation,
 HR-confirm median, span-cap, morning-stillness, motion-corroborated wake, the realistic-nap sweep,
 selection reasons, habitual learning). `golden_tests.rs` pins the V2 hypnogram frozen-golden.
-`tests/dataset_parity.rs` (`--ignored`) scores V2 against the DREAMT/AAUWSS fixtures. **146 `physio-algo`
-tests + 23 `whoop-ffi` tests, 0 clippy.**
+`tests/dataset_parity.rs` (`--ignored`) asserts the DREAMT, AAUWSS and sleep-accel kappas and prints a
+sheet naming every fixture set with what its truth column IS, so no set sits unscored and unnamed.
+**308 `physio-algo` tests + 23 `whoop-ffi` tests, 0 clippy.**
 
 ## App-side border: complete
 

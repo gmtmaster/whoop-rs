@@ -9,20 +9,21 @@ are wellness estimates, never medical.
 build). This file is the working contract; `docs/` is shipped documentation; `dev-docs/` (git-ignored)
 is working notes.
 
-## Layout (7 crates, deps point strictly inward)
+## Layout (8 crates, deps point strictly inward)
 
 `whoop-protocol` (pure sans-IO codec, thiserror only) ← `ble-core` (transport trait + mock) ←
 `ble-btleplug` (the only crate that links a radio) → `whoop-client` (`WhoopClient<T: BleTransport>`) →
-`whoopctl` (CLI) + `whoop-ffi` (uniffi → Kotlin/Swift). `whoop-metrics` (pure derived metrics:
-HRV-readiness, SpO2) reads decoded records with no BLE/IO. The codec never sees BLE or async; only
-`ble-btleplug` links btleplug.
+`whoopctl` (CLI) + `whoop-ffi` (uniffi → Kotlin/Swift). `physio-algo` (every decode-to-metric
+algorithm: sleep, HRV, recovery, strain, SpO2 …) reads decoded records with no BLE/IO, and
+`whoop-store` persists per-(person, strap) calibration. The codec never sees BLE or async; only
+`ble-btleplug` links btleplug. There is no `whoop-metrics` crate — it became `physio-algo`.
 
 ## Build / test / toolchain
 
 ```bash
 cd whoop-rs
 cargo build
-cargo test                 # 66 tests
+cargo test                 # 425 tests, 4 #[ignore]d
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```
@@ -52,7 +53,7 @@ patch once it does.
   run, fold them into usable overall docs in `docs/`** (update `docs/architecture.md`, don't leave a pile
   of handoff files). One authoritative `architecture.md`, not N floating dev docs. Provenance +
   per-crate clean-state confirm live in `dev-docs/{external-sources,crates}.md`.
-- **Verify by READING the `cargo test` / `cargo build` output** (66 passed, 0 warnings, 0 clippy), never
+- **Verify by READING the `cargo test` / `cargo build` output** (425 passed, 0 warnings, 0 clippy), never
   a piped exit code. That invariant must hold after every change.
 - **Gated writes only.** `command::FORBIDDEN`/`DESTRUCTIVE` refuse firmware-load/trim/DFU/config-write
   on the blind path; legitimate ones (reboot, R22) have dedicated intentional methods a UI opt-in gates.

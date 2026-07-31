@@ -9,9 +9,11 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 `HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
 number. Outputs are wellness estimates, never medical.
 
-`physio-algo` carries **271 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
-workspace runs **380**. Three sleep-dataset parity gates read external fixtures and are `#[ignore]`d by
-default - run `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
+`physio-algo` carries **308 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
+workspace runs **425**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
+default - three assert a cohort kappa, the fourth prints the whole-corpus sheet. Run
+`cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
+`tools/docs-vs-code.py` re-derives every count on this page from the source and fails on drift.
 
 Every algorithm below is also tagged with the STRENGTH of its evidence, which is not the same as whether
 it is wired:
@@ -27,10 +29,11 @@ it is wired:
 Each algorithm below is tagged with how it reaches the app:
 
 - **FFI** — exported by `whoop-ffi` and called by the app today (the app owns no copy of the math).
-- **FFI (unwired)** — exported by `whoop-ffi`, no app caller yet. The Rust is the intended home; the app
-  still runs its own copy until the call site is cut over. Tracked in the noop-tan `ANALYTICS.md`.
-- **Rust-only** — implemented here, not yet on the FFI surface. The app still owns this metric.
+- **Rust-only** — implemented here, not on the FFI surface. No app caller.
 - **internal** — a shared helper other algorithms depend on, not a metric.
+
+There is no **unwired** tag because there is nothing unwired: all 79 exported functions have a Kotlin
+caller. What the app still computes itself is tracked in the noop-tan `ALGORITHMS.md`.
 
 ---
 
@@ -51,10 +54,10 @@ Each algorithm below is tagged with how it reaches the app:
 | 11 | Baevsky Stress Index | `stress.rs` | FFI | ✓ |
 | 12 | Stress onset (live) | `stress_onset.rs` | FFI | 5 |
 | 13 | SpO2 | `spo2.rs` | FFI | ✓ |
-| 14 | Calories | `calories.rs` | FFI (unwired) | 18 |
-| 15 | Workout detection | `workout.rs` | FFI (unwired) | ✓ |
-| 16 | Steps (5/MG counter) | `steps.rs` | FFI (unwired) | ✓ |
-| 17 | IMU activity features | `imu_features.rs` | FFI (unwired) | 7 |
+| 14 | Calories | `calories.rs` | FFI | 18 |
+| 15 | Workout detection | `workout.rs` | FFI | ✓ |
+| 16 | Steps (5/MG counter) | `steps.rs` | FFI | ✓ |
+| 17 | IMU activity features | `imu_features.rs` | FFI | 7 |
 | 18 | Rest (sleep performance) | `rest.rs` | FFI | 5 |
 | 19 | Sleep debt | `sleep_debt.rs` | FFI | 5 |
 | 20 | Daily stress | `stress.rs` | FFI | ✓ |
@@ -68,8 +71,8 @@ Each algorithm below is tagged with how it reaches the app:
 | 27 | Circadian phase + Rhythm Age | `circadian.rs`, `biological_age.rs` | FFI | ✓ |
 | — | Shared stats | `stats.rs` | internal | ✓ |
 
-`crates/whoop-metrics` is a thin re-export shim over `physio-algo`, kept so old `whoop_metrics::…` paths
-resolve. New code depends on `physio-algo` directly.
+There is no `crates/whoop-metrics`. It was renamed to `physio-algo`, the shim that briefly stood in its
+place is gone, and nothing in the workspace names it any more.
 
 ---
 
@@ -101,8 +104,9 @@ resp_reg  = R-R tachogram -> 4 Hz resample -> detrend -> DFT peak/sum over 0.15-
 cycle prior: deep decays to 0 after 55% of night; rem suppressed in first 12%
 Viterbi 4-state, sticky self-transitions (deep 0.76, rem 0.92, light 0.80, wake 0.90)
 ```
-Validated on DREAMT n=100 (kappa 0.33, at the wrist-optical ceiling), AAUWSS (0.42), Walch (0.35); frozen
-golden hypnogram test pins the tuned constants.
+Validated on DREAMT n=100 (kappa 0.311, at the wrist-optical ceiling), AAUWSS (0.412), and sleep-accel /
+Walch (0.379). Those three are the numbers `tests/dataset_parity.rs` asserts, and the status table below
+quotes the same three; a frozen golden hypnogram test pins the tuned constants.
 
 **Motion-aware wake refinement** (`sleep/refine.rs`): a wake segment >= 5 min at the night motion floor with
 stable posture and no locomotion demotes its non-burst minutes to light.
@@ -229,23 +233,23 @@ fires a JITAI nudge. Gated by resting HR band (55-100), recent motion, min 20 be
 plus a 30-night soft-anchored rolling readout. 5.0/MG v26 is a single wavelength with no red/IR pair, so a
 percent is produced on 4.0 only; on 5/MG the app stores nightly raw red/IR ADC means, never a fabricated %.
 
-## 14. Calories  ·  FFI (unwired) `calories_estimate_day`, `calories_estimate_bout`
+## 14. Calories  ·  FFI `calories_estimate_day`, `calories_estimate_bout`
 
 `calories.rs`. Per-second Keytel 2005 active energy above a HRR gate, revised Harris-Benedict BMR below it,
 sex-specific coefficients. Day path gates at 50% HRR, bout path at 30%. Approximate, not calorimetry.
 
-## 15. Workout detection  ·  FFI (unwired) `workout_detect`
+## 15. Workout detection  ·  FFI `workout_detect`
 
 `workout.rs`. A sustained window (>= 5 min) of elevated HR (RHR + 15 bpm) and sustained motion (> 0.20,
 10 s smoothed), merged across short gaps, qualified by >= 50% of the bout in Edwards zone 2+. Per bout:
 avg/peak HR, zone-time %, mean %HRR, strain, and calories.
 
-## 16. Steps, 5/MG counter  ·  FFI (unwired) `steps_counter`
+## 16. Steps, 5/MG counter  ·  FFI `steps_counter`
 
 `steps.rs`. Wrap-aware deltas of the strap's cumulative u16 step counter, dropping any delta >= 512
 (sync-gap or reboot). Returns raw motion ticks; the caller applies its ticks-per-step calibration.
 
-## 17. IMU activity features  ·  FFI (unwired) `imu_features`
+## 17. IMU activity features  ·  FFI `imu_features`
 
 `imu_features.rs`. Over a window of decoded 100 Hz 6-axis IMU samples: accel-AC RMS energy (g), gyro energy
 (deg/s), jerk RMS, and a gait-band (1.2-3.5 Hz) autocorrelation cadence with its own strength. A feature
@@ -302,8 +306,9 @@ eligibility gate (>= 20 rows, median inter-sample gap <= 90 s), the longest sust
 
 ## Status, sorted by strength of evidence
 
-Every algorithm is now FFI-exported AND called by the app: there is no unwired backlog and no metric the
-frontend still computes itself. What differs is how strongly each is verified.
+Every algorithm the app displays is FFI-exported AND called by the app: there is no unwired backlog and no
+metric the frontend still computes itself. The one exception is not a backlog item — `HrWatch` has never
+been exported, because nothing shows it. What differs below is how strongly each is verified.
 
 ### ✅ Hardware-verified — run against a real 5.0/MG
 

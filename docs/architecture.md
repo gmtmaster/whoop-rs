@@ -20,7 +20,7 @@ calibration to SQLite.
 ```
 whoop-protocol   pure sans-IO wire codec  (deps: thiserror only)         ── no BLE, no async
       ▲   ▲
-      │   └──── whoop-metrics   derived metrics (HRV-readiness, SpO2)     ── no BLE, no IO
+      │   └──── physio-algo     every derived metric (sleep, HRV, …)      ── no BLE, no IO
 ble-core         generic BLE transport trait + MockTransport             ── no WHOOP
       ▲                        ▲
 whoop-client ────────────┐     │
@@ -32,20 +32,22 @@ whoopctl (CLI)     whoop-ffi (uniffi → Kotlin + Swift)
 
 | Crate | Role | Size | Tests |
 |---|---|---|---|
-| `whoop-protocol` | Pure wire codec: framing, CRC, hex, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~1420 LOC | 37 |
-| `ble-core` | `BleTransport` async trait + neutral `Notification`/`BleError` + `MockTransport` | ~130 LOC | 1 |
-| `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (scan/connect/subscribe/notify/write) | ~215 LOC | 1 |
-| `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~640 LOC | 16 |
-| `whoop-metrics` | Pure derived metrics/DSP: gap-aware + artifact-corrected HRV-readiness, SpO2 (4.0 paired red/IR **and** the 5.0/MG v18 computed scalar), HR-from-PPG (`ppg_hr`), the wellness HR-at-rest watch, the WHOOP calibration timeline, and the per-strap `linear_fit` coefficient | ~800 LOC | 24 |
-| `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~330 LOC | 4 |
-| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`pack`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`wrist`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~600 LOC | 4 |
-| `whoop-ffi` | uniffi surface (depends on whoop-protocol **and** whoop-metrics): `WhoopCodec` (decode history/live/response + offload + command frames) plus the derived-metric free fns (ppg-hr, HRV, SpO2) to Kotlin + iOS from one Rust source | ~460 LOC | 9 |
+| `whoop-protocol` | Pure wire codec: framing, CRC, hex, records (opt-in `serde` Serialize), offload state machine, config/haptic/alarm builders, live-r22 decoder | ~2570 LOC | 67 |
+| `ble-core` | `BleTransport` async trait + neutral `Notification`/`BleError` + `MockTransport` | ~165 LOC | 1 |
+| `ble-btleplug` | btleplug 0.12 backend behind `BleTransport` (scan/connect/subscribe/notify/write) | ~440 LOC | 1 |
+| `whoop-client` | `WhoopClient<T: BleTransport>` — bond, history sync (keep/wipe + lossless frame tap), monitor, gated writes, capture encode+decode, backfill policy | ~900 LOC | 17 |
+| `physio-algo` | Every derived metric, pure and sans-IO: the whole sleep pipeline (detect / stage / refine / main-night), HRV, recovery, strain, resting HR, respiration, SpO2, calories, workout, steps, IMU features, the ages and the calibration timeline. `algorithms.md` is its per-formula record | ~10680 LOC | 308 + 4 `#[ignore]`d |
+| `whoop-store` | SQLite (rusqlite, bundled) per-(person, strap) nightly persistence + milestone-gated baselines and per-strap fits | ~340 LOC | 4 |
+| `whoopctl` | clap CLI (`scan`/`identify`/`info`/`pack`/`sync`/`monitor`/`send`/`r22on`/`buzz`/`reboot`/`wrist`/`ingest`) + `--person`/`--db`/`--hr-watch`, split into `cli` / `report` / `main` | ~760 LOC | 4 |
+| `whoop-ffi` | uniffi surface (depends on whoop-protocol **and** physio-algo): `WhoopCodec` (31 methods — decode history/live/response + offload + command frames) plus 79 derived-metric free fns to Kotlin + iOS from one Rust source. `data-flow.md` tables the surface | ~2710 LOC | 23 |
 
-**100 tests, 0 warnings, 0 clippy lints.** `ble-btleplug` unit-tests only its pure `matches_whoop`
+**425 tests, 4 `#[ignore]`d, 0 warnings, 0 clippy lints.** The per-crate column sums to 425 under a
+workspace run: `whoopctl` turns on `whoop-protocol`'s `serde` feature, and one test module is gated on
+it, so that crate alone reads 66. `ble-btleplug` unit-tests only its pure `matches_whoop`
 predicate; the radio path is hardware-integration-verified (`whoopctl scan`), not mockable in-process.
 
 Golden parity for the Android shadow-decode: `whoop-protocol` pins a 40-frame consecutive v26 PPG
-burst and battery/wrist-on EVENT frames (`real_frames.rs`), and `whoop-metrics` pins the derived
+burst and battery/wrist-on EVENT frames (`real_frames.rs`), and `physio-algo` pins the derived
 `ppg_hr` estimates (`ppg_hr_real.rs`), all from a real 5.0 on-device capture. The exact f32→f64
 gravity widen is asserted byte-for-byte on the worn v18 frame.
 
@@ -72,7 +74,7 @@ gravity widen is asserted byte-for-byte on the worn v18 frame.
 - **Adjudicated decode = one source of truth.** Where the Kotlin app and this codec once diverged, each
   field was adjudicated against real captures + external RE and the better implementation lives here, not
   a blind clone of either side. Locked choices: **ppgHr** does a sub-lag parabolic ACF refine
-  (`ppg_hr` in `whoop-metrics`) — a real-data win on the 838 night (sub-lag MAE 2.12 vs integer-lag 2.50
+  (`ppg_hr` in `physio-algo`) — a real-data win on the 838 night (sub-lag MAE 2.12 vs integer-lag 2.50
   bpm on the clean windows), never worse across a synthetic 45-150 bpm noise sweep, with an
   integer-fallback on a bad concave fit; **battery SOC** divides the integer deci-percent in f64
   (`Response.Battery.percent` / `BatteryPack.socPct` are f64, 999 → exact 99.9); **gravity** is gated to
@@ -210,10 +212,13 @@ user-customizable, so the serial (`0x2A25`) is the reliable ID. GATT strings are
 
 Build/run: `cargo run -p whoopctl -- scan`.
 
-**Derived metrics (`whoop-metrics`).** A pure analytics layer over decoded records — no BLE, no IO, no
-algorithms in the codec. `HrvReadiness` reads a log-domain baseline against a personal-normal ±0.5 SD band
+**Derived metrics (`physio-algo`).** A pure analytics layer over decoded records — no BLE, no IO, no
+algorithms in the codec. It is far wider than the few named here — the whole sleep pipeline, recovery,
+strain, the ages — and `algorithms.md` is the per-formula record; what follows is only the part this
+section's CLI story needs. `HrvReadiness` reads a log-domain baseline against a personal-normal ±0.5 SD band
 from a nightly RMSSD series and returns a tier, `None` while calibrating. SpO2 has two paths: the 4.0 v24
-paired red/IR via ratio-of-ratios, and the **5.0/MG computed scalar** the strap writes at v18 inner 74
+paired red/IR via ratio-of-ratios (which a pulsatility gate then WITHHOLDS on real 4.0 data — see
+`algorithms.md`), and the **5.0/MG computed scalar** the strap writes at v18 inner 74
 during sleep — a tri-mode byte (a %-range value is a real reading; bit-7 saturation sentinels and sub-70
 diagnostic codes gate to `None`), verified on a real overnight drain (363 sleep readings, 95-100%). The raw
 red/IR pair still does not cross 5.0 BLE; the strap computes the % on-device. `calibration` encodes WHOOP's
@@ -251,10 +256,11 @@ decoder:
 - **command frames to write** (the FFI never writes) — `client_hello` / `offload_start` / `offload_abort` /
   `r22_frames` / `get_hello`/`get_battery`/`get_data_range` / `stop_raw_flood` / `toggle_realtime_hr` /
   `reboot` / `buzz` / `broadcast_hr` / `set_config` / `alarm_set`/`alarm_disable`.
-- **derived metrics** (free fns) — `ppg_hr`, `hrv_rmssd_gap_aware`, `hrv_windowed_avg` (the app's stored
-  session `avgHrv` — the mean of per-5-min-bucket gap-aware RMSSD over a span), `hrv_readiness`,
-  `spo2_from_paired`, `nightly_spo2_raw_means` (integer-truncated 4.0 raw red/IR ADC means over the in-bed
-  spans — raw ADC, never a calibrated percent), `haptic_clock_pulses`.
+- **derived metrics** — 79 free fns, every one of them called by the app. A few of the shapes:
+  `ppg_hr`, `hrv_rmssd_gap_aware`, `hrv_windowed_avg` (the app's stored session `avgHrv` — the mean of
+  per-5-min-bucket gap-aware RMSSD over a span), `hrv_readiness`, `analyze_sleep`, `recovery_score`,
+  `nightly_spo2_raw_means` (integer-truncated 4.0 raw red/IR ADC means over the in-bed spans — raw ADC,
+  never a calibrated percent). `data-flow.md` tables all of them; this is not the list.
 
 Each platform does its own BLE natively and feeds notification bytes in; the app loop is: map notify UUID →
 `Chan`, call `feed`, and for each `Step` persist a record / write an `Ack` frame confirmed / stop on
@@ -280,7 +286,7 @@ iOS via an `.xcframework` for `aarch64-apple-ios` + SwiftUI (needs a Mac + Xcode
 ```bash
 cd whoop-rs
 cargo build           # whole workspace
-cargo test            # 100 tests
+cargo test            # 425 tests (4 #[ignore]d dataset gates)
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```
