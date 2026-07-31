@@ -10,6 +10,12 @@ names only the two dev-notes files - so the SHIPPED docs under `whoop-rs/docs/` 
 They drifted: a test count stale by 137, an `#[ignore]` count off by one, an FFI export count off by 22,
 one staging kappa written two ways in one document, and four algorithms tagged unwired that Kotlin calls.
 
+A count can also drift while this gate reads green, if the gate asks a question loose enough to be
+answered by something else. Both "called from Kotlin" checks did: a bare name search found `hrZonesForAge`
+in `RustScores`'s own wrapper declaration whether or not it still reached Rust, and read `client_hello` as
+called because an unrelated `DeviceFamily.clientHello` byte array exists — which is where the published
+"19 of 31 codec methods" came from. Both now name the receiver, so only a real crossing counts.
+
 Every claim below names the document, the regex that extracts what the document says, and the command or
 source scan that says what is true. A claim whose regex no longer matches is a FAILURE, not a skip: a
 sentence rewritten out of the document must be re-pinned deliberately, or this gate quietly stops covering
@@ -67,9 +73,31 @@ def kotlin_blob() -> str:
     return "\n".join(parts)
 
 
-def called_from_kotlin(names: list[str]) -> int:
+def free_fns_called(names: list[str]) -> int:
+    """A free function is called only through a qualified `uniffi.whoop_ffi.<name>`.
+
+    A bare-name search cannot show this: `RustScores` wraps most exports in a Kotlin function of the
+    same name, so the wrapper's own declaration satisfied the search whether or not it still reached
+    Rust. Deleting a call site had to remain visible here, so the receiver is part of the pattern.
+    """
+    reached = set(re.findall(r"uniffi\.whoop_ffi\.(\w+)", kotlin_blob()))
+    return sum(1 for n in names if camel(n) in reached)
+
+
+def codec_methods_called(names: list[str]) -> int:
+    """A `WhoopCodec` method is called as `.<name>(`; `new` is reached as the Kotlin constructor.
+
+    A bare-name search over-counted by one: it read `client_hello` as called because an unrelated
+    `DeviceFamily.clientHello` byte-array property exists, and the published figure said 19 for years
+    of that. Requiring the call parenthesis excludes a property read of the same name.
+    """
     blob = kotlin_blob()
-    return sum(1 for n in names if camel(n) in blob)
+    called = set(re.findall(r"\.(\w+)\s*\(", blob))
+    # No space before the paren: a KDoc sentence writes "WhoopCodec (decode history/live/response)",
+    # which is prose, not a construction.
+    if re.search(r"\bWhoopCodec\(", blob):
+        called.add("new")
+    return sum(1 for n in names if camel(n) in called)
 
 
 def kappa_targets() -> dict[str, str]:
@@ -116,9 +144,11 @@ def main() -> int:
         ("sleep.md", "physio-algo tests", r"\*\*(\d+) `physio-algo` tests", None),
         ("sleep.md", "whoop-ffi tests", r"`physio-algo` tests \+ (\d+) `whoop-ffi` tests", None),
         ("data-flow.md", "FFI free-fn exports", r"\*\*(\d+) exported functions, all", len(exports)),
-        ("data-flow.md", "FFI exports called", r"exported functions, all (\d+) called", called_from_kotlin(exports)),
+        ("data-flow.md", "FFI exports called", r"exported functions, all (\d+) called", free_fns_called(exports)),
         ("data-flow.md", "codec methods", r"further \*\*(\d+) methods", len(methods)),
-        ("data-flow.md", "codec methods called", r"methods, (\d+) of them called", called_from_kotlin(methods)),
+        ("data-flow.md", "codec methods called", r"methods, (\d+) of them called", codec_methods_called(methods)),
+        ("data-flow.md", "codec methods not called", r"the other (\d+) are frame builders",
+         len(methods) - codec_methods_called(methods)),
     ]
 
     n_ignored = ignored_gates()

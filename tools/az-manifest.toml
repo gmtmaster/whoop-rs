@@ -9,6 +9,14 @@
 # turned out to be wrong. Say WHY in `note`.
 #
 # Adding a figure to a document means adding it here in the same pass. The sweep is then one command.
+#
+# SCOPE: every `doc` here resolves against `dev-notes/noop-tan`, so this sheet covers the A-Z working
+# notes only. Figures published in `whoop-rs/docs/` are NOT registered here and must not be: they are
+# pinned by `docs-vs-code.py`, which re-derives each one from the source or from a cargo run, whereas a
+# row here would only assert the number appears in some text. Teaching this file a second doc root would
+# duplicate the weaker half of a check that already exists, so the three staging kappas in
+# `algorithms.md` stay where the stronger gate holds them. It is a deliberate boundary, not a gap, and
+# it does not add to the unreproducible count below.
 
 [meta]
 version = "1.0.0"

@@ -5,7 +5,7 @@ presentation, persistence, BLE transport and user policy.** The only seam is the
 Kotlin by the single adapter object `RustScores.kt`.
 
 Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
-object carries a further **31 methods, 19 of them called**; the other 12 are frame builders and offload
+object carries a further **31 methods, 18 of them called**; the other 13 are frame builders and offload
 controls kept deliberately as codec-parity API for the CLI and a later call site, not dead code.
 `tools/docs-vs-code.py` re-derives both counts and fails on drift.
 
