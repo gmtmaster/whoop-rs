@@ -16,6 +16,11 @@ in `RustScores`'s own wrapper declaration whether or not it still reached Rust, 
 called because an unrelated `DeviceFamily.clientHello` byte array exists — which is where the published
 "19 of 31 codec methods" came from. Both now name the receiver, so only a real crossing counts.
 
+A free function is qualified by `uniffi.whoop_ffi.<name>` and a namesake cannot reach it. An object method
+has no such namespace, and four matchers in a row published a wrong integer for one — 19, then 18, then 8.
+So that one claim is a NAMED LIST in the document rather than a total: the extraction is still approximate,
+but its errors are now legible, and a receiver it cannot resolve is reported instead of counted.
+
 Every claim below names the document, the regex that extracts what the document says, and the command or
 source scan that says what is true. A claim whose regex no longer matches is a FAILURE, not a skip: a
 sentence rewritten out of the document must be re-pinned deliberately, or this gate quietly stops covering
@@ -87,45 +92,109 @@ def free_fns_called(names: list[str]) -> int:
     return sum(1 for n in names if camel(n) in reached)
 
 
+CODEC_BOUND = re.compile(r"\bva[lr]\s+(\w+)[^\n=]*(?:=|by\s+lazy\s*\{)[^\n]*\bWhoopCodec\(")
+# `fun f(a: A): T = <expr>` / `val f get() = <expr>`, expression body on the declaration line.
+CODEC_CHOICE = re.compile(r"^[ \t]*(?:\w+[ \t]+)*(?:fun|val)[ \t]+(\w+)[ \t]*(?:\([^)\n]*\))?[^=\n]*=[ \t]*(\S[^\n]*)$", re.M)
+CHOICE_WORDS = frozenset({"if", "else", "when", "this", "it", "return"})
+CHOICE_COND = re.compile(r"\b(?:if|when)[ \t]*\([^()\n]*\)")
+# `recv.method(` or `accessor(args).method(`, the two receiver shapes Kotlin writes on one line.
+CODEC_CALL = re.compile(r"\b([A-Za-z_]\w*)[ \t]*(?:\([^()\n]*\))?[ \t]*\.[ \t]*([A-Za-z_]\w*)[ \t]*\(")
+
+
+def strip_comments(src: str) -> str:
+    return "\n".join(line.split("//")[0] for line in re.sub(r"/\*[\s\S]*?\*/", "", src).splitlines())
+
+
 def codec_receivers(src: str) -> set[str]:
-    """The identifiers in one Kotlin file that actually hold a `WhoopCodec`.
+    """The identifiers in one Kotlin file known to hold a `WhoopCodec`, closed to a fixpoint.
 
-    `val gen5 by lazy { WhoopCodec(Gen.GEN5) }` binds `gen5`; nothing else in the file does.
+    Two rules, both about types rather than about one file's spelling. A `val`/`var` initialised from
+    `WhoopCodec(` holds one. An expression-bodied declaration holds one when every identifier left in a
+    RESULT position is already bound - so the conditions of `if`/`when` are deleted first, being
+    irrelevant to what the expression evaluates to, and `= if (gen == Gen.GEN5) gen5 else gen4` reduces
+    to a choice between two codecs. One operation in a result position (`gen5.buzzFrame(s)`,
+    `gen5.toString()`) leaves it unbound, because the result is then not a codec.
+
+    Deleting conditions rather than allowing the parameters is what makes this survive the caller's
+    spelling: the same selector rewritten from a `Boolean` to a `Gen` enum reduces identically.
+
+    Every other route to a codec is left UNRESOLVED rather than guessed; [codec_calls] reports those.
     """
-    return set(re.findall(r"\bva[lr]\s+(\w+)[^\n=]*(?:=|by\s+lazy\s*\{)[^\n]*\bWhoopCodec\(", src))
+    bound = set(CODEC_BOUND.findall(src))
+    grew = True
+    while grew:
+        grew = False
+        for name, body in CODEC_CHOICE.findall(src):
+            ids = set(re.findall(r"[A-Za-z_]\w*", CHOICE_COND.sub(" ", body))) - CHOICE_WORDS
+            if name not in bound and ids and ids <= bound:
+                bound.add(name)
+                grew = True
+    return bound
 
 
-def codec_methods_called(names: list[str]) -> int:
-    """A `WhoopCodec` method counts only when the RECEIVER is known to be a codec.
+def codec_escapes(src: str) -> list[str]:
+    """Bound receivers a file publishes, which would let a codec reach a file that never names one.
 
-    Twice this matched a namesake instead. Round 3 added the call parenthesis; round 7 narrowed the
-    scope to files naming `WhoopCodec`. Both fixed the instance, not the class: `.<name>(` cannot
-    know its receiver's type, so `reassembler.feed(bytes)` read as `WhoopCodec::feed` and nine
-    unrelated `.reset()` calls read as `WhoopCodec::reset`, publishing 18 called against a true 16.
-    Scoping by file only postpones it, because a holder file may also hold a `Reassembler`.
-
-    So bind the receiver, the same standard [free_fns_called] already holds itself to: learn which
-    identifiers are constructed as a codec, then require the call to sit on one of them.
+    Scanning only files that name `WhoopCodec` is safe exactly while this is empty: a codec is reached
+    by construction or by something a holder exposes, and nothing else. `RustCodec.kt` keeps both
+    codecs and its selector `private`, so the type cannot leave it - and if that changes, this says so
+    instead of the scope quietly under-counting.
     """
+    return sorted(
+        n for n in codec_receivers(src)
+        if not re.search(rf"^[ \t]*(?:\w+[ \t]+)*private[ \t]+(?:\w+[ \t]+)*(?:fun|val|var)[ \t]+{re.escape(n)}\b",
+                         src, re.M)
+    )
+
+
+def codec_calls(names: list[str]) -> tuple[set[str], dict[str, list[str]], list[str]]:
+    """Which `WhoopCodec` methods hand-written Kotlin calls, what it could not resolve, what escapes.
+
+    A method counts only when its RECEIVER is known to be a codec. Four matchers answered this
+    question by name alone and three published the wrong number: a bare `clientHello` found
+    `DeviceFamily.clientHello`, `.feed(` found `reassembler.feed(bytes)`, and binding only the
+    directly-constructed identifiers missed every call routed through `codec(isGen5)`.
+
+    A regex has no types, so this cannot be exact. What it can be is one-sided and loud: an unresolved
+    receiver on a name that IS a codec method is returned as unresolved, never counted either way, and
+    the caller fails on it rather than publishing a guess.
+    """
+    wanted = {camel(n): n for n in names}
     called: set[str] = set()
-    constructed = False
+    unresolved: dict[str, list[str]] = {}
+    escaped: list[str] = []
     for src in kotlin_files():
         if "WhoopCodec" not in src:
             continue
-        src = re.sub(r"/\*[\s\S]*?\*/", "", src)
-        src = "\n".join(line.split("//")[0] for line in src.splitlines())
+        src = strip_comments(src)
         # No space before the paren: a KDoc sentence writes "WhoopCodec (decode history/live/…)",
         # which is prose, not a construction.
         if re.search(r"\bWhoopCodec\(", src):
-            constructed = True
-        recv = codec_receivers(src)
-        if not recv:
-            continue
-        alt = "|".join(sorted(map(re.escape, recv)))
-        called |= set(re.findall(rf"\b(?:{alt})\s*\.\s*(\w+)\s*\(", src))
-    if constructed:
-        called.add("new")
-    return sum(1 for n in names if camel(n) in called)
+            called.add("new")
+        bound = codec_receivers(src)
+        escaped += codec_escapes(src)
+        for recv, method in CODEC_CALL.findall(src):
+            if method not in wanted:
+                continue
+            if recv in bound:
+                called.add(wanted[method])
+            else:
+                unresolved.setdefault(wanted[method], []).append(f"{recv}.{method}")
+    return called, unresolved, sorted(set(escaped))
+
+
+def codec_doc_lists(text: str) -> tuple[set[str], set[str]]:
+    """The two halves `data-flow.md` NAMES, rather than the totals it used to count.
+
+    Every wrong answer this claim published was an integer that moved by one or two and read as
+    ordinary prose. A set difference names the symbol that appeared or vanished, and `feed` sitting
+    in a list of methods the app calls is legible to anyone who has read `RustCodec.kt`.
+    """
+    def half(label: str) -> set[str]:
+        m = re.search(rf"\*\*{label}\*\*(.*?)\n\n", text, re.S)
+        return set(re.findall(r"`(\w+)`", m.group(1))) if m else set()
+
+    return half("Called from Kotlin"), half("Not called")
 
 
 def surface_table_rows() -> set[str]:
@@ -322,6 +391,21 @@ def readme_crate_rows() -> set[str]:
     return set(re.findall(r"^\| `([a-z0-9-]+)` \|", table, re.M))
 
 
+def kotlin_tree_dirty() -> list[str]:
+    """Uncommitted Kotlin in the OTHER repo, which every cross-repo claim here silently reads.
+
+    Four claims are derived from `noop-wt-tan`'s working tree, so another agent's half-finished edit
+    moves them - one adding an import took "Kotlin files crossing the FFI" from 16 to 17 while the
+    committed answer was still 16. Not a failure and not counted as one, but a red with this printed
+    under it is a red nobody has to diagnose twice.
+    """
+    repo = KOTLIN.parents[4]
+    if not repo.is_dir():
+        return []
+    r = subprocess.run(["git", "status", "--porcelain", "--", "*.kt"], cwd=repo, capture_output=True, text=True)
+    return [ln[3:] for ln in r.stdout.splitlines()] if r.returncode == 0 else []
+
+
 def doc(name: str) -> str:
     """A shipped document by name. `docs/` first, then the repo root — README.md and AGENTS.md are
     shipped too, and were pinned by nothing until they had drifted a deleted crate and three counts."""
@@ -350,10 +434,7 @@ def main() -> int:
         ("architecture.md", "generation branches", r"there are \*\*(\d+)\*\* of those outside", family_branches()),
         ("data-flow.md", "FFI free-fn exports", r"\*\*(\d+) exported functions, all", len(exports)),
         ("data-flow.md", "FFI exports called", r"exported functions, all (\d+) called", free_fns_called(exports)),
-        ("data-flow.md", "codec methods", r"further \*\*(\d+) methods", len(methods)),
-        ("data-flow.md", "codec methods called", r"methods, (\d+) of them called", codec_methods_called(methods)),
-        ("data-flow.md", "codec methods not called", r"the other (\d+) are frame builders",
-         len(methods) - codec_methods_called(methods)),
+        ("data-flow.md", "codec methods", r"a further \*\*(\d+) methods\*\*", len(methods)),
         ("README.md", "command opcodes", r"CRC32\), (\d+) command opcodes", command_opcodes()),
         ("algorithms.md", "physio-algo orphans", r"\*\*(\d+) public\s+function[s]? in the crate (?:is|are) reached by no other crate\*\*",
          len(physio_algo_orphans())),
@@ -421,6 +502,48 @@ def main() -> int:
         bad += 1
     else:
         print(f"  ok     {'README.md':<16} {'crate table':<26} {len(rows)} rows == {len(members)} crates")
+
+    # `WhoopCodec`'s methods are object methods, so no namespace qualifies them the way
+    # `uniffi.whoop_ffi.<name>` qualifies a free function, and four matchers in a row answered the
+    # question with a namesake or missed a route. The document NAMES both halves instead of counting
+    # them, so a disagreement says which symbol moved - `feed` sitting among the called ones is
+    # legible where 18 against 16 was not.
+    said_called, said_not = codec_doc_lists(doc("data-flow.md"))
+    called, unresolved, escaped = codec_calls(methods)
+    checked += 1
+    if not said_called or not said_not:
+        print(f"  NOPIN  {'data-flow.md':<16} {'codec method lists':<26} "
+              f"the **Called from Kotlin** / **Not called** list this gate reads is GONE")
+        bad += 1
+    elif (said_called | said_not) != set(methods) or (said_called & said_not):
+        stray = sorted((said_called | said_not) - set(methods))
+        missing = sorted(set(methods) - said_called - said_not)
+        print(f"  WRONG  {'data-flow.md':<16} {'codec method lists':<26} "
+              f"the two lists do not partition the {len(methods)} methods: "
+              f"named but no such method: {stray}; in neither list: {missing}; in both: {sorted(said_called & said_not)}")
+        bad += 1
+    elif said_called != called:
+        print(f"  WRONG  {'data-flow.md':<16} {'codec method lists':<26} "
+              f"listed as called but no Kotlin call found: {sorted(said_called - called)}; "
+              f"called but listed as not: {sorted(called - said_called)}")
+        bad += 1
+    else:
+        print(f"  ok     {'data-flow.md':<16} {'codec method lists':<26} "
+              f"{len(said_called)} called, {len(said_not)} not, partitioning {len(methods)}")
+
+    # The extractor's own blind spot, made loud. A regex has no types, so a receiver it cannot resolve
+    # is reported rather than counted - and it fails only when that ambiguity could flip a published
+    # name, which is exactly what `reassembler.feed(bytes)` did when it published 18.
+    checked += 1
+    ambiguous = sorted(site for n, sites in unresolved.items() if n in said_not for site in sites)
+    if escaped or ambiguous:
+        print(f"  WRONG  {'RustCodec.kt':<16} {'codec receiver resolution':<26} "
+              f"receivers a holder publishes: {escaped}; "
+              f"calls it cannot attribute, on names published as uncalled: {ambiguous}")
+        bad += 1
+    else:
+        print(f"  ok     {'RustCodec.kt':<16} {'codec receiver resolution':<26} "
+              f"every codec-named call bound to a receiver, none escaping its file")
 
     # The surface table's ghost direction. Its shortfall is a counted claim above (the table is a map,
     # not an API reference), but a row naming an export that no longer exists reads as ordinary prose.
@@ -531,6 +654,11 @@ def main() -> int:
             print(f"  ok     {'dataset_parity.rs':<16} {'fixture-set matrix':<26} {len(named)} sets, none unnamed")
     else:
         print(f"  SKIP   {'dataset_parity.rs':<16} {'fixture-set matrix':<26} fixture root absent")
+
+    dirty = kotlin_tree_dirty()
+    if dirty:
+        print(f"\n  NOTE   noop-wt-tan has {len(dirty)} uncommitted Kotlin file(s); the four cross-repo claims\n"
+              f"         above read the working tree, not the commit: {dirty}")
 
     print(f"\n{checked} claims checked | {bad} disagree with the source")
     return 1 if bad else 0

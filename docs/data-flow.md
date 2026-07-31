@@ -8,10 +8,24 @@ including two screens. Counted by `tools/docs-vs-code.py`, so the day a screen s
 or a new one starts — the number moves and this page has to say so.
 
 Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
-object carries a further **31 methods, 16 of them called**; the other 15 are frame builders, the offload
-machine and one decoder (`decode_imu_frame`), kept as codec-parity API for the CLI and a later call site.
+object carries a further **31 methods**, and `protocol/RustCodec.kt` is the only hand-written Kotlin file
+that names the type at all — it constructs both codecs `private`ly and exposes nothing that returns one, so
+a codec cannot reach any other file. Which of the 31 it calls is **named, not counted**: a free function is
+qualified by `uniffi.whoop_ffi.<name>` and a namesake cannot reach it, an object method has no such
+namespace, and four matchers in a row answered this one with a wrong integer. A wrong name is legible where
+a total moving from 16 to 18 is not.
 
-The 15 are three different things, and only the first is "awaiting a call site":
+**Called from Kotlin** — `new`, `decode_history`, `decode_live`, `decode_response`, `decode_metadata`,
+`decode_ppg_frame`, `command_frame`, `get_battery_frame`, `buzz_frame`, `set_clock_frame`,
+`set_clock_legacy_frame`, `alarm_set_frame`, `alarm_set_frame_gen4`, `alarm_disable_frame`,
+`advertising_name_frame`, `set_config_frame`.
+
+**Not called** — `client_hello`, `r22_frames`, `feed`, `reset`, `offload_start`, `offload_abort`,
+`decode_imu_frame`, `get_hello_frame`, `get_data_range_frame`, `stop_raw_flood_frame`,
+`toggle_realtime_hr_frame`, `reboot_frame`, `broadcast_hr_frame`, `run_haptics_frame`,
+`advertising_name_frame_gen5`. Kept as codec-parity API for the CLI and a later call site.
+
+Those are three different things, and only the last is awaiting a call site:
 
 - **A Kotlin twin holds the same wire bytes.** `client_hello` and `r22_frames`: `DeviceFamily.WHOOP5.clientHello`
   is `aa0108000001e67123019101363e5c8d`, the same 16 bytes as `GEN5_CLIENT_HELLO`, and
@@ -27,8 +41,9 @@ ships. Whether Kotlin should call across for them is a border decision, not drif
 
 The tables below carry **47** of them; **23 of the 79 appear in no shipped document**, which is a gap in the
 map rather than a claim about the code. `tools/docs-vs-code.py` re-derives every count here and fails on
-drift — including the receiver of a codec call, since `reassembler.feed(bytes)` once read as `WhoopCodec::feed`
-and published 18.
+drift, and for the two lists above it prints the symmetric difference — which name appeared, which vanished.
+It also refuses to guess: a call to a codec method name whose receiver it cannot resolve is reported as
+unresolved rather than counted, which is what `reassembler.feed(bytes)` was when it published 18.
 
 ## The universal rule
 
