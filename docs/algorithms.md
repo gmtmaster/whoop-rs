@@ -9,8 +9,8 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 `HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
 number. Outputs are wellness estimates, never medical.
 
-`physio-algo` carries **308 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
-workspace runs **425**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
+`physio-algo` carries **321 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
+workspace runs **438**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
 default - three assert a cohort kappa, the fourth prints the whole-corpus sheet. Run
 `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
 `tools/docs-vs-code.py` re-derives every count on this page from the source and fails on drift.
@@ -51,7 +51,7 @@ caller. What the app still computes itself is tracked in the noop-tan `ALGORITHM
 | 8 | Personal baselines (EWMA) | `baselines.rs` | FFI | 17 |
 | 9 | HR zones | `hr_zones.rs` | FFI | 15 |
 | 10 | Fitness Age / VO2max | `vo2max.rs` | FFI | ✓ |
-| 11 | Baevsky Stress Index | `stress.rs` | FFI | ✓ |
+| 11 | Baevsky Stress Index | `stress/index.rs` | FFI | 4 |
 | 12 | Stress onset (live) | `stress_onset.rs` | FFI | 5 |
 | 13 | SpO2 | `spo2.rs` | FFI | ✓ |
 | 14 | Calories | `calories.rs` | FFI | 18 |
@@ -60,8 +60,8 @@ caller. What the app still computes itself is tracked in the noop-tan `ALGORITHM
 | 17 | IMU activity features | `imu_features.rs` | FFI | 7 |
 | 18 | Rest (sleep performance) | `rest.rs` | FFI | 5 |
 | 19 | Sleep debt | `sleep_debt.rs` | FFI | 5 |
-| 20 | Daily stress | `stress.rs` | FFI | ✓ |
-| 21 | Daytime stress | `stress.rs` | FFI | ✓ |
+| 20 | Daily stress | `stress/daily.rs` | FFI | 5 |
+| 21 | Windowed stress (day + night) | `stress/window.rs` | FFI (day only) | 13 |
 | 22 | HR anomaly watch | `hr_anomaly.rs` | Rust-only | 7 |
 | 23 | HRV frequency domain (Lomb-Scargle) | `hrv_freq.rs` | FFI | 3 |
 | 24 | Short-nap detection | `nap.rs` | FFI | 6 |
@@ -221,8 +221,9 @@ same equation against a normative peer (RHR 65, PAI 5) so the body term cancels.
 
 ## 11. Baevsky Stress Index  ·  FFI `stress_index`, `stress_components`
 
-`stress.rs`. `SI = AMo / (2 x Mo x MxDMn)` over a cleaned R-R histogram (Mo modal R-R s, AMo modal-bin
-share %, MxDMn range s). Tall-narrow-low-range reads high.
+`stress/index.rs`. `SI = AMo / (2 x Mo x MxDMn)` over a cleaned R-R histogram (Mo modal R-R s, AMo
+modal-bin share %, MxDMn range s). Tall-narrow-low-range reads high. Unbounded, so it is the one
+stress reading that carries no 0-3 band.
 
 ## 12. Stress onset, live  ·  FFI `stress_onset_evaluate`
 
@@ -269,13 +270,37 @@ for coarse activity classification, never a physiological gate.
 
 ## 20. Daily stress  ·  FFI `daily_stress`
 
-`stress.rs`. `3 / (1 + exp(-(zRHR + zHRV)))` against up to 30 prior (RHR, HRV) nights, 14-day baseline gate.
-Bands low [0,1), medium [1,2), high [2,3].
+`stress/daily.rs`. `3 / (1 + exp(-(zRHR + zHRV)))` against up to 30 prior (RHR, HRV) nights, 14-day baseline
+gate. Bands low [0,1), medium [1,2), high [2,3].
 
-## 21. Daytime stress  ·  FFI `daytime_stress`
+## 21. Windowed stress, day + night  ·  FFI `daytime_stress` (day only)
 
-`stress.rs`. Per hour 06:00-21:59 with >= 300 HR rows: `zHR` vs the Q25 calm-hour HR, `zHRV` vs the Q75 calm
-RMSSD, `3 / (1 + exp(-(zHR + zHRV)))`. No exercise gate. Peak hour on a tie is the last (adopted app-side).
+`stress/window.rs`. **One formula, two derivations.** `windowed_stress(points, cfg)` scores a set of
+buckets against the SAME set's own calm quartiles: `zHR` vs the Q25 bucket HR, `zHRV` vs the Q75 bucket
+RMSSD, `3 / (1 + exp(-(zHR + zHRV)))`, plus the minutes spent in each band. No exercise gate. Peak hour on a
+tie is the last (adopted app-side). A bucket with no mean HR is dropped, never invented; the caller applies
+its own >= 300 HR-row gate before the border.
+
+| derivation | cfg | note |
+|---|---|---|
+| `daytime_stress` | `hours: Some((6, 22))`, bucket 3600 s | shipped; pinned bit-for-bit to one real worn day |
+| `sleep_stress` | `hours: None`, bucket 3600 s | the caller passes only in-span buckets |
+
+The night passes `None` rather than a range **because a sleep window crosses midnight** and one hour-of-day
+range cannot express "22:00 to 06:00" — trying would silently drop half the night. The caller selects the
+buckets; the core scores what it is given. `cfg.bucket_seconds` only converts scored buckets to band minutes
+today: `HourPoint` is keyed by hour-of-day, so a sub-hour bucket needs a bucket index before that knob turns.
+
+**Unvalidated, and a placeholder in the owner's own words.** Nothing external confirms either the day or the
+night split, and WHOOP's numbers are not a ground truth we can check without their algorithm. The reference
+is the window set's **own** calm quartiles, so a score is relative to that day or that night: **a uniformly
+stressful night can read low because nothing in it was calm by comparison** (asserted, not just described,
+by `uniformly_stressful_night_still_reads_neutral`). This caveat already applied to the shipped daytime
+metric and was accepted there. Both derivations share one core on purpose, so replacing it replaces both.
+
+The night ships at **hourly** first — the existing tested path, ~6 buckets for a 6 h night. If that reads
+useless on real nights the knob is `bucket_seconds` and the next step is the 5-minute buckets
+`hrv_windowed_buckets` already computes; per-minute copies WHOOP's resolution without their smoothing.
 
 ## 22. HR anomaly watch  ·  Rust-only `HrWatch`
 
@@ -335,7 +360,8 @@ direction. In the other, **17 Kotlin engines still carry maths of their own**, l
 ### ✅ Parity-tested — pinned to the previous implementation
 
 Workout detection · bout + day calories · strain/Effort · recovery/Charge · HR zones · personal
-baselines · Fitness Age / VO2max · Rest · sleep debt · daily + daytime stress · Baevsky SI · stress
+baselines · Fitness Age / VO2max · Rest · sleep debt · daily + daytime stress (the daytime half re-pinned to a
+real worn day, bit-for-bit, across the windowed-core refactor) · Baevsky SI · stress
 onset · short-nap detection · HRV frequency domain. Each still reproduces the figures its Kotlin
 predecessor produced.
 
@@ -354,8 +380,15 @@ predecessor produced.
 | Rhythm Age (CosinorAge) | Has **never computed** on real data — needs 7 worn days of on-chip motion. Its activity scale carries an unvalidated conversion factor that only a concurrent reference accelerometer can settle |
 | 4.0 record decode | v24 and v25 are pinned to real captured 4.0 frames (`whoop-protocol/tests/fixtures/real_frames.json`), and the app's 4.0 offload runs through this decoder. What is still unexercised is `whoop-client`'s own 4.0 connect/bond path — no 4.0 has been bonded over the desktop radio, so `v5`/`v7`/`v9`/`v12` have only synthetic coverage |
 
+### ⚠️ Unvalidated — implemented and unit-tested, nothing external confirms the output
+
+| Algorithm | Caveat |
+|---|---|
+| Windowed stress, both derivations | Explicitly a **placeholder**. The reference is the window set's own calm quartiles, so a score is relative to that day or night and a uniformly stressful night reads low. The day half is separately parity-pinned to the figures its predecessor produced, which fixes it in place — it does not make it right |
+
 ### Rust-only, not on the FFI
 
 | Algorithm | Note |
 |---|---|
 | HR anomaly watch (`HrWatch`) | Implemented here; no app surface yet |
+| `sleep_stress` | The night derivation of §21. Awaiting its uniffi record change before the app can call it |

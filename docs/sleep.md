@@ -59,7 +59,7 @@ HR-confirm median, span-cap, morning-stillness, motion-corroborated wake, the re
 selection reasons, habitual learning). `golden_tests.rs` pins the V2 hypnogram frozen-golden.
 `tests/dataset_parity.rs` (`--ignored`) asserts the DREAMT, AAUWSS and sleep-accel kappas and prints a
 sheet naming every fixture set with what its truth column IS, so no set sits unscored and unnamed.
-**308 `physio-algo` tests + 23 `whoop-ffi` tests, 0 clippy.**
+**321 `physio-algo` tests + 23 `whoop-ffi` tests, 0 clippy.**
 
 ## App-side border: complete
 

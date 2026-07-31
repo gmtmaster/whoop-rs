@@ -39,7 +39,7 @@ Those are three different things, and only the last is awaiting a call site:
 The Kotlin copies are the ones with callers, so each table and each machine exists twice and only one side
 ships. Whether Kotlin should call across for them is a border decision, not drift.
 
-The tables below carry **47** of them; **23 of the 79 appear in no shipped document**, which is a gap in the
+The tables below carry **47** of them; **22 of the 79 appear in no shipped document**, which is a gap in the
 map rather than a claim about the code. `tools/docs-vs-code.py` re-derives every count here and fails on
 drift, and for the two lists above it prints the symmetric difference — which name appeared, which vanished.
 It also refuses to guess: a call to a codec method name whose receiver it cannot resolve is reported as
