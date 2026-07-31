@@ -3,7 +3,7 @@
 Two projects, one contract. **whoop-rs owns every algorithm, decode and score. noop-tan owns
 presentation, persistence, BLE transport and user policy.** The only seam is the uniffi FFI.
 `RustScores.kt` is the main adapter and holds most of the crossings, but it is **not** the only file
-that crosses: **16 hand-written Kotlin files under `main/` reach `uniffi.whoop_ffi` directly**,
+that crosses: **17 hand-written Kotlin files under `main/` reach `uniffi.whoop_ffi` directly**,
 including two screens. Counted by `tools/docs-vs-code.py`, so the day a screen stops calling Rust —
 or a new one starts — the number moves and this page has to say so.
 
@@ -75,7 +75,7 @@ policy the user sets (recalibration date, profile fallbacks, dismissal state).
         |                            and WHICH device owns the day
         v
   RustScores.kt .................... the main adapter: one thin wrapper per engine, no arithmetic
-                                     (15 other main-source files also cross, two of them screens)
+                                     (16 other main-source files also cross, two of them screens)
         |
         v
   whoop-rs physio-algo ............. every score, gate and statistic
