@@ -39,6 +39,7 @@ pub struct ScoredHourInfo {
 }
 
 /// Daytime-stress result: the per-hour scores plus the day mean, peak hour, and the trailing high run.
+/// The core's band minutes are not on this record yet; adding them is a uniffi record change.
 #[derive(uniffi::Record)]
 pub struct DaytimeStressInfo {
     pub hours: Vec<ScoredHourInfo>,
@@ -59,11 +60,11 @@ pub fn daytime_stress(hours: Vec<HourPointInfo>) -> DaytimeStressInfo {
     let r = stress::daytime_stress(&h);
     DaytimeStressInfo {
         hours: r
-            .hours
+            .buckets
             .into_iter()
             .map(|s| ScoredHourInfo { hour: s.hour, mean_hr: s.mean_hr, rmssd: s.rmssd, stress: s.stress })
             .collect(),
-        day_mean: r.day_mean,
+        day_mean: r.mean,
         peak_hour: r.peak_hour,
         sustained_high: r.sustained_high,
         sustained_run: r.sustained_run as u32,
