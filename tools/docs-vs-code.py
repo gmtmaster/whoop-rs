@@ -159,8 +159,30 @@ def cargo_passed(args: list[str]) -> int:
     return sum(int(m) for m in re.findall(r"^test result: ok\. (\d+) passed", r.stdout, re.M))
 
 
+def command_opcodes() -> int:
+    """Command opcode constants in `whoop-protocol/src/command.rs` (not the FORBIDDEN/DESTRUCTIVE lists)."""
+    t = (ROOT / "crates" / "whoop-protocol" / "src" / "command.rs").read_text(encoding="utf-8")
+    return len(re.findall(r"^pub const [A-Z0-9_]+: u8 = \d+;", t, re.M))
+
+
+def workspace_members() -> set[str]:
+    """Crate directories under `crates/`, which is what the root Cargo.toml globs."""
+    return {p.name for p in (ROOT / "crates").iterdir() if (p / "Cargo.toml").exists()}
+
+
+def readme_crate_rows() -> set[str]:
+    """The crate names in README's Workspace table, one per `| \\`name\\` | role |` row."""
+    t = doc("README.md")
+    table = t[t.index("## Workspace"):]
+    table = table[: table.index("\n## ", 1)]
+    return set(re.findall(r"^\| `([a-z0-9-]+)` \|", table, re.M))
+
+
 def doc(name: str) -> str:
-    return (DOCS / name).read_text(encoding="utf-8")
+    """A shipped document by name. `docs/` first, then the repo root — README.md and AGENTS.md are
+    shipped too, and were pinned by nothing until they had drifted a deleted crate and three counts."""
+    p = DOCS / name
+    return (p if p.exists() else ROOT / name).read_text(encoding="utf-8")
 
 
 def main() -> int:
@@ -188,6 +210,7 @@ def main() -> int:
         ("data-flow.md", "codec methods called", r"methods, (\d+) of them called", codec_methods_called(methods)),
         ("data-flow.md", "codec methods not called", r"the other (\d+) are frame builders",
          len(methods) - codec_methods_called(methods)),
+        ("README.md", "command opcodes", r"CRC32\), (\d+) command opcodes", command_opcodes()),
     ]
 
     n_ignored = ignored_gates()
@@ -201,6 +224,8 @@ def main() -> int:
         claims += [
             ("algorithms.md", "physio-algo tests", r"carries \*\*(\d+) unit tests\*\*", pa),
             ("algorithms.md", "workspace tests", r"workspace runs \*\*(\d+)\*\*", ws),
+            ("README.md", "workspace tests", r"`cargo test --workspace` \((\d+) passed", ws),
+            ("README.md", "ignored dataset gates", r"passed, (\d+) `#\[ignore\]`d dataset gates", n_ignored),
         ]
         for i, c in enumerate(claims):
             if c[0] == "sleep.md" and c[1] == "physio-algo tests":
@@ -226,6 +251,18 @@ def main() -> int:
             bad += 1
         else:
             print(f"  ok     {name:<16} {what:<26} {is_}")
+
+    # README's crate table, both directions. A count would not have caught this: the table carried a
+    # `whoop-metrics` row for a crate deleted long ago, in the same repo whose CLAUDE.md says it does not
+    # exist, and a new crate landing with no row is the same failure the other way round.
+    members, rows = workspace_members(), readme_crate_rows()
+    checked += 1
+    if rows != members:
+        ghost, missing = sorted(rows - members), sorted(members - rows)
+        print(f"  WRONG  {'README.md':<16} {'crate table':<26} rows for no crate: {ghost}; crates with no row: {missing}")
+        bad += 1
+    else:
+        print(f"  ok     {'README.md':<16} {'crate table':<26} {len(rows)} rows == {len(members)} crates")
 
     # Each cohort kappa must be written the SAME way everywhere it appears. A document spells the four
     # cohorts across one comma-separated row, so a fragment is the unit: any decimal sharing a fragment
