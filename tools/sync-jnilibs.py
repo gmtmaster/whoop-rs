@@ -3,6 +3,7 @@
 
     python whoop-rs/tools/sync-jnilibs.py --check   # exit 1 if the shipped libraries are stale
     python whoop-rs/tools/sync-jnilibs.py --sync    # rebuild both ABIs, regenerate bindings, stamp
+    python whoop-rs/tools/sync-jnilibs.py --ensure  # rebuild only when stale; what Gradle calls
 
 The host DLL is safe already: `app/build.gradle.kts` runs `cargo build -p whoop-ffi` before every test
 task, so cargo tracks its freshness. The libraries that reach a PHONE are different - they are committed
