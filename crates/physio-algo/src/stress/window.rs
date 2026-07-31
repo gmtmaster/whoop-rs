@@ -72,6 +72,14 @@ impl StressWindows {
             low_minutes: 0, medium_minutes: 0, high_minutes: 0,
         }
     }
+
+    /// Share of the scored window spent in the high band, as a percentage. `None` when nothing
+    /// scored — a window with no signal has no share, which is not the same as zero.
+    pub fn high_share_pct(&self) -> Option<f64> {
+        let total = self.low_minutes + self.medium_minutes + self.high_minutes;
+        if total == 0 { return None; }
+        Some(self.high_minutes as f64 * 100.0 / total as f64)
+    }
 }
 
 /// Score a set of buckets for autonomic activation against their own calm quartiles. The reference
@@ -254,6 +262,19 @@ mod tests {
             r.low_minutes + r.medium_minutes + r.high_minutes,
             r.buckets.len() as i64 * 60,
         );
+    }
+
+    #[test]
+    fn real_day_high_share_matches_its_band_minutes() {
+        let r = daytime_stress(&real_day());
+        // 660 of 960 scored minutes are high.
+        assert_eq!(r.high_share_pct().unwrap().to_bits(), (660.0f64 * 100.0 / 960.0).to_bits());
+    }
+
+    #[test]
+    fn unscored_window_has_no_high_share() {
+        // Zero minutes is not "0% high": nothing was measured, so the share is absent.
+        assert!(sleep_stress(&[]).high_share_pct().is_none());
     }
 
     #[test]

@@ -7,7 +7,7 @@ that crosses: **17 hand-written Kotlin files under `main/` reach `uniffi.whoop_f
 including two screens. Counted by `tools/docs-vs-code.py`, so the day a screen stops calling Rust —
 or a new one starts — the number moves and this page has to say so.
 
-Re-counted 2026-07-31: **79 exported functions, all 79 called from hand-written Kotlin.** The `WhoopCodec`
+Re-counted 2026-07-31: **80 exported functions, all 80 called from hand-written Kotlin.** The `WhoopCodec`
 object carries a further **31 methods**, and `protocol/RustCodec.kt` is the only hand-written Kotlin file
 that names the type at all — it constructs both codecs `private`ly and exposes nothing that returns one, so
 a codec cannot reach any other file. Which of the 31 it calls is **named, not counted**: a free function is
@@ -39,7 +39,7 @@ Those are three different things, and only the last is awaiting a call site:
 The Kotlin copies are the ones with callers, so each table and each machine exists twice and only one side
 ships. Whether Kotlin should call across for them is a border decision, not drift.
 
-The tables below carry **47** of them; **22 of the 79 appear in no shipped document**, which is a gap in the
+The tables below carry **48** of them; **22 of the 80 appear in no shipped document**, which is a gap in the
 map rather than a claim about the code. `tools/docs-vs-code.py` re-derives every count here and fails on
 drift, and for the two lists above it prints the symmetric difference — which name appeared, which vanished.
 It also refuses to guess: a call to a codec method name whose receiver it cannot resolve is reported as
@@ -186,6 +186,7 @@ every algorithm above takes plain values.
 | `stress_components` | Full SI components from a raw R-R series (ms). |
 | `daily_stress` | Daily autonomic stress (0–3) from today's RHR + HRV against the prior-days baseline. `None` on too few baseline days or no signal today. |
 | `daytime_stress` | Score waking hours for autonomic activation against the day's own calm-hour quartiles (Q25 HR, Q75 RMSSD). Each hour needs its own HR gate applied by the caller (a `None` mean_hr hour is skipped). |
+| `sleep_stress` | Score one sleep window's buckets on the same formula and the same 0–3 bands, with no hour-of-day filter. The caller passes ONLY the buckets inside the span, because a night crosses midnight. |
 
 ### Motion / energy
 

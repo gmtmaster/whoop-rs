@@ -9,8 +9,8 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 `HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
 number. Outputs are wellness estimates, never medical.
 
-`physio-algo` carries **321 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
-workspace runs **438**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
+`physio-algo` carries **323 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
+workspace runs **440**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
 default - three assert a cohort kappa, the fourth prints the whole-corpus sheet. Run
 `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
 `tools/docs-vs-code.py` re-derives every count on this page from the source and fails on drift.
@@ -32,7 +32,7 @@ Each algorithm below is tagged with how it reaches the app:
 - **Rust-only** — implemented here, not on the FFI surface. No app caller.
 - **internal** — a shared helper other algorithms depend on, not a metric.
 
-There is no **unwired** tag because there is nothing unwired: all 79 exported functions have a Kotlin
+There is no **unwired** tag because there is nothing unwired: all 80 exported functions have a Kotlin
 caller. What the app still computes itself is tracked in the noop-tan `ALGORITHMS.md`.
 
 ---
@@ -273,7 +273,7 @@ for coarse activity classification, never a physiological gate.
 `stress/daily.rs`. `3 / (1 + exp(-(zRHR + zHRV)))` against up to 30 prior (RHR, HRV) nights, 14-day baseline
 gate. Bands low [0,1), medium [1,2), high [2,3].
 
-## 21. Windowed stress, day + night  ·  FFI `daytime_stress` (day only)
+## 21. Windowed stress, day + night  ·  FFI `daytime_stress` + `sleep_stress`
 
 `stress/window.rs`. **One formula, two derivations.** `windowed_stress(points, cfg)` scores a set of
 buckets against the SAME set's own calm quartiles: `zHR` vs the Q25 bucket HR, `zHRV` vs the Q75 bucket
@@ -285,6 +285,10 @@ its own >= 300 HR-row gate before the border.
 |---|---|---|
 | `daytime_stress` | `hours: Some((6, 22))`, bucket 3600 s | shipped; pinned bit-for-bit to one real worn day |
 | `sleep_stress` | `hours: None`, bucket 3600 s | the caller passes only in-span buckets |
+
+Both cross the border as one `WindowedStressInfo`, which carries the band minutes and `high_share_pct` —
+the high band's share of the scored minutes, `None` when nothing scored, so the app bands and tallies
+nothing itself.
 
 The night passes `None` rather than a range **because a sleep window crosses midnight** and one hour-of-day
 range cannot express "22:00 to 06:00" — trying would silently drop half the night. The caller selects the
@@ -391,4 +395,3 @@ predecessor produced.
 | Algorithm | Note |
 |---|---|
 | HR anomaly watch (`HrWatch`) | Implemented here; no app surface yet |
-| `sleep_stress` | The night derivation of §21. Awaiting its uniffi record change before the app can call it |

@@ -108,7 +108,7 @@ scan, identify, bond, info, buzz, and a full overnight drain (35,310 records, 11
 v18 and located the sleep SpO2 (363 readings, 95-100%). v26 raw-PPG and v21 IMU decoders verified
 against real captures; the 4.0 v24/v25 decoders are pinned to real captured 4.0 frames.
 
-`cargo test --workspace` (438 passed, 4 `#[ignore]`d dataset gates) + `cargo clippy --workspace
+`cargo test --workspace` (440 passed, 4 `#[ignore]`d dataset gates) + `cargo clippy --workspace
 --all-targets` are green. Zero warnings.
 
 ## Build notes

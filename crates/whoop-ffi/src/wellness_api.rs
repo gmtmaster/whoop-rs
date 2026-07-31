@@ -18,7 +18,7 @@ pub fn daily_stress(today: StressDayInfo, baseline: Vec<StressDayInfo>) -> Optio
     stress::daily_stress(stress::StressDay { rhr: today.rhr, hrv: today.hrv }, &b)
 }
 
-// ── Daytime stress (intraday autonomic activation) ─────────────────────────
+// ── Windowed stress (intraday + overnight autonomic activation) ────────────
 
 /// One hour's aggregates: local `hour` (0–23), mean HR (None below the sample gate) and RMSSD (None on
 /// insufficient clean R-R).
@@ -38,37 +38,62 @@ pub struct ScoredHourInfo {
     pub stress: f64,
 }
 
-/// Daytime-stress result: the per-hour scores plus the day mean, peak hour, and the trailing high run.
-/// The core's band minutes are not on this record yet; adding them is a uniffi record change.
+/// One scored window set — a day or a night, since both derive from one formula: the per-bucket
+/// scores, the set mean, its peak hour, the trailing high run, and the minutes in each band.
+/// `high_share_pct` is the high band's share of the scored minutes, `None` when nothing scored.
 #[derive(uniffi::Record)]
-pub struct DaytimeStressInfo {
+pub struct WindowedStressInfo {
     pub hours: Vec<ScoredHourInfo>,
     pub day_mean: Option<f64>,
     pub peak_hour: Option<i32>,
     pub sustained_high: bool,
     pub sustained_run: u32,
+    pub low_minutes: i64,
+    pub medium_minutes: i64,
+    pub high_minutes: i64,
+    pub high_share_pct: Option<f64>,
+}
+
+impl From<stress::StressWindows> for WindowedStressInfo {
+    fn from(r: stress::StressWindows) -> Self {
+        WindowedStressInfo {
+            day_mean: r.mean,
+            peak_hour: r.peak_hour,
+            sustained_high: r.sustained_high,
+            sustained_run: r.sustained_run as u32,
+            low_minutes: r.low_minutes,
+            medium_minutes: r.medium_minutes,
+            high_minutes: r.high_minutes,
+            high_share_pct: r.high_share_pct(),
+            hours: r
+                .buckets
+                .into_iter()
+                .map(|s| ScoredHourInfo { hour: s.hour, mean_hr: s.mean_hr, rmssd: s.rmssd, stress: s.stress })
+                .collect(),
+        }
+    }
+}
+
+fn to_points(hours: Vec<HourPointInfo>) -> Vec<stress::HourPoint> {
+    hours
+        .into_iter()
+        .map(|p| stress::HourPoint { hour: p.hour, mean_hr: p.mean_hr, rmssd: p.rmssd })
+        .collect()
 }
 
 /// Score waking hours for autonomic activation against the day's own calm-hour quartiles (Q25 HR, Q75
 /// RMSSD). Each hour needs its own HR gate applied by the caller (a `None` mean_hr hour is skipped).
 #[uniffi::export]
-pub fn daytime_stress(hours: Vec<HourPointInfo>) -> DaytimeStressInfo {
-    let h: Vec<stress::HourPoint> = hours
-        .into_iter()
-        .map(|p| stress::HourPoint { hour: p.hour, mean_hr: p.mean_hr, rmssd: p.rmssd })
-        .collect();
-    let r = stress::daytime_stress(&h);
-    DaytimeStressInfo {
-        hours: r
-            .buckets
-            .into_iter()
-            .map(|s| ScoredHourInfo { hour: s.hour, mean_hr: s.mean_hr, rmssd: s.rmssd, stress: s.stress })
-            .collect(),
-        day_mean: r.mean,
-        peak_hour: r.peak_hour,
-        sustained_high: r.sustained_high,
-        sustained_run: r.sustained_run as u32,
-    }
+pub fn daytime_stress(hours: Vec<HourPointInfo>) -> WindowedStressInfo {
+    stress::daytime_stress(&to_points(hours)).into()
+}
+
+/// Score one sleep window's buckets on the same formula and the same 0–3 bands. No hour-of-day filter
+/// is applied, so the caller passes ONLY the buckets inside the span — a night crosses midnight and
+/// one hour range cannot say "22:00 to 06:00".
+#[uniffi::export]
+pub fn sleep_stress(hours: Vec<HourPointInfo>) -> WindowedStressInfo {
+    stress::sleep_stress(&to_points(hours)).into()
 }
 
 // ── Circadian rhythm + CosinorAge (Rhythm Age) ─────────────────────────────

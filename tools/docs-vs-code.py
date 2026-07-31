@@ -471,7 +471,7 @@ def main() -> int:
          r"\*\*(\d+) further `sleep_api` exports\*\*", sleep_api_called_beyond_analyze()),
         ("data-flow.md", "surface-table rows", r"tables below carry \*\*(\d+)\*\* of them",
          len(surface_table_rows() & set(exports))),
-        ("data-flow.md", "exports in no shipped doc", r"\*\*(\d+) of the 79 appear in no shipped document\*\*",
+        ("data-flow.md", "exports in no shipped doc", r"\*\*(\d+) of the 80 appear in no shipped document\*\*",
          len(exports_in_no_doc(exports))),
         ("architecture.md", "exports reached only via a dead wrapper",
          r"(\w+) of them\s+\(`spo2_rolling_reading`\) only through a Kotlin wrapper the app never calls",
