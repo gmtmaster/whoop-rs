@@ -157,14 +157,26 @@ The write surface is gated in `whoop-protocol/src/command.rs` + `whoop-client`:
 - `FORBIDDEN` — firmware-load / trim / DFU / reboot / config-write / set-clock / adv-name /
   wrist-select opcodes. `send_raw` refuses them; the legitimate ones (reboot, R22, wrist-select) have
   dedicated, intentional methods that a UI opt-in gates above the client.
-- `DESTRUCTIVE` — the never-send-at-all subset (force-trim, DFU).
+- `DESTRUCTIVE` — the subset that is never built from a payload a caller supplies (force-trim, DFU): the
+  FFI's generic `command_frame` returns `None` for these, so no Kotlin caller can assemble one. The danger
+  on force-trim is in the words, not the opcode, so the list stays as it is and the one door is a dedicated
+  method that constructs its own bytes and takes no argument (`undo_trim`, below).
 - Every gated write (`enable_r22`, `set_broadcast_hr`, `buzz`, `reboot`, `select_wrist`,
   `optical_collection`) is reversible /
   non-destructive and numbered from the client's running seq counter.
+- **`undo_trim` is the one gated write that touches a destructive opcode.** It asks the strap to reset its
+  history trim and read pointers back to oldest — FORCE_TRIM with both payload words set to the firmware's
+  reset sentinel. Every other word pair on that opcode is a real trim, so the eight bytes live in
+  `whoop-protocol/src/trim.rs`, the two builders there are the only source of a payload, and neither the
+  method nor the `whoopctl undo-trim` subcommand accepts one. `undo_trim_dry_run` is its positive control:
+  the same opcode and handler carrying the inert sentinel the strap declines, which the CLI sends unless
+  `--i-agree-to-possible-loss-of-data` is passed. This moves pointers only — it cannot un-erase flash, so
+  whether any already-offloaded record is still resident is not something the command can promise. Not on
+  the FFI surface: desktop only.
 - History offload drops CRC-bad frames so a forged HISTORY_END can't advance the trim cursor.
 - **History sync never deletes the strap's data.** The ACK (`0x17`) only advances the strap's read
   pointer to release the next chunk; it does not free the buffer — only FORCE_TRIM (`0x19`, in FORBIDDEN,
-  never sent) deletes. Keep-mode (`sync`, no `--wipe`) reads the first chunk without acking and leaves the
+  and sent by nothing but `undo_trim`'s pointer-reset payload) deletes. Keep-mode (`sync`, no `--wipe`) reads the first chunk without acking and leaves the
   read pointer put; `--wipe` acks forward through the whole backlog (needed to reach nights banked behind an
   already-consumed edge) but still deletes nothing — the records persist on the strap until it overwrites
   them. Each record reaches the sink **before** its chunk's ACK, so a sink error aborts before advancing,
@@ -202,7 +214,9 @@ identity read from GATT — scans every generation via an empty filter + name/se
 (identity/battery/extended-fuel-gauge/data-range; a 4.0 serial+firmware come from the GET_HELLO_HARVARD reply
 since the 4.0 omits the DeviceInfo GATT service), `pack` (5.0 battery-pack fuel gauge — serial/SOC/mV/pack-id),
 `sync` (decode history to JSON Lines; keeps the strap by default, `--wipe` to drain), `monitor` (stream frames),
-`send` (one opcode, FORBIDDEN-refused, prints the raw response), `r22on`, `buzz`, `reboot`, `wrist` (read the
+`send` (one opcode, FORBIDDEN-refused, prints the raw response), `undo-trim` (ask the strap to rewind its
+history read/trim pointers to oldest; sends the inert probe unless `--i-agree-to-possible-loss-of-data` is
+passed, and takes no payload either way), `r22on`, `buzz`, `reboot`, `wrist` (read the
 body-location block, `--set left|right` to write it first), `ingest` (backfill
 the calibration store from a saved capture). A band is targeted with `--address` (surest), `--sn`
 (full or suffix — connects to each candidate and reads its serial, since the serial isn't advertised),

@@ -8,7 +8,9 @@ use ble_core::{BleTransport, Notification};
 use whoop_protocol::deframe::DeframerMap;
 use whoop_protocol::hello::GEN5_CLIENT_HELLO;
 use whoop_protocol::response::{self, CommandResponse};
-use whoop_protocol::{command, config, framing, haptic, Channel, Family, Frame, Offload, OffloadStep, PacketType, Record};
+use whoop_protocol::{
+    command, config, framing, haptic, trim, Channel, Family, Frame, Offload, OffloadStep, PacketType, Record,
+};
 
 use crate::error::Error;
 use crate::uuids;
@@ -16,6 +18,9 @@ use crate::uuids;
 /// Inactivity window that ends a stalled history drain (strap off-wrist / dropped frame / CRC-bad
 /// HISTORY_COMPLETE) — without it the drain would hang forever, since the real notify stream never ends.
 const HIST_IDLE: Duration = Duration::from_secs(8);
+
+/// How long `undo_trim` / `undo_trim_dry_run` listen for the strap's answer after their write.
+const TRIM_REPLY_SECS: u64 = 2;
 
 /// A connected WHOOP band over transport `T`. One `DeframerMap` keeps the notify channels frame-aligned;
 /// the seq counter numbers outbound commands.
@@ -190,10 +195,17 @@ impl<T: BleTransport> WhoopClient<T> {
     }
 
     /// Send one command and collect every frame that arrives for `secs` — the probe behind `whoopctl send`,
-    /// so a response can be inspected raw (stream opened before the write → no missed reply).
+    /// so a response can be inspected raw. Refuses the forbidden set, same as `send_raw`.
     pub async fn probe(&mut self, op: u8, payload: &[u8], secs: u64) -> Result<Vec<Frame>, Error> {
+        let frame = self.checked_frame(op, payload)?;
+        self.probe_frame(&frame, secs).await
+    }
+
+    /// Write one already-built command frame and collect every frame that arrives for `secs` (stream
+    /// opened before the write → no missed reply). Shared by `probe` and the gated `force_trim`.
+    async fn probe_frame(&mut self, frame: &[u8], secs: u64) -> Result<Vec<Frame>, Error> {
         let notifications = self.transport.notifications().await?;
-        self.send_raw(op, payload).await?;
+        self.write_cmd(frame).await?;
         let mut out = Vec::new();
         self.collect_frames(notifications, secs, |f| out.push(f)).await?;
         Ok(out)
@@ -327,13 +339,38 @@ impl<T: BleTransport> WhoopClient<T> {
         self.write_cmd(&frame).await
     }
 
+    /// Ask the strap to reset its history trim and read pointers back to oldest, re-exposing records it
+    /// has already handed over. Takes no payload: every other word pair on this opcode is a real trim, so
+    /// the eight bytes are built here. Pointers only — it cannot un-erase flash. Returns the strap's reply.
+    pub async fn undo_trim(&mut self) -> Result<Vec<Frame>, Error> {
+        self.force_trim(trim::reset_to_oldest()).await
+    }
+
+    /// The positive control for `undo_trim` — same opcode, same handler, the inert payload the strap
+    /// declines, so it proves the command lands without moving a pointer. An empty reply means nothing
+    /// answered.
+    pub async fn undo_trim_dry_run(&mut self) -> Result<Vec<Frame>, Error> {
+        self.force_trim(trim::inert_probe()).await
+    }
+
+    /// The only writer of FORCE_TRIM, private so the payload can only come from `trim`'s two builders.
+    async fn force_trim(&mut self, payload: [u8; 8]) -> Result<Vec<Frame>, Error> {
+        let frame = framing::command(self.family, self.next_seq(), command::FORCE_TRIM, &payload);
+        self.probe_frame(&frame, TRIM_REPLY_SECS).await
+    }
+
     /// Send an arbitrary command opcode + payload, refusing the destructive / config-write set.
     pub async fn send_raw(&self, opcode: u8, payload: &[u8]) -> Result<(), Error> {
+        let frame = self.checked_frame(opcode, payload)?;
+        self.write_cmd(&frame).await
+    }
+
+    /// Build an outbound COMMAND frame, refusing the forbidden set — the one gate on the blind path.
+    fn checked_frame(&self, opcode: u8, payload: &[u8]) -> Result<Vec<u8>, Error> {
         if command::is_forbidden(opcode) {
             return Err(Error::Forbidden(opcode));
         }
-        let frame = framing::command(self.family, self.next_seq(), opcode, payload);
-        self.write_cmd(&frame).await
+        Ok(framing::command(self.family, self.next_seq(), opcode, payload))
     }
 
     /// Connect (no bond) and read the standard identity chars (name/model/serial/fw/hardware). Used to
@@ -569,6 +606,71 @@ mod tests {
         };
         assert_eq!(sent(0), (command::SELECT_WRIST, 1));
         assert_eq!(sent(1), (command::SELECT_WRIST, 0));
+    }
+
+    /// The eight bytes the ERASE magic would lay down — what the two gated writes must never be.
+    fn erase_magic() -> [u8; 8] {
+        let mut out = [0u8; 8];
+        out[..4].copy_from_slice(&trim::TRIM_ALL.to_le_bytes());
+        out[4..].copy_from_slice(&trim::TRIM_ALL.to_le_bytes());
+        out
+    }
+
+    /// The two words of the one write the mock saw, plus everything after them. A GEN5 command inner is
+    /// padded to a 4-byte boundary, so the trailing pad is checked rather than compared into the words.
+    fn sole_trim_write(handle: &MockTransport) -> ([u8; 8], Vec<u8>) {
+        let writes = handle.writes();
+        assert_eq!(writes.len(), 1);
+        let f = framing::decode(Family::Gen5, &writes[0].1).unwrap();
+        assert_eq!(f.cmd(), command::FORCE_TRIM);
+        (f.payload()[..8].try_into().unwrap(), f.payload()[8..].to_vec())
+    }
+
+    /// The undo is opcode 25 carrying exactly eight `0xFD` bytes — never the eight `0xFE` of `TRIM_ALL`,
+    /// which is one bit per byte away and erases instead.
+    #[tokio::test]
+    async fn undo_trim_writes_the_reset_magic_and_nothing_near_it() {
+        let mock = MockTransport::new(Vec::new());
+        let handle = mock.clone();
+        let mut client = WhoopClient::new(mock, Family::Gen5);
+
+        client.undo_trim().await.unwrap();
+
+        let (words, pad) = sole_trim_write(&handle);
+        assert_eq!(words, [0xFD, 0xFD, 0xFD, 0xFD, 0xFD, 0xFD, 0xFD, 0xFD]);
+        assert_ne!(words, erase_magic());
+        assert!(pad.iter().all(|&b| b == 0), "only the GEN5 inner pad may follow the two words");
+    }
+
+    /// The dry run reaches the same handler with the sentinel the strap declines, so it moves no pointer.
+    #[tokio::test]
+    async fn undo_trim_dry_run_writes_the_inert_sentinel() {
+        let mock = MockTransport::new(Vec::new());
+        let handle = mock.clone();
+        let mut client = WhoopClient::new(mock, Family::Gen5);
+
+        client.undo_trim_dry_run().await.unwrap();
+
+        let (words, pad) = sole_trim_write(&handle);
+        assert_eq!(&words[..4], &[0xFF, 0xFF, 0xFF, 0xFF]);
+        assert_ne!(words, [0xFD; 8]);
+        assert_ne!(words, erase_magic());
+        assert!(pad.iter().all(|&b| b == 0), "only the GEN5 inner pad may follow the two words");
+    }
+
+    /// The gated door does not relax the blind path: FORCE_TRIM stays refused by opcode there, whatever
+    /// payload is offered, and stays in both lists.
+    #[tokio::test]
+    async fn force_trim_stays_forbidden_on_the_blind_path() {
+        let mock = MockTransport::new(Vec::new());
+        let handle = mock.clone();
+        let mut client = WhoopClient::new(mock, Family::Gen5);
+
+        assert!(matches!(client.send_raw(command::FORCE_TRIM, &[]).await, Err(Error::Forbidden(_))));
+        assert!(matches!(client.send_raw(command::FORCE_TRIM, &[0xFD; 8]).await, Err(Error::Forbidden(_))));
+        assert!(matches!(client.probe(command::FORCE_TRIM, &[0xFD; 8], 0).await, Err(Error::Forbidden(_))));
+        assert!(handle.writes().is_empty());
+        assert!(command::is_forbidden(command::FORCE_TRIM) && command::is_destructive(command::FORCE_TRIM));
     }
 
     /// The capture switches optical collection on, then off, and writes no persistent config on the way.

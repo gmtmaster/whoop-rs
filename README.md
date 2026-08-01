@@ -95,9 +95,14 @@ The write surface is gated in `whoop-protocol` + `whoop-client`:
 - **`FORBIDDEN`** opcodes (firmware-load, trim, DFU, config-write, set-clock, adv-name,
   wrist-select) are refused on the blind `send` path. Legitimate writes (reboot, R22) have
   dedicated methods that a UI opt-in gates above the client.
-- **`DESTRUCTIVE`** (force-trim, DFU) is never sent at all.
+- **`DESTRUCTIVE`** (force-trim, DFU) is never built from a payload a caller supplies — the FFI's
+  generic command builder refuses it outright. On force-trim the danger is in the payload words, not
+  the opcode, so its one door is a dedicated method that constructs its own bytes and takes no
+  argument: `undo_trim`, which asks the strap to reset its history trim and read pointers back to
+  oldest. `whoopctl undo-trim` sends the inert probe the strap declines unless
+  `--i-agree-to-possible-loss-of-data` is passed. It moves pointers; it cannot un-erase flash.
 - **History sync never deletes strap data.** The ACK only advances the read pointer; only
-  FORCE-TRIM deletes, and it lives in `FORBIDDEN`.
+  FORCE-TRIM deletes, it lives in `FORBIDDEN`, and nothing sends it but `undo_trim`'s reset payload.
 - `whoopctl` refuses `--wipe` on any serial matching the local `WHOOPCTL_PROTECT` allowlist.
 
 ## Status
@@ -108,7 +113,7 @@ scan, identify, bond, info, buzz, and a full overnight drain (35,310 records, 11
 v18 and located the sleep SpO2 (363 readings, 95-100%). v26 raw-PPG and v21 IMU decoders verified
 against real captures; the 4.0 v24/v25 decoders are pinned to real captured 4.0 frames.
 
-`cargo test --workspace` (440 passed, 4 `#[ignore]`d dataset gates) + `cargo clippy --workspace
+`cargo test --workspace` (447 passed, 4 `#[ignore]`d dataset gates) + `cargo clippy --workspace
 --all-targets` are green. Zero warnings.
 
 ## Build notes

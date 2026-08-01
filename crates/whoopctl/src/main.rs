@@ -12,7 +12,7 @@ use clap::Parser;
 use ble_btleplug::{scan_whoops, BtleplugTransport};
 use whoop_client::{capture_line, WhoopClient};
 use whoop_protocol::bytes::to_hex;
-use whoop_protocol::{command, response, Family, Record};
+use whoop_protocol::{command, response, Family, Frame, Record};
 
 mod cli;
 mod report;
@@ -190,6 +190,22 @@ async fn main() -> Result<()> {
             }
             client.disconnect().await.ok();
         }
+        Cmd::UndoTrim { agree } => {
+            let mut client = connect(&cli).await?;
+            let frames = if *agree {
+                println!("sending the reset: the strap rewinds its trim and read pointers to oldest");
+                client.undo_trim().await
+            } else {
+                println!(
+                    "dry run — sending the inert payload the strap declines, so no pointer moves.\n\
+                     with --i-agree-to-possible-loss-of-data this would ask the strap to rewind its trim\n\
+                     and read pointers to oldest; that is a pointer move and cannot un-erase flash."
+                );
+                client.undo_trim_dry_run().await
+            };
+            client.disconnect().await.ok();
+            report_trim_reply(&frames?);
+        }
         Cmd::R22on => {
             let client = connect(&cli).await?;
             println!("sent {} R22 flags", client.enable_r22().await?);
@@ -229,6 +245,19 @@ async fn main() -> Result<()> {
 fn decode_capture(path: &Path, fam: Family) -> Result<(Option<String>, Vec<Record>)> {
     let text = std::fs::read_to_string(path)?;
     Ok(whoop_client::decode_capture(&text, fam))
+}
+
+/// Print whatever the strap answered an `undo-trim` write with. Empty is the interesting case: the frame
+/// was written, so silence says the handler produced no reply, not that the write failed.
+fn report_trim_reply(frames: &[Frame]) {
+    if frames.is_empty() {
+        println!("no reply — the command was written, the strap answered nothing");
+        return;
+    }
+    println!("strap answered with {} frame(s):", frames.len());
+    for f in frames {
+        println!("  {} cmd={} crc={} {}", f.packet().name(), f.cmd(), f.crc_ok, to_hex(f.raw()));
+    }
 }
 
 /// Refuse `--wipe` when the strap serial matches the local `WHOOPCTL_PROTECT` allowlist (comma-separated

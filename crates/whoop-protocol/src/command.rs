@@ -62,7 +62,9 @@ pub const FORBIDDEN: &[u8] = &[
     144,
 ];
 
-/// Genuinely destructive — never send at all, even via a gated action.
+/// Never built from a payload a caller supplies — the danger is in the words, not the opcode. The one
+/// door is a dedicated method that constructs its own fixed bytes and takes no argument: `undo_trim`
+/// in `whoop-client`, which sends FORCE_TRIM's pointer-reset payload (see `trim`).
 pub const DESTRUCTIVE: &[u8] = &[FORCE_TRIM, ENTER_BLE_DFU, 142, 143, 144];
 
 pub fn is_forbidden(op: u8) -> bool {

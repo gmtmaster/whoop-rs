@@ -10,7 +10,7 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 number. Outputs are wellness estimates, never medical.
 
 `physio-algo` carries **323 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
-workspace runs **440**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
+workspace runs **447**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
 default - three assert a cohort kappa, the fourth prints the whole-corpus sheet. Run
 `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
 `tools/docs-vs-code.py` re-derives every count on this page from the source and fails on drift.

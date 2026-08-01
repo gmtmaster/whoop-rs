@@ -94,6 +94,16 @@ pub(crate) enum Cmd {
         #[arg(long)]
         set: Option<String>,
     },
+    /// Ask the strap to rewind its history read/trim pointers to oldest, re-exposing records it has
+    /// already handed over. Sends only the inert probe unless the agreement flag is given.
+    UndoTrim {
+        /// Send the real reset instead of the inert probe. It rewinds the strap's READ POINTER only: it
+        /// cannot un-erase flash, so records the strap has already overwritten are gone either way. This
+        /// takes no payload argument because a malformed payload on the same opcode trims rather than
+        /// restores — the eight bytes are built in the client and cannot be supplied.
+        #[arg(long = "i-agree-to-possible-loss-of-data")]
+        agree: bool,
+    },
     /// Enable the R22 deep-data streams (16 SET_CONFIG flags; reversible).
     R22on,
     /// Fire the one-shot buzz.

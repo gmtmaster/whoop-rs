@@ -25,6 +25,7 @@ pub mod offload;
 pub mod packet;
 pub mod records;
 pub mod response;
+pub mod trim;
 
 pub use error::ProtocolError;
 pub use family::{Channel, Family};
