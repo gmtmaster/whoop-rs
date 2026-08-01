@@ -1,10 +1,10 @@
 //! Personal baselines — winsorized EWMA center + absolute-deviation spread per metric.
 //! One `update` per nightly value; cold-start / young / steady-state / stale lifecycle.
 
-const MIN_NIGHTS_SEED: i32 = 4;
-const MIN_NIGHTS_TRUST: i32 = 14;
+pub const MIN_NIGHTS_SEED: i32 = 4;
+pub const MIN_NIGHTS_TRUST: i32 = 14;
 const STALE_DAYS: i32 = 14;
-const EARLY_ADAPT_NIGHTS: i32 = 8;
+pub const EARLY_ADAPT_NIGHTS: i32 = 8;
 const EARLY_HALF_LIFE_B: f64 = 3.0;
 const HARD_OUTLIER_K: f64 = 5.0;
 const WINSOR_K: f64 = 3.0;

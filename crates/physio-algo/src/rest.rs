@@ -1,15 +1,15 @@
 //! Rest (sleep performance) composite, 0–100. Weighted sum of duration vs personal need, efficiency,
 //! restorative (deep+REM) share, and sleep/wake consistency. Pure; absent consistency defaults neutral.
 
-const W_DURATION: f64 = 0.50;
-const W_EFFICIENCY: f64 = 0.20;
-const W_RESTORATIVE: f64 = 0.20;
-const W_CONSISTENCY: f64 = 0.10;
-const DEFAULT_SLEEP_NEED_HOURS: f64 = 8.0;
-const RESTORATIVE_TARGET_SHARE: f64 = 0.50;
-const DEEP_SHARE_TARGET: f64 = 0.13;
-const DEEP_FLOOR_FACTOR: f64 = 0.5;
-const NEUTRAL_CONSISTENCY: f64 = 0.5;
+pub const W_DURATION: f64 = 0.50;
+pub const W_EFFICIENCY: f64 = 0.20;
+pub const W_RESTORATIVE: f64 = 0.20;
+pub const W_CONSISTENCY: f64 = 0.10;
+pub const DEFAULT_SLEEP_NEED_HOURS: f64 = 8.0;
+pub const RESTORATIVE_TARGET_SHARE: f64 = 0.50;
+pub const DEEP_SHARE_TARGET: f64 = 0.13;
+pub const DEEP_FLOOR_FACTOR: f64 = 0.5;
+pub const NEUTRAL_CONSISTENCY: f64 = 0.5;
 
 /// Rest composite, or `None` when there is no asleep time.
 pub fn rest(

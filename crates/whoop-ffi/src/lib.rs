@@ -8,7 +8,7 @@ uniffi::setup_scaffolding!();
 pub(crate) use std::sync::{Arc, Mutex};
 
 pub(crate) use physio_algo::{
-    baselines, biological_age, calories, circadian, hr_recovery, hr_zones, imu_features, ppg as ppg_hr,
+    baselines, biological_age, calories, circadian, hr_recovery, hr_zones, imu_features, nap, ppg as ppg_hr,
     recovery, respiratory_rate, rest,
     resting_hr,
     sleep, sleep_debt, sleep_regularity, steps, strain, stress, stress_onset, vitality, vo2max,
@@ -40,6 +40,8 @@ mod baselines_api;
 pub use baselines_api::*;
 mod wellness_api;
 pub use wellness_api::*;
+mod cfg_api;
+pub use cfg_api::*;
 
 #[cfg(test)]
 mod tests {

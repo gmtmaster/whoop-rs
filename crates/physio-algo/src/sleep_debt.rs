@@ -1,9 +1,9 @@
 //! Rolling sleep-debt ledger: Σ(slept − need) over a capped trailing window of nights with
 //! usable data. Pure; skips nights without sleep data (never zero-fills).
 
-const DEFAULT_WINDOW_NIGHTS: usize = 14;
+pub const DEFAULT_WINDOW_NIGHTS: usize = 14;
 const DEFAULT_NEED_HOURS: f64 = 8.0;
-const ON_TARGET_BAND_MIN: f64 = 30.0;
+pub const ON_TARGET_BAND_MIN: f64 = 30.0;
 
 /// One night's contribution to the ledger.
 #[derive(Debug, Clone, PartialEq)]

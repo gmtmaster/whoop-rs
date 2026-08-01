@@ -34,11 +34,22 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 WHOOP = ROOT.parent
-JNILIBS = WHOOP / "noop-wt-tan" / "android" / "app" / "src" / "main" / "jniLibs"
-BINDINGS = WHOOP / "noop-wt-tan" / "android" / "app" / "src" / "main" / "java" / "uniffi" / "whoop_ffi"
+# The app tree the artifacts land in. `--app-src` retargets it: several worktrees of the app share this
+# one checkout, and writing into the wrong one leaves another tree holding artifacts it did not build.
+APP_SRC = WHOOP / "noop-wt-tan" / "android" / "app" / "src"
+JNILIBS = APP_SRC / "main" / "jniLibs"
+BINDINGS = APP_SRC / "main" / "java" / "uniffi" / "whoop_ffi"
 STAMP = JNILIBS / ".fingerprint"
 ABIS = ("arm64-v8a", "x86_64")
 LIB = "libwhoop_ffi.so"
+
+
+def retarget(app_src: Path) -> None:
+    global APP_SRC, JNILIBS, BINDINGS, STAMP
+    APP_SRC = app_src.resolve()
+    JNILIBS = APP_SRC / "main" / "jniLibs"
+    BINDINGS = APP_SRC / "main" / "java" / "uniffi" / "whoop_ffi"
+    STAMP = JNILIBS / ".fingerprint"
 
 
 def fingerprint() -> str:
@@ -136,7 +147,12 @@ def main() -> int:
     ap.add_argument("--sync", action="store_true", help="rebuild both ABIs, regenerate bindings, stamp")
     ap.add_argument("--ensure", action="store_true",
                     help="rebuild ONLY when stale; the build's entry point, cheap when nothing moved")
+    ap.add_argument("--app-src", type=Path, default=None,
+                    help="the app's src/ to write bindings + jniLibs into (default: the noop-wt-tan worktree)")
     args = ap.parse_args()
+    if args.app_src is not None:
+        retarget(args.app_src)
+    print(f"app tree {APP_SRC}")
     if not JNILIBS.is_dir():
         raise SystemExit(f"error: {JNILIBS} does not exist; wrong checkout layout.")
     if args.sync:

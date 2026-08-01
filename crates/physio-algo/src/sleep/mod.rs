@@ -28,7 +28,8 @@ use crate::hrv::HrvReadiness;
 
 pub use input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 pub use params::Params;
-pub use detect::{detect_sessions, detect_sessions_with, DetectParams, DetectedSpan};
+pub use detect::{detect_sessions, detect_sessions_with, DetectParams, DetectedSpan, DAYTIME_BAND_END_HOUR,
+    DAYTIME_BAND_START_HOUR, MAX_GAP_MIN, SPARSE_GRAVITY_SPAN_FRAC};
 pub use v2::{emissions_prepared as emissions_v2, epoch_starts as epoch_starts_v2, prepare as prepare_v2,
     segments_of as segments_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
     stage_with as stage_v2_with, viterbi as decode_v2, Prepared, DEEP_GATE_THRESH, STAGE_ORDER};
@@ -40,7 +41,7 @@ pub use mainnight::{
     bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices,
     main_night_group_indices_scored, main_night_index, main_night_index_scored, main_night_selection,
     main_night_selection_scored, BridgedNightGroup, HistoryBlock, MainNightReason, MainNightSelection, NightBlock,
-    ScoredNightBlock, HABITUAL_MIN_DAYS,
+    ScoredNightBlock, HABITUAL_MIN_DAYS, OVERNIGHT_END_HOUR, OVERNIGHT_START_HOUR,
 };
 
 /// The stream bundle for one detection window: raw per-sample signals plus the wrist-off intervals, band

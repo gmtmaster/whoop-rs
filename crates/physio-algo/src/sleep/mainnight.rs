@@ -5,8 +5,8 @@
 use super::detect::is_overnight_onset;
 
 const SECONDS_PER_DAY: i64 = 86_400;
-const OVERNIGHT_START_HOUR: i64 = 20;
-const OVERNIGHT_END_HOUR: i64 = 11;
+pub const OVERNIGHT_START_HOUR: i64 = 20;
+pub const OVERNIGHT_END_HOUR: i64 = 11;
 const ALIGNMENT_BONUS_MIN: f64 = 90.0;
 const ALIGNMENT_FULL_WINDOW_SEC: i64 = 2 * 3_600;
 const ALIGNMENT_ZERO_SEC: i64 = 5 * 3_600;

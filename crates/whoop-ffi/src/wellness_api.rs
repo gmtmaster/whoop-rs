@@ -272,3 +272,36 @@ pub fn series_median(values: Vec<f64>) -> f64 {
 pub fn series_slope(values: Vec<f64>) -> f64 {
     physio_algo::stats::least_squares_slope(&values)
 }
+
+/// Arithmetic mean of a series. `0.0` when empty, so a caller that must distinguish "no data" checks
+/// the input rather than the result.
+#[uniffi::export]
+pub fn series_mean(values: Vec<f64>) -> f64 {
+    physio_algo::stats::mean(&values)
+}
+
+/// Sample standard deviation (n − 1) of a series. `0.0` under two points.
+#[uniffi::export]
+pub fn series_sample_sd(values: Vec<f64>) -> f64 {
+    physio_algo::stats::sample_sd(&values)
+}
+
+/// Population standard deviation (÷ n) of a series — the per-window spread the z-scorers use, as
+/// distinct from the n − 1 [`series_sample_sd`] the baselines use. `0.0` when empty.
+#[uniffi::export]
+pub fn series_population_sd(values: Vec<f64>) -> f64 {
+    physio_algo::stats::population_sd(&values)
+}
+
+/// Pearson correlation of two equal-length series. `None` under two pairs or on a zero-variance series.
+#[uniffi::export]
+pub fn series_pearson(xs: Vec<f64>, ys: Vec<f64>) -> Option<f64> {
+    physio_algo::stats::pearson(&xs, &ys)
+}
+
+/// Robust z-score against a baseline mean + EWMA-abs-dev spread: (value − mean) / (1.253 × spread).
+/// The one z the Charge drivers and their trace share.
+#[uniffi::export]
+pub fn z_score(value: f64, mean: f64, spread: f64) -> f64 {
+    recovery::z_score(value, mean, spread)
+}

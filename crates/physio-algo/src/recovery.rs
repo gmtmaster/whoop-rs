@@ -19,7 +19,8 @@ pub const W_RHR: f64 = 0.20;
 pub const W_RESP: f64 = 0.05;
 pub const W_SLEEP: f64 = 0.15;
 pub const W_SKIN_TEMP: f64 = 0.05;
-/// Skin-temp deviation scale (°C per z-unit): the term is −|dev| / scale.
+/// Skin-temp deviation scale (°C per z-unit): the term is −|dev| / scale. Must stay 1.0 — halving it
+/// doubles this term's effective penalty weight.
 pub const SKIN_TEMP_DEV_SCALE: f64 = 1.0;
 /// Recovery-Index (overnight HR-decline slope) weight and its bpm/hour scale.
 pub const W_RECOVERY_INDEX: f64 = 0.05;
