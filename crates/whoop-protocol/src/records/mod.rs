@@ -179,22 +179,128 @@ pub(crate) fn gravity3(b: &[u8], off: usize) -> Option<[f32; 3]> {
     accept_gravity([f32_at(b, off)?, f32_at(b, off + 4)?, f32_at(b, off + 8)?])
 }
 
+/// The JSONL contract the CLI exports and downstream readers parse. The `serde` feature is switched on
+/// for this crate's own test build by a dev-dependency on itself, so these run under `cargo test -p`.
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
     use super::*;
+    use serde_json::{Map, Value};
 
-    #[test]
-    fn record_serializes_kind_tagged_snake_case() {
-        let r = Record::History(HistoryRecord {
+    /// Sorted top-level keys of a serialised `Record::History`. Spelled out, not counted: a rename or a
+    /// drop breaks every downstream reader, and a count assert would not see a rename.
+    const HISTORY_KEYS: [&str; 32] = [
+        "activity_class",
+        "dynamic_acceleration_g",
+        "gravity",
+        "heart_rate",
+        "kind",
+        "optical_amp_a",
+        "optical_amp_b",
+        "optical_baseline_a",
+        "optical_baseline_b",
+        "optical_signal_poor",
+        "raw_f32_105",
+        "raw_u16_26",
+        "raw_u16_30",
+        "raw_u8_28",
+        "raw_u8_29",
+        "record_index",
+        "resp_raw",
+        "rr_intervals",
+        "signal_flags",
+        "signal_quality",
+        "skin_temp_c",
+        "skin_temp_raw",
+        "sleep_state",
+        "sleep_state_raw",
+        "spo2",
+        "spo2_pct",
+        "steps",
+        "temp_aux_1_raw",
+        "temp_aux_2_raw",
+        "unix",
+        "unpinned",
+        "version",
+    ];
+
+    fn obj(r: &Record) -> Map<String, Value> {
+        serde_json::from_str::<Value>(&serde_json::to_string(r).unwrap()).unwrap().as_object().unwrap().clone()
+    }
+
+    fn sample_history() -> Record {
+        Record::History(HistoryRecord {
             version: 18,
             unix: 1_784_000_000,
             heart_rate: Some(96),
             rr_intervals: vec![600, 610],
+            gravity: Some([0.1, 0.2, 0.97]),
+            spo2: Some((592, 612)),
             ..Default::default()
-        });
-        let j = serde_json::to_string(&r).unwrap();
-        assert!(j.contains(r#""kind":"History""#));
-        assert!(j.contains(r#""heart_rate":96"#));
-        assert!(j.contains(r#""rr_intervals":[600,610]"#));
+        })
+    }
+
+    /// All four variants land as ONE internally tagged object whose `kind` names the variant, with
+    /// snake_case keys. An untagged or externally tagged encoding fails here, as does a camelCase one.
+    #[test]
+    fn every_record_variant_is_one_kind_tagged_object_with_snake_case_keys() {
+        let cases = [
+            (sample_history(), "History"),
+            (Record::Ppg(PpgRecord { version: 26, unix: 1, record_id: Some(2), samples: vec![3, 4] }), "Ppg"),
+            (
+                Record::Imu(ImuRecord {
+                    version: 21,
+                    unix: 1,
+                    sample_rate_hz: 100,
+                    accel: vec![[1, 2, 3]],
+                    gyro: vec![[4, 5, 6]],
+                }),
+                "Imu",
+            ),
+            (
+                Record::Optical(OpticalRecord { version: 20, unix: 1, sample_rate_hz: 25, channels: vec![vec![7]] }),
+                "Optical",
+            ),
+        ];
+        for (r, kind) in cases {
+            let o = obj(&r);
+            assert_eq!(o.get("kind").and_then(Value::as_str), Some(kind), "kind tag for {kind}");
+            assert!(o.len() > 1, "{kind}: a tag alone is not a record");
+            assert_eq!(o.get("version").and_then(Value::as_u64), Some(u64::from(r_version(&r))), "{kind}: version");
+            for k in o.keys() {
+                let snake = k.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+                assert!(snake, "{kind}: key '{k}' is not snake_case");
+            }
+        }
+    }
+
+    fn r_version(r: &Record) -> u8 {
+        match r {
+            Record::History(h) => h.version,
+            Record::Ppg(p) => p.version,
+            Record::Imu(i) => i.version,
+            Record::Optical(o) => o.version,
+        }
+    }
+
+    /// The History line carries the full key set on EVERY record: a field the frame did not carry is
+    /// `null`, never a missing key, so a reader can index a column without probing for it.
+    #[test]
+    fn history_jsonl_carries_every_key_on_every_line_with_absent_fields_as_null() {
+        let o = obj(&sample_history());
+        let mut keys: Vec<&str> = o.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, HISTORY_KEYS, "the exported History key set changed");
+
+        assert_eq!(o["heart_rate"], Value::from(96));
+        assert_eq!(o["rr_intervals"], Value::from(vec![600, 610]));
+        assert_eq!(o["gravity"].as_array().map(Vec::len), Some(3), "gravity is a 3-element array");
+        assert_eq!(o["spo2"], Value::from(vec![592, 612]), "the red/IR pair is a 2-element array");
+
+        // An absent field keeps its key and reads null; the empty record proves it for all of them.
+        let empty = obj(&Record::History(HistoryRecord::default()));
+        let nulls = empty.values().filter(|v| v.is_null()).count();
+        // 32 keys minus the four an empty record still fills: kind, version, unix, rr_intervals (`[]`).
+        assert_eq!(nulls, 28, "absent History fields serialised as null");
+        assert!(empty.contains_key("skin_temp_c") && empty["skin_temp_c"].is_null(), "absent field dropped its key");
     }
 }

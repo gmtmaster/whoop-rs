@@ -15,3 +15,7 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 serde_json = "1"
+# Turns the `serde` feature on for this crate's own test build, so the JSONL-shape gate in
+# `records` runs under `cargo test -p whoop-protocol` and not only when a workspace member
+# (whoopctl) happens to enable the feature for it.
+whoop-protocol = { path = ".", features = ["serde"] }

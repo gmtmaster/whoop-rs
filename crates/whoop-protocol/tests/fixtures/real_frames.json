@@ -5,7 +5,14 @@
     "safe to commit. A field absent from a record's 'expect' is simply not asserted (the decoder emits a",
     "superset per family). gravity_unit=true asserts |g| is about 1. This is whoop-rs's own regression",
     "fixture; add a frame here rather than hard-coding hex in a test.",
-    "ppg_frames: real v26 optical bursts (consecutive strap-seconds); event_frames: real EVENT bodies; ppg_hr: derived HR golden (see the physio-algo ppg tests)."
+    "ppg_frames: real v26 optical bursts (consecutive strap-seconds); event_frames: real EVENT bodies; ppg_hr: derived HR golden (see the physio-algo ppg tests).",
+    "activity_class is pinned on three frames covering all three codes (0 still / 1 walk / 2 run) BECAUSE one",
+    "code alone does not pin the offset: 'still' is 0 and 52 of the worn frame's 124 wire bytes are also 0, so a",
+    "wrong offset reproduced it at 52 places. The walk + run frames cut that to 1 (inner 55). Codes 1 and 2 are",
+    "rare on real data (733 and 1 of 80,951 captured v18 frames), so they must be kept deliberately.",
+    "gen4 gravity is pinned PER AXIS on all four 4.0 frames, not only by |g|~1: a decoder emitting a constant",
+    "unit vector satisfies the magnitude band on every one of them. v24 reads three f32 at inner 36, v25 three",
+    "i16/16384 at inner 69/71/73, so the exact pins also separate the two scales."
   ],
   "frames": [
     {
@@ -25,6 +32,11 @@
         "spo2": [
           592,
           612
+        ],
+        "gravity": [
+          -0.40311524,
+          0.45059082,
+          0.872478
         ]
       }
     },
@@ -35,7 +47,12 @@
       "expect": {
         "version": 25,
         "unix": 1781202813,
-        "gravity_unit": true
+        "gravity_unit": true,
+        "gravity": [
+          0.942688,
+          0.055664063,
+          0.0
+        ]
       }
     },
     {
@@ -45,7 +62,12 @@
       "expect": {
         "version": 25,
         "unix": 1781202814,
-        "gravity_unit": true
+        "gravity_unit": true,
+        "gravity": [
+          0.9859619,
+          0.055664063,
+          0.0
+        ]
       }
     },
     {
@@ -55,7 +77,12 @@
       "expect": {
         "version": 25,
         "unix": 1781202815,
-        "gravity_unit": true
+        "gravity_unit": true,
+        "gravity": [
+          0.9718628,
+          0.055664063,
+          6.1035156e-05
+        ]
       }
     },
     {
@@ -100,6 +127,30 @@
         "unix": 1781120109,
         "heart_rate": 57,
         "skin_temp_raw": 2962
+      }
+    },
+    {
+      "name": "v18_real_whoop5_walk",
+      "family": "gen5",
+      "hex": "aa01740001003fb12f12800916420000d7576a5c2f00670000000000000000000000ce0407e50000ff70ba2e3e1f0149bf9af9043fecc19a3ee5000000000001000000000036014401560d5008010c020c0c000000000000000000000000000000000000000000010100d5da8080000000e29191c0000000bf2de4fb",
+      "expect": {
+        "version": 18,
+        "unix": 1784141568,
+        "heart_rate": 103,
+        "activity_class": 1,
+        "steps": 229
+      }
+    },
+    {
+      "name": "v18_real_whoop5_run",
+      "family": "gen5",
+      "hex": "aa01740001003fb12f1280e8f9e101738e576a852b00630000000000000000000060db080c616c6cef603b8f3e9a9191be5ce33d3f2990143f6900530000000200000000004e015101980da006010c020c0000000000000000000000000000000000000000000000010088b08080000000232631c0000000c1d3cf9a",
+      "expect": {
+        "version": 18,
+        "unix": 1784122995,
+        "heart_rate": 99,
+        "activity_class": 2,
+        "steps": 105
       }
     }
   ],
