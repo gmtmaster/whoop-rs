@@ -411,6 +411,7 @@ pub fn detect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calories;
 
     fn hr(ts: i64, bpm: i32) -> HrSample {
         HrSample { ts, bpm }
@@ -420,10 +421,184 @@ mod tests {
         GravitySample { ts, x, y, z }
     }
 
+    /// One hour at 1 Hz: `bout_len` seconds from ts 900 at `bout_bpm` with the gravity vector
+    /// flipping by `amp` every other second, resting 60 bpm and still elsewhere. `amp = 0` is a
+    /// motionless bout and `bout_bpm = 60` a still one, so either alone kills detection.
+    fn day_with_one_bout(bout_len: i64, bout_bpm: i32, amp: f64) -> (Vec<HrSample>, Vec<GravitySample>) {
+        let (start, end) = (900i64, 900 + bout_len);
+        let mut hr_series = Vec::with_capacity(3600);
+        let mut gravity = Vec::with_capacity(3600);
+        for ts in 0..3600i64 {
+            let inside = ts >= start && ts < end;
+            hr_series.push(HrSample { ts, bpm: if inside { bout_bpm } else { 60 } });
+            let x = if inside && ts % 2 == 0 { amp } else { 0.0 };
+            gravity.push(GravitySample { ts, x, y: 0.0, z: 1.0 });
+        }
+        (hr_series, gravity)
+    }
+
+    /// The 80 kg / 180 cm / 35 y male profile, resting 60, HRmax 190 supplied by the caller.
+    fn detect_default(hr_series: &[HrSample], gravity: &[GravitySample]) -> Vec<ExerciseSession> {
+        detect(hr_series, gravity, Some(60.0), Some(190.0), Some(35.0), 80.0, 180.0, "male")
+    }
+
     #[test]
     fn empty_inputs_return_empty() {
         let r = detect(&[], &[], None, None, None, 0.0, 0.0, "");
         assert!(r.is_empty());
+    }
+
+    /// Every number the Activity card shows for one bout, pinned on a 30-minute fixture, plus the
+    /// two nulls that must produce no card at all. A detector that returns `vec![]` unconditionally
+    /// fails the count; one that returns a constant session fails the fields; one that fires on any
+    /// input fails the still-day and motionless-day arms.
+    #[test]
+    fn detect_pins_every_field_of_one_bout_and_refuses_a_still_or_motionless_day() {
+        let (hr_series, gravity) = day_with_one_bout(1800, 150, 0.3);
+        let sessions = detect_default(&hr_series, &gravity);
+        assert_eq!(sessions.len(), 1, "one 30-minute bout in the fixture day");
+        let b = &sessions[0];
+
+        // Span: the run opens once the 10 s trailing motion mean clears MOTION_THRESHOLD.
+        assert_eq!((b.start, b.end), (907, 2699), "bout span");
+        assert!((b.duration_s - 1792.0).abs() < 1e-9, "duration {}", b.duration_s);
+
+        // HR summary. A mean over the whole day would read 105, not 150.
+        assert!((b.avg_hr - 150.0).abs() < 1e-9, "avg_hr {}", b.avg_hr);
+        assert_eq!(b.peak_hr, 150);
+        assert_eq!(b.hrmax, Some(190.0));
+        assert_eq!(b.hrmax_source, "caller");
+
+        // Zone-time %: 150 bpm is 69.2 %HRR against (60, 190), which is Edwards zone 2.
+        let pct: Vec<(i32, f64)> = b.zone_time_pct.clone();
+        assert_eq!(pct, vec![(0, 0.0), (1, 0.0), (2, 100.0), (3, 0.0), (4, 0.0), (5, 0.0)]);
+        assert!((pct.iter().map(|(_, p)| p).sum::<f64>() - 100.0).abs() < 1e-9, "zone % must total 100");
+        assert_eq!(b.avg_hrr_pct, Some(69.2));
+
+        // Strain and calories, by value and then rebuilt from the two public engines, so a bout that
+        // stops routing through them fails here rather than drifting silently.
+        assert_eq!(b.strain, Some(46.24));
+        let kcal = b.calories_kcal.expect("a profiled bout reports calories");
+        assert!((kcal - 446.404432759732).abs() < 1e-9, "kcal {kcal}");
+        assert!((b.calories_kj.unwrap() - kcal * 4.184).abs() < 1e-9, "kJ must be kcal x 4.184");
+
+        let window: Vec<HrSample> =
+            hr_series.iter().filter(|h| h.ts >= b.start && h.ts <= b.end).copied().collect();
+        assert_eq!(window.len(), 1793);
+        assert_eq!(
+            b.strain,
+            strain::strain(&window, Some(190.0), 60.0, strain::Method::Edwards, "male", strain::STRAIN_DENOMINATOR),
+            "bout strain must be the Edwards engine over the bout window"
+        );
+        let (re_kcal, re_kj) = calories::estimate_bout_calories(&window, 80.0, 180.0, 35.0, "male", 190.0, 60.0);
+        assert!((kcal - re_kcal).abs() < 1e-9, "bout calories must be the Keytel bout engine");
+        assert!((b.calories_kj.unwrap() - re_kj).abs() < 1e-9);
+
+        // Null arms: neither gate alone makes a workout.
+        let (still_hr, still_g) = day_with_one_bout(1800, 60, 0.3);
+        assert!(detect_default(&still_hr, &still_g).is_empty(), "moving at resting HR is not a workout");
+        let (moveless_hr, moveless_g) = day_with_one_bout(1800, 150, 0.0);
+        assert!(detect_default(&moveless_hr, &moveless_g).is_empty(), "elevated HR without motion is not a workout");
+
+        // No profile, no calorie claim.
+        let unprofiled = detect(&hr_series, &gravity, Some(60.0), Some(190.0), Some(35.0), 0.0, 0.0, "male");
+        assert_eq!(unprofiled[0].calories_kcal, None);
+        assert_eq!(unprofiled[0].calories_kj, None);
+    }
+
+    /// MIN_INTENSITY_Z2PLUS: half the bout must sit in Edwards zone 2+, which for (60, 190) is
+    /// 60 %HRR = 138 bpm. A detector that skipped the check would report the 137 bpm bout.
+    #[test]
+    fn a_sustained_bout_under_the_zone_2_share_is_not_a_workout() {
+        assert!((MIN_INTENSITY_Z2PLUS - 0.50).abs() < 1e-9, "shipped zone-2+ share");
+        let edge_bpm: f64 = 60.0 + 0.60 * (190.0 - 60.0);
+        assert!((edge_bpm - 138.0).abs() < 1e-9, "zone-2 floor {edge_bpm}");
+
+        let (under_hr, under_g) = day_with_one_bout(1800, 137, 0.3);
+        assert!(detect_default(&under_hr, &under_g).is_empty(), "137 bpm is all zone 1");
+        let (over_hr, over_g) = day_with_one_bout(1800, 138, 0.3);
+        assert_eq!(detect_default(&over_hr, &over_g).len(), 1, "138 bpm is zone 2");
+    }
+
+    /// MIN_EXERCISE_MIN is 5 minutes but the gate subtracts the smoothing window, so the run floor is
+    /// 290 s. Under it the bout is ABSENT, not a zero-strain card: nothing tells the wearer it existed.
+    #[test]
+    fn a_run_under_the_290_s_floor_is_absent_not_a_zero_bout() {
+        assert!((MIN_EXERCISE_MIN - 5.0).abs() < 1e-9, "shipped bout minimum, minutes");
+        assert!((MOTION_SMOOTH_S - 10.0).abs() < 1e-9, "shipped smoothing window");
+        let floor_s = MIN_EXERCISE_MIN * 60.0 - MOTION_SMOOTH_S;
+        assert!((floor_s - 290.0).abs() < 1e-9, "effective run floor {floor_s} s");
+
+        // The 10 s smoothing lead-in costs 8 s, so a 297 s bout yields a 289 s run and disappears.
+        let (short_hr, short_g) = day_with_one_bout(297, 150, 0.3);
+        assert!(detect_default(&short_hr, &short_g).is_empty(), "a 4.95-minute bout is reported absent");
+        let (edge_hr, edge_g) = day_with_one_bout(298, 150, 0.3);
+        let edge = detect_default(&edge_hr, &edge_g);
+        assert_eq!(edge.len(), 1);
+        assert!((edge[0].duration_s - 290.0).abs() < 1e-9, "duration {}", edge[0].duration_s);
+    }
+
+    /// RECORDED, not a repair: a qualifying bout carries calories but `strain: None` until it holds
+    /// [`strain::MIN_READINGS`] samples, so every bout between the 290 s floor and 599 s shows the
+    /// wearer an Activity card with a blank strain.
+    #[test]
+    fn a_bout_between_290_s_and_599_s_reports_calories_but_no_strain() {
+        assert_eq!(strain::MIN_READINGS, 600, "shipped strain sample floor");
+        assert_eq!(strain::MIN_SPAN_SECONDS, 600, "shipped strain span floor");
+
+        for len in [298i64, 400, 605] {
+            let (h, g) = day_with_one_bout(len, 150, 0.3);
+            let b = &detect_default(&h, &g)[0];
+            assert_eq!(b.strain, None, "{len} s bout still reports a strain");
+            assert!(b.calories_kcal.unwrap() > 0.0, "{len} s bout reports calories");
+        }
+        let (h, g) = day_with_one_bout(607, 150, 0.3);
+        let b = &detect_default(&h, &g)[0];
+        assert!((b.duration_s - 599.0).abs() < 1e-9);
+        assert_eq!(b.strain, Some(34.28), "600 samples is where strain starts");
+    }
+
+    /// The bout breakdown's "Zone N" is Edwards %HRR; the daily time-in-zone's is %HRmax. Same bpm,
+    /// same profile, different number on 74 of the 131 bpm values between resting and HRmax.
+    #[test]
+    fn bout_zone_numbers_are_hrr_based_and_disagree_with_the_daily_hrmax_zones() {
+        let (rest, max) = (60.0, 190.0);
+        let reserve = max - rest;
+        let daily = crate::hr_zones::zones_from_max(max, "manual");
+
+        // 114 bpm is the widest gap: 41.5 %HRR is below every Edwards band, 60 %HRmax is Zone 2.
+        assert_eq!(strain::zone_weight(114.0, rest, reserve), 0, "bout view");
+        assert_eq!(daily.zone_number(114.0), 2, "daily view");
+
+        let mut differ = 0;
+        let mut worst = 0i64;
+        for bpm in 60..=190 {
+            let bout = strain::zone_weight(bpm as f64, rest, reserve);
+            let day = daily.zone_number(bpm as f64) as i64;
+            if bout != day {
+                differ += 1;
+            }
+            worst = worst.max((day - bout).abs());
+        }
+        assert_eq!(differ, 74, "the two Zone N definitions disagree on 74 of 131 bpm");
+        assert_eq!(worst, 2, "up to two zones apart");
+    }
+
+    /// RECORDED, not a repair: with `max_hr: None` and no age the denominator is estimated from the
+    /// same stream about to be scored, so the stream's own peak is 100 %HRR and lands in zone 5. The
+    /// caller-supplied HRmax puts the identical sample two zones lower.
+    #[test]
+    fn an_estimated_hrmax_scores_the_stream_against_its_own_peak() {
+        let mut own: Vec<f64> = vec![110.0; 3400];
+        own.extend(std::iter::repeat_n(150.0, 200));
+        assert_eq!(strain::estimate_hrmax(&own, None), (150.0, "observed"));
+
+        let self_ref = 150.0 - 60.0;
+        let tanaka = strain::tanaka_hrmax(30.0);
+        assert!((strain::pct_hrr(150.0, 60.0, self_ref) - 100.0).abs() < 1e-9, "its own peak maxes out");
+        assert!((strain::pct_hrr(150.0, 60.0, tanaka - 60.0) - 70.86614173228347).abs() < 1e-9);
+        assert_eq!(strain::zone_weight(150.0, 60.0, self_ref), 5);
+        assert_eq!(strain::zone_weight(150.0, 60.0, tanaka - 60.0), 3, "same sample, two zones lower");
     }
 
     #[test]
@@ -503,3 +678,4 @@ mod tests {
         assert_eq!(merged.len(), 2);
     }
 }
+

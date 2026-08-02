@@ -44,13 +44,46 @@ mod tests {
     }
 
     #[test]
-    fn sums_positive_consecutive_deltas() {
+    fn sums_positive_consecutive_tick_deltas() {
         assert_eq!(steps_in_window(&[step(0, 100), step(60, 150), step(120, 220)]), Some(120));
     }
 
     #[test]
     fn sorts_unordered_input() {
         assert_eq!(steps_in_window(&[step(120, 220), step(0, 100), step(60, 150)]), Some(120));
+    }
+
+    /// Two stand-ins a bare "returns 120" gate would accept: counting samples, and subtracting the
+    /// first counter from the last. Both agree with the kernel on a clean series and diverge as soon
+    /// as a wrap or a reboot boundary appears, which is the whole reason the kernel exists.
+    #[test]
+    fn a_sample_count_and_a_first_to_last_subtraction_both_fail_the_real_series() {
+        let clean = [step(0, 100), step(60, 150), step(120, 220)];
+        let wrapped = [step(0, 65_500), step(60, 20), step(120, 80)];
+        let rebooted = [step(0, 100), step(60, 140), step(120, 5000), step(180, 5030)];
+
+        let count_scorer = |s: &[StepSample]| Some(s.len() as u32);
+        let span_scorer = |s: &[StepSample]| Some(s[s.len() - 1].counter.wrapping_sub(s[0].counter) as u32);
+
+        for series in [clean.as_slice(), wrapped.as_slice(), rebooted.as_slice()] {
+            assert_ne!(steps_in_window(series), count_scorer(series), "a sample count is not a tick total");
+        }
+        // The span scorer only survives while nothing crosses a boundary.
+        assert_eq!(steps_in_window(&clean), span_scorer(&clean));
+        assert_eq!(steps_in_window(&wrapped), span_scorer(&wrapped));
+        assert_eq!(steps_in_window(&rebooted), Some(70));
+        assert_eq!(span_scorer(&rebooted), Some(4930), "a reboot jump billed as motion");
+    }
+
+    /// What this module does NOT measure: the caller's `stepTicksPerStep` divisor. Every figure here
+    /// is raw motion ticks, so no gate in this crate can tell a right step count from a wrong one.
+    #[test]
+    fn nothing_here_converts_ticks_to_steps() {
+        let ticks = steps_in_window(&[step(0, 0), step(60, 400), step(120, 800)]).unwrap();
+        assert_eq!(ticks, 800, "the return value is ticks, before any per-user calibration");
+        // Two plausible divisors give two step counts from the same ticks; neither is checked here.
+        assert_eq!(ticks / 2, 400);
+        assert_eq!(ticks / 4, 200);
     }
 
     #[test]
