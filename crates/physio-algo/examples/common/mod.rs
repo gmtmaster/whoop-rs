@@ -44,15 +44,29 @@ pub fn dirs_of(set: &str) -> Vec<PathBuf> {
     d
 }
 
+/// One REQUIRED stream as rows of columns. An unreadable file is FATAL and names itself: reading empty
+/// instead stages the night with that stream absent, which every harness reports as a real figure.
 pub fn read_csv(path: &Path) -> Vec<Vec<f64>> {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.trim().is_empty())
-                .map(|l| l.split(',').map(|c| c.trim().parse::<f64>().unwrap()).collect())
-                .collect()
-        })
-        .unwrap_or_default()
+    let text = fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("fixture stream unreadable: {} ({e})", path.display()));
+    text.lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(i, l)| l.split(',').map(|c| parse_cell(c, path, i + 1)).collect())
+        .collect()
+}
+
+/// One cell, naming the file and its 1-based line on a bad number.
+fn parse_cell(cell: &str, path: &Path, line: usize) -> f64 {
+    cell.trim()
+        .parse::<f64>()
+        .unwrap_or_else(|e| panic!("fixture stream {} line {line}: {cell:?} ({e})", path.display()))
+}
+
+/// A stream a set may legitimately not carry at all — `truth`, `band`, `steps`, `dynaccel`. ABSENT reads
+/// empty, which those readers already treat as "this set cannot answer"; anything else still panics.
+pub fn read_csv_optional(path: &Path) -> Vec<Vec<f64>> {
+    if path.exists() { read_csv(path) } else { Vec::new() }
 }
 
 pub fn read_hr(dir: &Path) -> Vec<HrSample> {
@@ -82,15 +96,25 @@ pub fn read_rr(dir: &Path) -> Vec<RrRun> {
 /// `truth.csv` as epoch index -> label. Empty when the set carries no labels, which is how a harness
 /// tells "unlabelled" apart from "all wake" — several sets have no truth at all.
 pub fn read_truth(dir: &Path) -> BTreeMap<usize, i32> {
-    read_csv(&dir.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect()
+    read_csv_optional(&dir.join("truth.csv")).iter().map(|r| (r[0] as usize, r[1] as i32)).collect()
 }
 
 /// `meta.txt` as (window start, window end, epoch count). A fixture night is rebased onto a synthetic
-/// clock, so this is the FIXTURE window, not the real one.
+/// clock, so this is the FIXTURE window, not the real one. `None` means "no epoch grid here" and has
+/// exactly two causes, both legitimate; every other shape is FATAL, because a `None` deletes the night
+/// from all 20 harnesses that read this and the sheet still prints a total.
 pub fn read_meta(dir: &Path) -> Option<(i64, i64, usize)> {
-    let m: Vec<i64> =
-        fs::read_to_string(dir.join("meta.txt")).ok()?.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-    (m.len() >= 4).then(|| (m[1], m[2], m[3] as usize))
+    let path = dir.join("meta.txt");
+    // Not a fixture directory at all.
+    let text = fs::read_to_string(&path).ok()?;
+    let m: Vec<i64> = text.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    match m[..] {
+        [_, w0, w1, epochs, ..] => Some((w0, w1, epochs as usize)),
+        // `continuous` writes owner and device first and carries no epochs, so its two numbers ARE
+        // the window; it is scored on instruments that need no epoch grid.
+        [_, _] => None,
+        _ => panic!("fixture meta is neither 4 numbers nor the 2-number continuous shape: {}", path.display()),
+    }
 }
 
 /// Owner and real unix onset out of an `owner_device_day_onset` fixture directory name. The real onset is
@@ -329,15 +353,19 @@ pub fn kappa4(cm: &[[i64; 4]; 4]) -> f64 {
 
 /// The strap's own `sleep_state`, 1 Hz, as `(ts, code)`.
 pub fn read_band(dir: &Path) -> Vec<(i64, i32)> {
-    read_csv(&dir.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect()
+    read_csv_optional(&dir.join("band.csv")).iter().map(|r| (r[0] as i64, r[1] as i32)).collect()
 }
 
 /// The strap's own step stream. `-1` in column 3 means the class was not decoded, which is not "still".
 /// A missing or empty file returns empty, which is exactly what makes the refinement decline in silence.
 pub fn read_steps(dir: &Path) -> Vec<StepSample> {
-    read_csv(&dir.join("steps.csv"))
+    read_csv_optional(&dir.join("steps.csv"))
         .iter()
-        .map(|r| StepSample { ts: r[0] as i64, counter: r[1] as u16, activity_class: (r[2] >= 0.0).then(|| r[2] as u8) })
+        .map(|r| StepSample {
+            ts: r[0] as i64,
+            counter: r[1] as u16,
+            activity_class: (r[2] >= 0.0).then(|| r[2] as u8),
+        })
         .collect()
 }
 
@@ -345,7 +373,7 @@ pub fn read_steps(dir: &Path) -> Vec<StepSample> {
 /// the pinned corpus by `sleep-benchmark/graft_dynaccel.py`; absent on every set but three `continuous`
 /// blocks, so a reader must treat empty as "this block cannot answer" rather than "no motion".
 pub fn read_dyn_accel(dir: &Path) -> Vec<(i64, f64)> {
-    read_csv(&dir.join("dynaccel.csv")).iter().map(|r| (r[0] as i64, r[1])).collect()
+    read_csv_optional(&dir.join("dynaccel.csv")).iter().map(|r| (r[0] as i64, r[1])).collect()
 }
 
 /// One night as WHOOP's own app reports it: its in-bed window and its stage shares, in `STAGE_ORDER`.
