@@ -18,3 +18,12 @@ __pycache__/
 
 # Calibration store (per-strap personal data) — never commit
 *.db
+
+# Test fixtures — tracked or ignored by decision, never by accident.
+# TRACKED: everything else under crates/*/tests/fixtures/. It is derived only from openly licensed
+# corpora (AAUWSS CC-BY-4.0, PhysioNet afdb/nsrdb/mitdb ODC-BY 1.0); both licences allow
+# redistribution with attribution, which the fixture headers carry. See that dir's README.
+# IGNORED: anything reproducing a RESTRICTED corpus. DREAMT is PhysioNet credentialed-access, so no
+# DREAMT-derived fixture may be committed at any size — it is regenerated locally from the download.
+/crates/*/tests/fixtures/restricted/
+/crates/*/tests/fixtures/dreamt*/
