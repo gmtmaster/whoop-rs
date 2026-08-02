@@ -471,21 +471,40 @@ mod tests {
         assert_eq!(main_night_index(&blocks, 0, None), Some(1)); // tie -> earlier onset
     }
 
+    /// Every realistic (nap, night) pairing, scored BOTH ways round. Asserting only the nap-first order
+    /// would pass for a selector that always answers 1, so each pairing is also run night-first and must
+    /// answer 0. The pairing count is asserted so the figure quoted for this gate stays checkable.
     #[test]
-    fn realistic_nap_never_beats_real_night_cold_start() {
+    fn realistic_nap_never_beats_real_night_cold_start_whichever_order_they_arrive_in() {
         let night_starts = [at_hour(20) - 86_400, at_hour(22) - 86_400, at_hour(23) - 86_400, at_hour(0), at_hour(1)];
-        let nap_starts =
-            [at_hour(6), at_hour(8), at_hour(10), at_hour(12), at_hour(13), at_hour(15), at_hour(17), at_hour(19), at_hour(21)];
+        let nap_starts = [
+            at_hour(6),
+            at_hour(8),
+            at_hour(10),
+            at_hour(12),
+            at_hour(13),
+            at_hour(15),
+            at_hour(17),
+            at_hour(19),
+            at_hour(21),
+        ];
+        let night_hours = [4i64, 5, 6, 7, 8, 9];
+        let nap_minutes = [20i64, 30, 45, 60, 90, 120, 150, 180];
+        let mut pairings = 0usize;
         for &ns in &night_starts {
-            for nh in [4i64, 5, 6, 7, 8, 9] {
+            for nh in night_hours {
                 for &ps in &nap_starts {
-                    for pm in [20i64, 30, 45, 60, 90, 120, 150, 180] {
-                        let blocks = [nb(ps, ps + pm * 60), nb(ns, ns + nh * 3600)];
-                        assert_eq!(main_night_index(&blocks, 0, None), Some(1), "nap {pm}min vs night {nh}h");
+                    for pm in nap_minutes {
+                        let (nap, night) = (nb(ps, ps + pm * 60), nb(ns, ns + nh * 3600));
+                        assert_eq!(main_night_index(&[nap, night], 0, None), Some(1), "nap {pm}min vs night {nh}h");
+                        assert_eq!(main_night_index(&[night, nap], 0, None), Some(0), "night {nh}h vs nap {pm}min");
+                        pairings += 1;
                     }
                 }
             }
         }
+        assert_eq!(2_160, pairings);
+        assert_eq!(night_starts.len() * night_hours.len() * nap_starts.len() * nap_minutes.len(), pairings);
     }
 
     #[test]

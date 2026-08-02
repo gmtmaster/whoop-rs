@@ -375,7 +375,44 @@ mod tests {
         assert_eq!(out, refine_with(&segs, &grav, &steps, &RefineParams::default()));
     }
 
+    /// WHICH minutes the shipped pass leaves awake, not how many. The three runs are 3 + 10 + 10 min, so
+    /// converting the interior run and converting the trailing one both total 780 s of wake: a gate on the
+    /// total alone cannot tell the shipped pass from one that keeps the wrong run.
+    #[test]
+    fn the_shipped_pass_converts_the_interior_run_and_only_that_one() {
+        let segs = three_wake_runs();
+        let (grav, steps) = still_streams(50);
+        let out = refine(&segs, &grav, &steps);
+        assert_eq!(
+            out,
+            vec![
+                StageSegment { start: 0, end: 180, stage: SleepStage::Wake },
+                StageSegment { start: 180, end: 2400, stage: SleepStage::Light },
+                StageSegment { start: 2400, end: 3000, stage: SleepStage::Wake },
+            ]
+        );
+        let wake_s = |v: &[StageSegment]| -> i64 {
+            v.iter().filter(|s| s.stage == SleepStage::Wake).map(|s| s.end - s.start).sum()
+        };
+        // The alias: same 780 s of wake, the wrong 600 of them.
+        let kept_the_trailing_run = vec![
+            StageSegment { start: 0, end: 180, stage: SleepStage::Wake },
+            StageSegment { start: 180, end: 1200, stage: SleepStage::Light },
+            StageSegment { start: 1200, end: 1800, stage: SleepStage::Wake },
+            StageSegment { start: 1800, end: 3000, stage: SleepStage::Light },
+        ];
+        assert_eq!(780, wake_s(&out));
+        assert_eq!(wake_s(&out), wake_s(&kept_the_trailing_run));
+        assert_ne!(out, kept_the_trailing_run);
+        // The two do-nothing passes: leave everything, and convert everything.
+        assert_eq!(1380, wake_s(&segs));
+        let all_light = vec![StageSegment { start: 0, end: 3000, stage: SleepStage::Light }];
+        assert_ne!(out, segs);
+        assert_ne!(out, all_light);
+    }
+
     /// Each knob must move the outcome, or a sweep over it would report a ceiling that is really a no-op.
+    /// The totals below are also the two null arms: 1380 s is the untouched input, 0 s is convert-everything.
     #[test]
     fn each_eligibility_knob_changes_the_outcome() {
         let segs = three_wake_runs();
@@ -392,11 +429,22 @@ mod tests {
         // Shipped keeps both edge runs (3 + 10 min) and converts the interior one.
         assert_eq!(wake_s(&shipped), 780);
         // With the edges eligible, only the 3-min run is left, under the 5-min floor.
-        assert_eq!(wake_s(&edges), 180);
+        assert_eq!(
+            refine_with(&segs, &grav, &steps, &edges),
+            vec![
+                StageSegment { start: 0, end: 180, stage: SleepStage::Wake },
+                StageSegment { start: 180, end: 3000, stage: SleepStage::Light },
+            ]
+        );
         // A 1-min floor takes that too.
         assert_eq!(wake_s(&RefineParams { min_wake_segment_seconds: 60, ..edges }), 0);
-        // Nothing converts once a still minute has to beat zero variance.
-        assert_eq!(wake_s(&RefineParams { stable_posture_variance_g2: 0.0, ..edges }), 1380);
+        // Nothing converts once a still minute has to beat zero variance: the input, unchanged.
+        assert_eq!(refine_with(&segs, &grav, &steps, &RefineParams { stable_posture_variance_g2: 0.0, ..edges }), segs);
+        // A burst pad wide enough to reach every minute of a run keeps all of it awake.
+        assert_eq!(
+            wake_s(&RefineParams { stable_posture_variance_g2: 0.0, burst_pad_minutes: 60, ..edges }),
+            1380
+        );
     }
 
     #[test]

@@ -227,12 +227,34 @@ mod tests {
         assert_eq!(evaluate(&grav(0, 3600, 30, 0.0), &[], None, &cfg).verdict, NapVerdict::Inconclusive);
     }
 
+    /// Both density constants, each at its own boundary and each on its own. One row short of
+    /// `DEFAULT_MIN_GRAVITY_SAMPLES` declines on the count with a fine gap; one second past
+    /// `DEFAULT_MAX_MEDIAN_GAP_S` declines on the gap with plenty of rows.
     #[test]
-    fn sparse_window_is_inconclusive_not_none() {
+    fn each_density_constant_decides_the_window_at_its_own_boundary() {
+        assert_eq!((20, 90), (DEFAULT_MIN_GRAVITY_SAMPLES, DEFAULT_MAX_MEDIAN_GAP_S as usize));
+        let dense = |n: i64, step: i64| {
+            is_window_dense(&grav(0, n * step, step, 0.0), DEFAULT_MIN_GRAVITY_SAMPLES, DEFAULT_MAX_MEDIAN_GAP_S)
+        };
+        assert!(!dense(DEFAULT_MIN_GRAVITY_SAMPLES as i64 - 1, 30)); // 19 rows, 30 s apart
+        assert!(dense(DEFAULT_MIN_GRAVITY_SAMPLES as i64, 30)); // 20 rows, the count floor
+        assert!(dense(40, DEFAULT_MAX_MEDIAN_GAP_S)); // 40 rows at exactly the gap ceiling
+        assert!(!dense(40, DEFAULT_MAX_MEDIAN_GAP_S + 1)); // one second over it
+    }
+
+    /// The tri-state, over four windows that differ ONLY in density and length. A window that cannot be
+    /// judged is Inconclusive; a judged one that is simply too short is None. Any density rule that
+    /// answers the same for every window collapses two of these into one, so none can pass.
+    #[test]
+    fn the_tri_state_separates_cannot_judge_from_judged_and_not_a_nap() {
         let cfg = NapConfig { enabled: true, ..Default::default() };
-        // Dense enough count but a huge median gap (300 s > 90 s) -> can't judge.
-        let g = grav(0, 40 * 300, 300, 0.0);
-        assert_eq!(evaluate(&g, &[], Some(55), &cfg).verdict, NapVerdict::Inconclusive);
+        let verdict = |n: i64, step: i64| evaluate(&grav(0, n * step, step, 0.0), &[], Some(55), &cfg).verdict;
+        assert_eq!(verdict(19, 30), NapVerdict::Inconclusive); // too few rows to judge
+        assert_eq!(verdict(40, 91), NapVerdict::Inconclusive); // enough rows, gaps too wide to judge
+        assert_eq!(verdict(20, 30), NapVerdict::None); // judged: 9.5 min of stillness is not a nap
+        assert_eq!(verdict(40, 90), NapVerdict::Nap); // judged: 58.5 min of stillness is
+        let all = [verdict(19, 30), verdict(40, 91), verdict(20, 30), verdict(40, 90)];
+        assert!(all.iter().any(|v| *v != all[0]), "a constant verdict would satisfy every window");
     }
 
     #[test]
