@@ -120,19 +120,73 @@ fn reject_ectopic(nn: &[f64]) -> Vec<f64> {
 mod tests {
     use super::*;
 
+    /// 22 beats all inside the keep-band and none of them a Malik outlier, so the histogram terms
+    /// below are computed over the whole series. Cleaning is exercised by its own fixtures.
     const GOLDEN: [f64; 22] = [
         700.0, 720.0, 740.0, 760.0, 780.0, 800.0, 820.0, 840.0, 860.0, 800.0, 800.0, 800.0, 800.0,
         820.0, 780.0, 800.0, 810.0, 790.0, 800.0, 800.0, 805.0, 795.0,
     ];
 
+    const GOLDEN_SI: f64 = 223.82920110192836;
+    /// SI of [`clean_series`] at any length: one 50 ms bin holds every beat.
+    const CLEAN_SERIES_SI: f64 = 1552.7950310559033;
+
+    /// `n` beats spanning 780-820 ms: wide enough that MxDMn is non-zero, tight enough that every
+    /// beat survives both cleaning rules, so only [`MIN_BEATS`] can refuse it.
+    fn clean_series(n: usize) -> Vec<f64> {
+        (0..n).map(|i| 780.0 + (i % 5) as f64 * 10.0).collect()
+    }
+
+    /// The rows the module must reproduce, each an input and the SI it must yield.
+    fn table() -> Vec<(&'static str, Vec<f64>, Option<f64>)> {
+        vec![
+            ("the golden histogram", GOLDEN.to_vec(), Some(GOLDEN_SI)),
+            ("at the beat minimum", clean_series(MIN_BEATS), Some(CLEAN_SERIES_SI)),
+            ("one clean beat short", clean_series(MIN_BEATS - 1), None),
+            ("every beat equal", vec![800.0; MIN_BEATS + 10], None),
+        ]
+    }
+
+    fn reproduces(scorer: impl Fn(&[f64]) -> Option<f64>) -> bool {
+        table().into_iter().all(|(_, rr, want)| match (scorer(&rr), want) {
+            (Some(got), Some(w)) => (got - w).abs() < 1e-9,
+            (None, None) => true,
+            _ => false,
+        })
+    }
+
     #[test]
-    fn golden_stress_index_hand_computed() {
+    fn the_shipped_index_reproduces_the_table_and_three_do_nothing_scorers_do_not() {
+        for (name, rr, want) in table() {
+            match (stress_index_raw(&rr), want) {
+                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-9, "{name}: got {got}, want {w}"),
+                (None, None) => {}
+                (got, w) => panic!("{name}: got {got:?}, want {w:?}"),
+            }
+        }
+        assert!(reproduces(stress_index_raw));
+        // Stand-ins that do no histogram work: one refuses everything, one always answers with the
+        // golden SI, one reads the mean interval. Each must miss at least one row.
+        type Null = fn(&[f64]) -> Option<f64>;
+        let nulls: [(&str, Null); 3] = [
+            ("always none", |_| None),
+            ("constant golden SI", |_| Some(GOLDEN_SI)),
+            ("mean interval", |rr| (!rr.is_empty()).then(|| rr.iter().sum::<f64>() / rr.len() as f64)),
+        ];
+        for (name, null) in nulls {
+            assert!(!reproduces(null), "{name} reproduced every row; the table cannot tell it apart");
+        }
+    }
+
+    #[test]
+    fn the_golden_vector_passes_cleaning_untouched_so_it_measures_the_histogram_alone() {
+        assert_eq!(clean_rr(&GOLDEN).len(), GOLDEN.len(), "no beat may be dropped before the histogram");
         let comp = components_raw(&GOLDEN).expect("scorable");
         assert!((comp.mxdmn_sec - 0.16).abs() < 1e-9);
         assert!((comp.mo_sec - 0.825).abs() < 1e-9);
         assert!((comp.amo_percent - 59.09090909090909).abs() < 1e-9);
-        assert!((comp.si - 223.82920110192836).abs() < 1e-9);
-        assert!((stress_index_raw(&GOLDEN).unwrap() - 223.82920110192836).abs() < 1e-9);
+        assert!((comp.si - GOLDEN_SI).abs() < 1e-9);
+        assert!((stress_index_raw(&GOLDEN).unwrap() - GOLDEN_SI).abs() < 1e-9);
     }
 
     #[test]
@@ -145,14 +199,76 @@ mod tests {
     }
 
     #[test]
-    fn too_few_beats_returns_none() {
-        let rr = vec![800.0; MIN_BEATS - 1];
-        assert!(stress_index_raw(&rr).is_none());
+    fn min_beats_is_the_edge_between_none_and_a_score_and_it_counts_clean_beats() {
+        assert_eq!(MIN_BEATS, 20);
+        assert!(components_raw(&clean_series(MIN_BEATS - 1)).is_none(), "one beat short must refuse");
+        let comp = components_raw(&clean_series(MIN_BEATS)).expect("the minimum itself must score");
+        assert!((comp.si - CLEAN_SERIES_SI).abs() < 1e-9, "got {}", comp.si);
+
+        // The count is taken after cleaning, so a dropout does not buy a beat toward the minimum.
+        let mut short = clean_series(MIN_BEATS - 1);
+        short.insert(7, 2500.0);
+        assert_eq!(short.len(), MIN_BEATS);
+        assert_eq!(clean_rr(&short).len(), MIN_BEATS - 1);
+        assert!(stress_index_raw(&short).is_none(), "a dropout must not count toward the minimum");
+        let mut exact = clean_series(MIN_BEATS);
+        exact.insert(7, 2500.0);
+        assert_eq!(clean_rr(&exact).len(), MIN_BEATS);
+        assert!(stress_index_raw(&exact).is_some());
     }
 
     #[test]
-    fn degenerate_range_returns_none() {
-        let rr = vec![800.0; 30];
-        assert!(stress_index_raw(&rr).is_none());
+    fn an_all_equal_series_refuses_on_range_not_on_count() {
+        let rr = vec![800.0; MIN_BEATS + 10];
+        assert!(clean_rr(&rr).len() >= MIN_BEATS, "the count gate must already be satisfied");
+        assert!(stress_index_raw(&rr).is_none(), "MxDMn 0 is an honest None, never infinity");
+    }
+
+    #[test]
+    fn the_keep_band_is_inclusive_at_300_and_2000_ms() {
+        assert_eq!(RR_MIN_MS, 300.0);
+        assert_eq!(RR_MAX_MS, 2000.0);
+        let low = [300.0, 305.0, 310.0, 305.0, 300.0, 299.9, 305.0, 310.0];
+        let kept = clean_rr(&low);
+        assert_eq!(kept.len(), 7, "only the 299.9 ms beat leaves");
+        assert!(kept.iter().all(|&v| v != 299.9));
+        assert_eq!(kept.iter().filter(|&&v| v == 300.0).count(), 2, "the floor itself is kept");
+
+        let high = [2000.0, 1980.0, 1960.0, 1980.0, 2000.0, 2000.1, 1980.0, 1960.0];
+        let kept = clean_rr(&high);
+        assert_eq!(kept.len(), 7, "only the 2000.1 ms beat leaves");
+        assert!(kept.iter().all(|&v| v != 2000.1));
+        assert_eq!(kept.iter().filter(|&&v| v == 2000.0).count(), 2, "the ceiling itself is kept");
+    }
+
+    #[test]
+    fn malik_drops_a_beat_past_twenty_percent_of_its_local_median_and_keeps_one_at_it() {
+        assert_eq!(ECTOPIC_THRESHOLD, 0.20);
+        let mut at = [800.0; 10];
+        at[5] = 960.0; // exactly +20 % of the 800 ms local median
+        assert_eq!(reject_ectopic(&at).len(), 10, "the threshold is inclusive");
+        let mut over = [800.0; 10];
+        over[5] = 961.0; // +20.125 %
+        let kept = reject_ectopic(&over);
+        assert_eq!(kept.len(), 9);
+        assert!(kept.iter().all(|&v| v == 800.0));
+    }
+
+    #[test]
+    fn the_ectopic_window_reaches_two_beats_either_side() {
+        assert_eq!(ECTOPIC_WINDOW_RADIUS, 2);
+        // Two adjacent outliers: at radius 1 each is the other's reference and both survive, at
+        // radius 2 the window is still mostly baseline and both go.
+        let pair = [800.0, 800.0, 1000.0, 1000.0, 800.0, 800.0, 800.0, 800.0];
+        assert_eq!(reject_ectopic(&pair).len(), 6, "radius 1 would keep all eight");
+        // Three adjacent outliers own a radius-2 window's median but not a radius-3 one.
+        let triple = [800.0, 800.0, 800.0, 1000.0, 1000.0, 1000.0, 800.0, 800.0, 800.0];
+        assert_eq!(reject_ectopic(&triple).len(), 9, "radius 3 would drop the middle three");
+    }
+
+    #[test]
+    fn a_series_no_longer_than_the_window_passes_cleaning_through() {
+        assert_eq!(reject_ectopic(&[800.0, 2000.0]).len(), ECTOPIC_WINDOW_RADIUS);
+        assert!(reject_ectopic(&[]).is_empty());
     }
 }

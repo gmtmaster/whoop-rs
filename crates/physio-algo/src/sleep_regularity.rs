@@ -130,6 +130,115 @@ mod tests {
         vec![(0, days * DAY)]
     }
 
+    /// A fully covered grid of `days` identical 23:00-07:00 nights.
+    fn steady(days: usize) -> Vec<Vec<EpochState>> {
+        epoch_grid(0, days, &nights(days as i64, 23.0, 8.0), &full_cover(days as i64))
+    }
+
+    /// [`steady`] with every epoch of day 0 blanked and `blank_tail` epochs off the last day. Each
+    /// of those days sits in exactly one pair window, so this removes `EPOCHS_PER_DAY + blank_tail`
+    /// observed pairs from the `(days - 1) * EPOCHS_PER_DAY` possible, leaving `possible` untouched.
+    fn thin_coverage(days: usize, blank_tail: usize) -> Vec<Vec<EpochState>> {
+        let mut grid = steady(days);
+        for e in grid[0].iter_mut() {
+            *e = None;
+        }
+        for e in grid[days - 1].iter_mut().take(blank_tail) {
+            *e = None;
+        }
+        grid
+    }
+
+    /// The epochs that must be blanked off the last day to sit exactly on [`MIN_PAIRED_COVERAGE`]
+    /// in a `days`-day grid whose day 0 is already blank.
+    fn tail_at_the_coverage_floor(days: usize) -> usize {
+        let possible = (days - 1) * EPOCHS_PER_DAY;
+        possible - EPOCHS_PER_DAY - (MIN_PAIRED_COVERAGE * possible as f64) as usize
+    }
+
+    /// A grid with one bedtime 4 h later than the other seven.
+    fn one_late_night() -> Vec<Vec<EpochState>> {
+        let mut asleep = nights(8, 23.0, 8.0);
+        asleep[5] = night(4, 3.0, 8.0); // index 5 == day 4, the vec starts at -1
+        epoch_grid(0, 8, &asleep, &full_cover(8))
+    }
+
+    /// A grid asleep all day on even days and awake all day on odd ones: every pair disagrees.
+    fn inverted() -> Vec<Vec<EpochState>> {
+        let asleep: Vec<(i64, i64)> =
+            (0..8).filter(|d| d % 2 == 0).map(|d| (d * DAY, d * DAY + DAY)).collect();
+        epoch_grid(0, 8, &asleep, &full_cover(8))
+    }
+
+    /// One row of the truth table: a grid, and the value the index must yield on it.
+    struct Row {
+        name: &'static str,
+        grid: Vec<Vec<EpochState>>,
+        want: Option<f64>,
+    }
+
+    fn row(name: &'static str, grid: Vec<Vec<EpochState>>, want: Option<f64>) -> Row {
+        Row { name, grid, want }
+    }
+
+    fn table() -> Vec<Row> {
+        let floor_tail = tail_at_the_coverage_floor(MIN_PAIRED_DAYS + 1);
+        vec![
+            row("an identical schedule", steady(8), Some(100.0)),
+            row("a perfect inversion", inverted(), Some(-100.0)),
+            row("one late night", one_late_night(), Some(71.42857142857142)),
+            row("no days at all", vec![], None),
+            row("one paired day short", steady(MIN_PAIRED_DAYS), None),
+            row("at the paired-day minimum", steady(MIN_PAIRED_DAYS + 1), Some(100.0)),
+            row("at the coverage floor", thin_coverage(MIN_PAIRED_DAYS + 1, floor_tail), Some(100.0)),
+            row("one pair under the floor", thin_coverage(MIN_PAIRED_DAYS + 1, floor_tail + 1), None),
+        ]
+    }
+
+    fn reproduces(scorer: impl Fn(&[Vec<EpochState>]) -> Option<f64>) -> bool {
+        table().into_iter().all(|r| match (scorer(&r.grid), r.want) {
+            (Some(got), Some(w)) => (got - w).abs() < 1e-9,
+            (None, None) => true,
+            _ => false,
+        })
+    }
+
+    /// The index formula with both availability gates removed, so it answers on any grid.
+    fn ungated(days: &[Vec<EpochState>]) -> Option<f64> {
+        let (mut matches, mut pairs) = (0usize, 0usize);
+        for w in days.windows(2) {
+            let (today, tomorrow) = (&w[0], &w[1]);
+            for (a, b) in today.iter().zip(tomorrow) {
+                if let (Some(a), Some(b)) = (a, b) {
+                    pairs += 1;
+                    matches += usize::from(a == b);
+                }
+            }
+        }
+        (pairs > 0).then(|| -100.0 + 200.0 * matches as f64 / pairs as f64)
+    }
+
+    #[test]
+    fn the_shipped_index_reproduces_the_table_and_three_do_nothing_scorers_do_not() {
+        for r in table() {
+            let (name, want) = (r.name, r.want);
+            match (sleep_regularity_index(&r.grid), want) {
+                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-9, "{name}: got {got}, want {w}"),
+                (None, None) => {}
+                (got, w) => panic!("{name}: got {got:?}, want {w:?}"),
+            }
+        }
+        assert!(reproduces(sleep_regularity_index));
+        // One refuses everything, one calls every schedule perfect, one runs the formula with both
+        // availability gates removed. Each must miss at least one row.
+        type Null = fn(&[Vec<EpochState>]) -> Option<f64>;
+        let nulls: [(&str, Null); 3] =
+            [("always none", |_| None), ("always perfect", |_| Some(100.0)), ("no availability gate", ungated)];
+        for (name, null) in nulls {
+            assert!(!reproduces(null), "{name} reproduced every row; the table cannot tell it apart");
+        }
+    }
+
     #[test]
     fn an_identical_schedule_every_night_is_perfectly_regular() {
         let grid = epoch_grid(0, 8, &nights(8, 23.0, 8.0), &full_cover(8));
@@ -190,16 +299,36 @@ mod tests {
     }
 
     #[test]
-    fn too_few_days_is_none() {
-        assert_eq!(sleep_regularity_index(&epoch_grid(0, 3, &nights(3, 23.0, 8.0), &full_cover(3))), None);
+    fn the_paired_day_minimum_is_the_edge_between_none_and_a_score() {
+        assert_eq!(MIN_PAIRED_DAYS, 5);
         assert_eq!(sleep_regularity_index(&[]), None);
+        // `n` days carry `n - 1` pair windows, so the minimum needs one more day than pairs.
+        let short = steady(MIN_PAIRED_DAYS);
+        assert_eq!(short.len(), MIN_PAIRED_DAYS);
+        assert_eq!(sleep_regularity_index(&short), None, "one paired day short must refuse");
+        let sri = sleep_regularity_index(&steady(MIN_PAIRED_DAYS + 1)).expect("the minimum itself scores");
+        assert!((sri - 100.0).abs() < 1e-9, "got {sri}");
+    }
+
+    #[test]
+    fn the_coverage_floor_is_inclusive_at_seventy_percent_of_the_epoch_pairs() {
+        assert_eq!(MIN_PAIRED_COVERAGE, 0.70);
+        let days = MIN_PAIRED_DAYS + 1;
+        let tail = tail_at_the_coverage_floor(days);
+        let sri = sleep_regularity_index(&thin_coverage(days, tail)).expect("the floor itself scores");
+        assert!((sri - 100.0).abs() < 1e-9, "got {sri}");
+        assert_eq!(
+            sleep_regularity_index(&thin_coverage(days, tail + 1)),
+            None,
+            "one observed pair under the floor must refuse"
+        );
+        assert!(sleep_regularity_index(&thin_coverage(days, tail - 1)).is_some());
     }
 
     #[test]
     fn a_single_late_night_dents_but_does_not_destroy_the_index() {
-        let mut asleep = nights(8, 23.0, 8.0);
-        asleep[5] = night(4, 3.0, 8.0); // one 4 h-late night (index 5 == day 4, the vec starts at -1)
-        let sri = sleep_regularity_index(&epoch_grid(0, 8, &asleep, &full_cover(8))).unwrap();
+        let sri = sleep_regularity_index(&one_late_night()).unwrap();
         assert!(sri > 50.0 && sri < 100.0, "one odd night should dent, not destroy: {sri}");
+        assert!((sri - 71.42857142857142).abs() < 1e-9, "got {sri}");
     }
 }
