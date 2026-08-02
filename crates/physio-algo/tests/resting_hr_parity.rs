@@ -1,5 +1,7 @@
-//! Parity gate for resting_hr, over the crate's own module. The session-floor tests recover multiple
-//! injected floors so the method is shown to track a varying input, not one lucky match.
+//! Parity gate for resting_hr, over the crate's own module. These pin the SEMANTICS of the
+//! lowest-sustained-window floor - that it tracks a varying input, prefers a sustained low over a
+//! transient dip, and is neither the global minimum nor a mean. No external resting-HR reference is
+//! read anywhere in this crate, so nothing here measures agreement with a clinical resting HR.
 
 use physio_algo::resting_hr::{daily_resting_hr, floor_mean_log_line, session_resting_hr, HrSample};
 
@@ -50,6 +52,50 @@ fn night_with_floor(start: i64, floor: i32, high: i32) -> Vec<HrSample> {
     v
 }
 
+/// A night at 70 bpm with a sustained 5-min window at 52 and a single-sample dip to 40 elsewhere.
+/// The dip is the global minimum and lies inside a window whose mean is 64.
+fn night_with_a_transient_dip() -> Vec<HrSample> {
+    let mut v = Vec::new();
+    for w in 0..6i64 {
+        for s in 0..5i64 {
+            let bpm = if w == 3 { 52 } else if w == 1 && s == 2 { 40 } else { 70 };
+            v.push(HrSample::new(1000 + w * 300 + s * 60, bpm));
+        }
+    }
+    v
+}
+
+/// Every fixture the floor gates run, as `(samples, start, end, expected floor)`.
+fn floor_cases() -> Vec<(Vec<HrSample>, i64, i64, i32)> {
+    let mut v: Vec<(Vec<HrSample>, i64, i64, i32)> = [(48, 60), (44, 58), (52, 70)]
+        .iter()
+        .map(|&(floor, high)| (night_with_floor(1000, floor, high), 1000, 2800, floor))
+        .collect();
+    v.push((night_with_a_transient_dip(), 1000, 2800, 52));
+    // Window A mean (50+60)/2 = 55, window B (58+58)/2 = 58 - the floor is below neither raw sample.
+    v.push((
+        vec![HrSample::new(0, 50), HrSample::new(60, 60), HrSample::new(300, 58), HrSample::new(360, 58)],
+        0,
+        600,
+        55,
+    ));
+    v
+}
+
+/// Anything that turns a session window of HR samples into a floor: the shipped function, or a null.
+type FloorScorer<'a> = &'a dyn Fn(i64, i64, &[HrSample]) -> Option<i32>;
+
+/// Cases a scorer gets wrong. Empty = it reproduces every floor.
+fn floor_misses(scorer: FloorScorer) -> Vec<(i32, Option<i32>)> {
+    floor_cases()
+        .iter()
+        .filter_map(|(hr, start, end, want)| {
+            let got = scorer(*start, *end, hr);
+            (got != Some(*want)).then_some((*want, got))
+        })
+        .collect()
+}
+
 #[test]
 fn session_floor_recovers_multiple_injected_values() {
     // Tracks a varying input: three different injected floors, each recovered exactly.
@@ -57,6 +103,34 @@ fn session_floor_recovers_multiple_injected_values() {
         let hr = night_with_floor(1000, floor, high);
         assert_eq!(session_resting_hr(1000, 1000 + 6 * 5 * 60, &hr), Some(floor));
     }
+}
+
+/// A one-sample dip to 40 is not a resting HR: the floor takes the sustained 52 instead, so what is
+/// measured is "lowest SUSTAINED window" and not "lowest reading".
+#[test]
+fn session_floor_prefers_a_sustained_low_over_a_transient_dip() {
+    let hr = night_with_a_transient_dip();
+    assert_eq!(hr.iter().map(|s| s.bpm).min(), Some(40), "the dip is the global minimum");
+    assert_eq!(session_resting_hr(1000, 2800, &hr), Some(52));
+}
+
+/// The null arm: the three do-nothing scorers that would otherwise look right. The global minimum
+/// reproduces all three injected floors on its own, and only the dip and window-mean cases reject it.
+#[test]
+fn no_do_nothing_scorer_reproduces_the_floors() {
+    let nulls: [(&str, FloorScorer); 5] = [
+        ("global minimum", &|_, _, hr: &[HrSample]| hr.iter().map(|s| s.bpm).min()),
+        ("segment mean", &|_, _, hr: &[HrSample]| {
+            (!hr.is_empty()).then(|| (hr.iter().map(|s| s.bpm).sum::<i32>() as f64 / hr.len() as f64).round() as i32)
+        }),
+        ("first sample", &|_, _, hr: &[HrSample]| hr.first().map(|s| s.bpm)),
+        ("constant 48", &|_, _, _: &[HrSample]| Some(48)),
+        ("refuses", &|_, _, _: &[HrSample]| None),
+    ];
+    for (name, f) in nulls {
+        assert!(!floor_misses(f).is_empty(), "the {name} scorer reproduced every floor");
+    }
+    assert!(floor_misses(&session_resting_hr).is_empty(), "{:?}", floor_misses(&session_resting_hr));
 }
 
 #[test]

@@ -144,14 +144,108 @@ mod tests {
         assert_eq!(b.total_power, b.hf); // HF-only -> total is HF
     }
 
+    /// How many of the four presence/ordering claims a band set satisfies, past the LF span gate.
+    /// These are shape claims only: none of them compares a band power to a target.
+    fn presence_claims(b: Option<HrvBands>) -> usize {
+        let Some(b) = b else { return 0 };
+        usize::from(b.lf.is_some())
+            + usize::from(b.lfhf.is_some())
+            + usize::from(b.total_power >= b.hf)
+            + usize::from(b.lf.is_some_and(|lf| b.hf > lf))
+    }
+
     #[test]
     fn lf_and_total_present_past_the_lf_gate() {
-        let b = freq_domain(&resp_night(300.0, 0.25)).unwrap();
-        assert!(b.lf.is_some());
-        assert!(b.lfhf.is_some());
-        assert!(b.total_power >= b.hf, "summed bands keep total >= hf");
-        // The respiratory power sits in HF, so HF should dominate LF for a 0.25 Hz drive.
-        assert!(b.hf > b.lf.unwrap());
+        // The respiratory power sits in HF, so HF dominates LF for a 0.25 Hz drive.
+        assert_eq!(presence_claims(freq_domain(&resp_night(300.0, 0.25))), 4);
+    }
+
+    /// A tachogram carrying an LF tone at 0.10 Hz and an HF tone at 0.25 Hz. A sinusoid of amplitude
+    /// `a` contributes `a^2/2` to the variance, so the planted LF/HF power ratio is `(lf_amp/hf_amp)^2`.
+    fn two_tone(secs: f64, lf_amp: f64, hf_amp: f64) -> Vec<u16> {
+        let mut rr = Vec::new();
+        let mut t = 0.0;
+        while t < secs {
+            let ms = 900.0 + lf_amp * (2.0 * PI * 0.10 * t).sin() + hf_amp * (2.0 * PI * 0.25 * t).sin();
+            let v = ms.round() as u16;
+            rr.push(v);
+            t += v as f64 / 1000.0;
+        }
+        rr
+    }
+
+    /// `(lf_amp, hf_amp)` pairs planting LF/HF ratios of 1, 4, 1/4, 16 and 1/16 over a 600 s tachogram.
+    const TONE_PAIRS: [(f64, f64); 5] = [(40.0, 40.0), (60.0, 30.0), (30.0, 60.0), (80.0, 20.0), (20.0, 80.0)];
+    /// Worst measured relative error over `TONE_PAIRS` is 5.50%, at the planted ratio of 16.
+    const LFHF_REL_TOL: f64 = 0.08;
+
+    /// Planted ratios a scorer fails to recover, as `(planted, returned)`. Empty = it tracks.
+    fn ratio_misses(scorer: &dyn Fn(&[u16]) -> Option<HrvBands>) -> Vec<(f64, Option<f64>)> {
+        let mut bad = Vec::new();
+        for (lf_amp, hf_amp) in TONE_PAIRS {
+            let planted = (lf_amp / hf_amp).powi(2);
+            let got = scorer(&two_tone(600.0, lf_amp, hf_amp)).and_then(|b| b.lfhf);
+            if !got.is_some_and(|v| (v / planted - 1.0).abs() <= LFHF_REL_TOL) {
+                bad.push((planted, got));
+            }
+        }
+        bad
+    }
+
+    /// LF/HF recovers a planted power ratio over a 256-fold range. The ratio is the one band number the
+    /// Lomb-Scargle normalisation cancels out of, so it is comparable to a planted truth.
+    #[test]
+    fn lfhf_recovers_a_planted_power_ratio() {
+        assert!(ratio_misses(&freq_domain).is_empty(), "{:?}", ratio_misses(&freq_domain));
+    }
+
+    /// The null arm. A scorer that keeps the shipped span/beat gating but returns fixed magnitudes
+    /// satisfies every presence/ordering claim in this file and recovers no planted ratio at all.
+    #[test]
+    fn a_correctly_gated_constant_passes_presence_and_fails_the_ratios() {
+        let gated_constant = |rr: &[u16]| {
+            freq_domain(rr).map(|b| HrvBands {
+                lf: b.lf.map(|_| 0.5),
+                hf: 1.0,
+                lfhf: b.lfhf.map(|_| 0.5),
+                total_power: if b.lf.is_some() { 1.5 } else { 1.0 },
+            })
+        };
+        // It clears both shape gates in this file.
+        assert_eq!(presence_claims(gated_constant(&resp_night(300.0, 0.25))), 4);
+        let short = gated_constant(&resp_night(90.0, 0.25)).unwrap();
+        assert!(short.lf.is_none() && short.lfhf.is_none() && short.total_power == short.hf);
+        assert!(gated_constant(&resp_night(30.0, 0.25)).is_none());
+        // And it recovers nothing.
+        assert_eq!(ratio_misses(&gated_constant).len(), TONE_PAIRS.len());
+        for lfhf in [0.0625f64, 0.25, 1.0, 4.0, 16.0] {
+            let c = HrvBands { lf: Some(lfhf), hf: 1.0, lfhf: Some(lfhf), total_power: 2.0 + lfhf };
+            assert!(!ratio_misses(&|_| Some(c)).is_empty(), "constant lfhf {lfhf} passed");
+        }
+        assert!(!ratio_misses(&|_| None).is_empty(), "a refusing scorer passed the ratio sweep");
+    }
+
+    /// A tone in one band stays in that band: a lone LF tone leaves HF three orders down, and the
+    /// reverse. This is what separates band assignment from a scorer that splits power evenly.
+    #[test]
+    fn a_lone_tone_lands_in_its_own_band() {
+        let lf_only = freq_domain(&two_tone(600.0, 40.0, 0.0)).unwrap();
+        assert!(lf_only.lf.unwrap() / lf_only.hf > 1000.0, "lf-only leaked: {lf_only:?}");
+        let hf_only = freq_domain(&two_tone(600.0, 0.0, 40.0)).unwrap();
+        assert!(hf_only.hf / hf_only.lf.unwrap() > 1000.0, "hf-only leaked: {hf_only:?}");
+    }
+
+    /// Recorded defect, not a desired property: the band integrals are normalised Lomb-Scargle power,
+    /// not ms^2, so doubling the record doubles them. Only `lfhf` is comparable to a planted truth.
+    #[test]
+    fn band_powers_scale_with_record_length_and_are_not_ms_squared() {
+        let short = freq_domain(&two_tone(600.0, 40.0, 40.0)).unwrap();
+        let long = freq_domain(&two_tone(1200.0, 40.0, 40.0)).unwrap();
+        assert!((long.total_power / short.total_power - 2.0).abs() < 1e-3, "{short:?} vs {long:?}");
+        // A 40 ms tone carries 800 ms^2; the reported HF is ~1000x below that.
+        assert!(short.hf < 1.0 && 800.0 / short.hf > 900.0, "hf {} is not ~1000x under 800", short.hf);
+        // The ratio is unaffected, which is why the gate above can use it.
+        assert!((long.lfhf.unwrap() / short.lfhf.unwrap() - 1.0).abs() < 0.01);
     }
 
     #[test]
