@@ -8,7 +8,11 @@ enforce it, are in the repo `.gitignore`.
 |---|---|---|---|---|---|
 | `aauwss_ecg` | 13 | 513 KiB | AAUWSS v1.1, Zenodo `10.5281/zenodo.16919071` (open access) | CC-BY-4.0 | track |
 | `aauwss_ppg` | 1 | 8 KiB | same record, `ppg` pickles | CC-BY-4.0 | track |
-| `rhythm_rr` | 10 | 525 KiB | PhysioNet `afdb` / `nsrdb` / `mitdb` 1.0.0 (open access) | ODC-BY 1.0 | track |
+| `rhythm_rr` | 10 | 524 KiB | PhysioNet `afdb` / `nsrdb` / `mitdb` 1.0.0 (open access) | ODC-BY 1.0 | track |
+
+Each row of that table is asserted by a loader, not only stated here: `ecg_corpus::corpus` pins 13 ECG
+subjects, `ecg_sweep` pins the single PPG subject, and `rr_irregularity_rhythm` pins the rhythm set's
+exact per-class counts. A fixture that went missing fails a named assertion rather than moving a share.
 
 Both licences permit redistribution of derived works provided attribution travels with the copy, so
 every file carries its source and licence in its own `#` header — the AAUWSS ones name the authors
@@ -30,11 +34,13 @@ by accident, and the DREAMT-backed parity gates read their input from outside th
 
 ## If a fixture is missing
 
-Six test files read this directory, carrying 32 live tests (plus 12 `#[ignore]`d), and none of them
-skips on absence: an `assume`-style skip on a missing
-fixture reports a pass, and this project has lost gates that way. The loaders panic with the fetch
-route instead — `tests/ecg_corpus/mod.rs` for AAUWSS, `tests/rr_irregularity_rhythm.rs` for the rhythm
-set. Regeneration:
+Eight test binaries read this directory, carrying 44 live tests plus 13 `#[ignore]`d — `ecg_sweep`,
+`ecg_morphology`, `ecg_sqi_and_mains`, `ecg_qrs_agreement` and `ecg_ground_truth` through the shared
+`tests/ecg_corpus/mod.rs` loader, and `rr_irregularity_rhythm`, `hrv_real_rr` and `ppg_hr_real`
+directly. None of them skips on absence: an `assume`-style skip on a missing fixture reports a pass,
+and this project has lost gates that way. The loaders panic with the fetch route instead —
+`tests/ecg_corpus/mod.rs` for AAUWSS, `tests/rr_irregularity_rhythm.rs` for the rhythm set. Every
+`#[ignore]` in that set carries a reason naming what it costs to run. Regeneration:
 
 ```
 python tools/aauwss_ecg_to_fixture.py           # needs the Zenodo pickles unpacked under whoop-data

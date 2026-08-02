@@ -90,6 +90,13 @@ pub struct HrvCleanCounts {
     pub n_clean: u32,
 }
 
+/// True when the strap's own optical front-end reported a readable pulse, so that record's beats may be
+/// trusted. The argument is the record's `optical_signal_poor`, the amplitude sentinel the front-end
+/// raises when it has no amplitude to report; `None` is trusted, since only the 5.0/MG layout carries it.
+pub fn rr_trusted(optical_signal_poor: Option<bool>) -> bool {
+    optical_signal_poor != Some(true)
+}
+
 /// Stage-by-stage survivor counts for one R-R series: input, after the range filter, after Malik ectopic.
 pub fn clean_counts(rr_ms: &[u16]) -> HrvCleanCounts {
     let ranged = HrvReadiness::range_filter(rr_ms);
@@ -288,11 +295,11 @@ impl HrvReadiness {
 
     /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
     /// Groups records into UTC days, then applies `rmssd_gap_aware` per day. A sleep that straddles UTC
-    /// midnight is split across the two days.
+    /// midnight is split across the two days. Records [`rr_trusted`] rejects contribute no beats.
     pub fn nightly_rmssd(history: &[HistoryRecord]) -> Vec<Option<f64>> {
         let mut by_day: std::collections::BTreeMap<u32, Vec<(u32, Vec<u16>)>> = std::collections::BTreeMap::new();
         for h in history {
-            if !h.rr_intervals.is_empty() {
+            if !h.rr_intervals.is_empty() && rr_trusted(h.optical_signal_poor) {
                 by_day.entry(h.unix / SECS_PER_DAY).or_default().push((h.unix, h.rr_intervals.clone()));
             }
         }
@@ -606,6 +613,36 @@ mod tests {
         assert!(series.iter().all(|v| v.is_some()));
     }
 
+    #[test]
+    fn rr_trusted_reads_only_the_raised_flag() {
+        assert!(!rr_trusted(Some(true)));
+        assert!(rr_trusted(Some(false)));
+        assert!(rr_trusted(None)); // a layout without the flag stays trusted
+    }
+
+    #[test]
+    fn nightly_rmssd_drops_the_beats_the_strap_could_not_read() {
+        let rec = |unix: u32, rr: Vec<u16>, poor: bool| HistoryRecord {
+            version: 18,
+            unix,
+            rr_intervals: rr,
+            optical_signal_poor: Some(poor),
+            ..Default::default()
+        };
+        // A steady day plus one record whose beats swing far wider, in range and past Malik ectopic.
+        let steady: Vec<HistoryRecord> = (0u32..20).map(|t| rec(t, vec![800, 810], false)).collect();
+        let mut noisy = steady.clone();
+        noisy.push(rec(20, vec![850, 760], true));
+        assert_eq!(HrvReadiness::nightly_rmssd(&noisy), HrvReadiness::nightly_rmssd(&steady));
+        // The same record unflagged does reach the day, so the gate is what excluded it.
+        let mut unflagged = steady.clone();
+        unflagged.push(rec(20, vec![850, 760], false));
+        assert_ne!(HrvReadiness::nightly_rmssd(&unflagged), HrvReadiness::nightly_rmssd(&steady));
+        // A day of nothing but flagged records yields no value rather than a value built from them.
+        let all_poor: Vec<HistoryRecord> = (0u32..20).map(|t| rec(t, vec![800, 810], true)).collect();
+        assert_eq!(HrvReadiness::nightly_rmssd(&all_poor), Vec::<Option<f64>>::new());
+    }
+
     /// A stream shaped like the strap's: one report a second, each carrying more beat-time than a second,
     /// so beat-time runs ahead of the clock and the later reports are re-reporting.
     fn overlapping_stream() -> Vec<(u32, Vec<u16>)> {
@@ -721,8 +758,11 @@ mod tests {
         assert_eq!(HrvReadiness::sdnn(&vec![900u16; 400]), Some(0.0)); // flat long series → zero spread
     }
 
+    /// Three hand-computed splices, NOT a cross-language comparison: nothing outside this file holds
+    /// these literals. The input never reaches RR_MIN_MS/RR_MAX_MS and clears ECTOPIC_THRESHOLD by 3x,
+    /// so those three constants are invisible here — `tests/hrv_real_rr.rs` is what pins them.
     #[test]
-    fn rmssd_gap_aware_matches_cleaned_kotlin() {
+    fn rmssd_gap_aware_splices_at_each_dropped_beat() {
         // Malik-ectopic splice: the dropped 1300 removes the 810→806 difference. sqrt(102/4).
         let malik = vec![(0u32, vec![800u16, 805, 810, 1300, 806, 802, 808])];
         assert!((HrvReadiness::rmssd_gap_aware(&malik).unwrap() - 5.049752469181039).abs() < 1e-12);
@@ -883,10 +923,35 @@ mod tests {
         assert_eq!(overlapping_report_count(&tracking), (0, 12));
     }
 
+    /// A named do-nothing scorer over input `I` returning `O`: the null arm every gate below rejects.
+    type Scorer<'a, I, O> = (&'a str, &'a dyn Fn(I) -> O);
+
+    /// The unlock is the recovery schedule's, counted in VALID nights: `None` slots and values outside
+    /// the plausibility band are not nights. The previous gate asserted only the closed side of the edge.
     #[test]
-    fn evaluate_calibrating_below_min_nights() {
-        let nights = vec![Some(50.0); MIN_NIGHTS - 1];
-        assert!(HrvReadiness::evaluate(&nights).is_none());
+    fn readiness_unlocks_on_the_recovery_schedule_and_counts_only_valid_nights() {
+        let sched = crate::calibration::RECOVERY_SCORE;
+        assert_eq!(MIN_NIGHTS, sched.unlock as usize, "the unlock must stay the schedule's, not a copy");
+        assert!(HrvReadiness::evaluate(&[Some(50.0); MIN_NIGHTS - 1]).is_none());
+        assert!(HrvReadiness::evaluate(&[Some(50.0); MIN_NIGHTS]).is_some(), "the edge must open");
+        assert!(!sched.unlocked(MIN_NIGHTS - 1) && sched.unlocked(MIN_NIGHTS));
+
+        // Thirty-one slots holding MIN_NIGHTS - 1 real nights stays shut, and one real night opens it.
+        let mut padded: Vec<Option<f64>> = vec![Some(50.0); MIN_NIGHTS - 1];
+        padded.extend(vec![None; 10]);
+        padded.extend(vec![Some(HRV_MAX_MS + 0.001); 10]);
+        padded.extend(vec![Some(HRV_MIN_MS - 0.001); 10]);
+        assert!(HrvReadiness::evaluate(&padded).is_none(), "{} slots unlocked it", padded.len());
+        // A scorer counting slots rather than nights answers the other way on exactly this input.
+        assert_ne!(HrvReadiness::evaluate(&padded).is_some(), padded.len() >= MIN_NIGHTS);
+        padded.push(Some(50.0));
+        assert!(HrvReadiness::evaluate(&padded).is_some());
+
+        // The band is inclusive at both ends, so a night AT the limit is a night.
+        assert!(HrvReadiness::evaluate(&[Some(HRV_MIN_MS); MIN_NIGHTS]).is_some());
+        assert!(HrvReadiness::evaluate(&[Some(HRV_MAX_MS); MIN_NIGHTS]).is_some());
+        assert!(HrvReadiness::evaluate(&vec![Some(HRV_MIN_MS - 0.001); 40]).is_none());
+        assert!(HrvReadiness::evaluate(&vec![Some(HRV_MAX_MS + 0.001); 40]).is_none());
     }
 
     #[test]
@@ -895,15 +960,168 @@ mod tests {
         assert_eq!(HrvReadiness::evaluate(&nights).unwrap().tier, ReadinessTier::Normal);
     }
 
+    /// RECORDED, not desired: at or below `ROLL_WINDOW` valid nights the 7-night tail and the long tail
+    /// are the same slice, so `baseline7` equals `long_mean` bit for bit and no series of any shape can
+    /// read anything but Normal, or raise the watch. The unlock opens at MIN_NIGHTS, four nights before
+    /// the reading can carry a tier.
     #[test]
-    fn rising_last_week_is_primed_falling_is_suppressed() {
-        let mut rising: Vec<Option<f64>> = vec![Some(40.0); 13];
-        rising.extend(vec![Some(80.0); 7]);
-        assert_eq!(HrvReadiness::evaluate(&rising).unwrap().tier, ReadinessTier::Primed);
+    fn no_history_at_or_under_seven_nights_can_read_anything_but_normal() {
+        let shapes: [&dyn Fn(usize) -> f64; 4] = [
+            &|i| if i % 2 == 0 { 20.0 } else { 120.0 },
+            &|i| 20.0 + 15.0 * i as f64,
+            &|i| 120.0 - 15.0 * i as f64,
+            &|i| 5.0 + 245.0 * ((i * 7) % 5) as f64 / 4.0,
+        ];
+        for n in MIN_NIGHTS..=ROLL_WINDOW {
+            for (k, shape) in shapes.iter().enumerate() {
+                let nights: Vec<Option<f64>> = (0..n).map(|i| Some(shape(i))).collect();
+                let r = HrvReadiness::evaluate(&nights).unwrap();
+                assert_eq!(r.tier, ReadinessTier::Normal, "shape {k} over {n} nights left Normal");
+                assert!(!r.overreaching_watch, "shape {k} over {n} nights raised the watch");
+            }
+        }
+        // The eighth night is where the two windows can differ, so it is the first that can move.
+        let ramp: Vec<Option<f64>> = (0..10).map(|i| Some(20.0 + 15.0 * i as f64)).collect();
+        assert_eq!(HrvReadiness::evaluate(&ramp).unwrap().tier, ReadinessTier::Primed);
+    }
 
+    /// Twenty-three noisy or quiet nights then a week at one level. Two rise and two fall, and within
+    /// each pair the tiers differ, so only the band decides them.
+    fn band_cases() -> Vec<(&'static str, Vec<Option<f64>>, ReadinessTier)> {
+        let history = |lo: f64, hi: f64, last: f64| -> Vec<Option<f64>> {
+            let mut v: Vec<Option<f64>> =
+                (0..23).map(|i| Some(if i % 2 == 0 { lo } else { hi })).collect();
+            v.extend(vec![Some(last); 7]);
+            v
+        };
+        vec![
+            ("quiet history, week 4% up", history(49.0, 51.0, 53.0), ReadinessTier::Primed),
+            ("noisy history, week 12% up", history(30.0, 70.0, 52.0), ReadinessTier::Normal),
+            ("quiet history, week 4% down", history(49.0, 51.0, 47.0), ReadinessTier::Suppressed),
+            ("noisy history, week 2% down", history(30.0, 70.0, 44.0), ReadinessTier::Normal),
+        ]
+    }
+
+    #[test]
+    fn readiness_tier_follows_the_normal_band_not_the_direction_of_the_last_week() {
+        for (what, nights, want) in band_cases() {
+            let r = HrvReadiness::evaluate(&nights).unwrap();
+            assert_eq!(r.tier, want, "{what}: b7 {} in [{}, {}]",
+                r.baseline7_ms, r.normal_low_ms, r.normal_high_ms);
+            // The tier and the band are shown side by side, so they must agree.
+            let from_band = if r.baseline7_ms > r.normal_high_ms { ReadinessTier::Primed }
+                else if r.baseline7_ms >= r.normal_low_ms { ReadinessTier::Normal }
+                else { ReadinessTier::Suppressed };
+            assert_eq!(r.tier, from_band, "{what}: the tier contradicts the band it ships with");
+        }
+        // The step series the gate used to run on, with its band derived by hand: 13 nights at 40 and
+        // 7 at 80 over one 20-night window, so the log-domain spread is 1820/400/19 of ln(2) squared.
+        let mut step: Vec<Option<f64>> = vec![Some(40.0); 13];
+        step.extend(vec![Some(80.0); 7]);
+        let r = HrvReadiness::evaluate(&step).unwrap();
+        let d = 2f64.ln();
+        let long_mean = 40f64.ln() + 0.35 * d;
+        let swc_half = SWC_K * (1820.0f64 / 400.0 / 19.0).sqrt() * d;
+        assert!((r.baseline7_ms - 80.0).abs() < 1e-9, "got {}", r.baseline7_ms);
+        assert!((r.normal_low_ms - (long_mean - swc_half).exp()).abs() < 1e-9, "got {}", r.normal_low_ms);
+        assert!((r.normal_high_ms - (long_mean + swc_half).exp()).abs() < 1e-9, "got {}", r.normal_high_ms);
+        // It clears the band by a third of the band's own value, which is why it never probed anything.
+        assert!(r.baseline7_ms > r.normal_high_ms * 1.3);
+    }
+
+    #[test]
+    fn a_do_nothing_readiness_tier_fails_the_band_cases() {
+        let valid = |v: &[Option<f64>]| -> Vec<f64> { v.iter().flatten().copied().collect() };
+        let always_normal = |_: &[Option<f64>]| ReadinessTier::Normal;
+        let by_week_vs_history = |v: &[Option<f64>]| {
+            let xs = valid(v);
+            let week = mean(&xs[xs.len() - 7..]);
+            let all = mean(&xs);
+            if week > all { ReadinessTier::Primed } else if week < all { ReadinessTier::Suppressed }
+            else { ReadinessTier::Normal }
+        };
+        let by_first_and_last = |v: &[Option<f64>]| {
+            let xs = valid(v);
+            if xs[xs.len() - 1] > xs[0] { ReadinessTier::Primed }
+            else if xs[xs.len() - 1] < xs[0] { ReadinessTier::Suppressed }
+            else { ReadinessTier::Normal }
+        };
+        let scorers: [Scorer<&[Option<f64>], ReadinessTier>; 3] = [
+            ("always Normal", &always_normal),
+            ("the last week against the whole history", &by_week_vs_history),
+            ("the last night against the first", &by_first_and_last),
+        ];
+        let cases = band_cases();
+        for (name, f) in scorers {
+            let misses = cases.iter().any(|(_, nights, want)| f(nights) != *want);
+            assert!(misses, "the do-nothing tier `{name}` reproduces every band case");
+        }
+    }
+
+    /// The long window is 60 nights once 60 valid nights exist and 30 before that, so the band widens
+    /// on the sixtieth night. Built with the older half far noisier than the recent half.
+    #[test]
+    fn the_normal_band_widens_when_the_sixty_night_window_opens() {
+        let noisy: Vec<Option<f64>> = (0..30).map(|i| Some(if i % 2 == 0 { 30.0 } else { 80.0 })).collect();
+        let quiet: Vec<Option<f64>> = (0..30).map(|i| Some(if i % 2 == 0 { 49.0 } else { 51.0 })).collect();
+        let mut sixty = noisy.clone();
+        sixty.extend(quiet.clone());
+        let wide = HrvReadiness::evaluate(&sixty).unwrap();
+        let narrow = HrvReadiness::evaluate(&sixty[1..]).unwrap();
+        let quiet_only = HrvReadiness::evaluate(&quiet).unwrap();
+        assert_eq!(LONG_WINDOW_FALLBACK, quiet.len(), "the fallback window is what the 59-night case uses");
+        // At 59 valid nights the band is the last 30 nights' band, which here is the quiet half alone.
+        assert!((narrow.normal_low_ms - quiet_only.normal_low_ms).abs() < 1e-9);
+        assert!((narrow.normal_high_ms - quiet_only.normal_high_ms).abs() < 1e-9);
+        // The sixtieth night pulls the noisy half in and the band opens by more than tenfold.
+        let (w, n) = (wide.normal_high_ms - wide.normal_low_ms, narrow.normal_high_ms - narrow.normal_low_ms);
+        assert!(w > 10.0 * n, "band {w} at 60 nights vs {n} at 59");
+    }
+
+    /// Thirty-five nights of an alternation whose amplitude and level each trend. `amp_step` sets the
+    /// CV trend and `level_step` sets where the last week sits against the long mean.
+    fn trending_nights(amp0: f64, amp_step: f64, level0: f64, level_step: f64) -> Vec<Option<f64>> {
+        (0..35)
+            .map(|i| {
+                let amp = amp0 + amp_step * i as f64;
+                Some(level0 + level_step * i as f64 + if i % 2 == 0 { amp } else { -amp })
+            })
+            .collect()
+    }
+
+    /// One overreaching arm: what it is, the nights, and whether the watch must be raised.
+    type WatchCase = (&'static str, Vec<Option<f64>>, bool);
+
+    /// The overreaching watch is a conjunction: the 7-night CV trend must be FALLING and the 7-night
+    /// baseline must sit UNDER the long mean. All four arms read Normal, so the flag is not the tier.
+    #[test]
+    fn the_overreaching_watch_needs_a_falling_cv_and_a_baseline_under_the_long_mean() {
+        let cases: [WatchCase; 4] = [
+            ("cv falling, week under", trending_nights(12.0, -0.3, 55.0, -0.2), true),
+            ("cv falling, week over", trending_nights(12.0, -0.3, 45.0, 0.2), false),
+            ("cv rising, week under", trending_nights(1.0, 0.3, 55.0, -0.2), false),
+            ("cv rising, week over", trending_nights(1.0, 0.3, 45.0, 0.2), false),
+        ];
+        for (what, nights, want) in &cases {
+            let r = HrvReadiness::evaluate(nights).unwrap();
+            assert_eq!(r.overreaching_watch, *want, "{what}");
+            assert_eq!(r.tier, ReadinessTier::Normal, "{what}: the watch must not be read off the tier");
+        }
+        // And a plainly Suppressed week does not raise it, so `watch == suppressed` is not the rule.
         let mut falling: Vec<Option<f64>> = vec![Some(80.0); 13];
         falling.extend(vec![Some(40.0); 7]);
-        assert_eq!(HrvReadiness::evaluate(&falling).unwrap().tier, ReadinessTier::Suppressed);
+        let s = HrvReadiness::evaluate(&falling).unwrap();
+        assert_eq!((s.tier, s.overreaching_watch), (ReadinessTier::Suppressed, false));
+
+        let always_on = |_: &WatchCase| true;
+        let always_off = |_: &WatchCase| false;
+        let from_tier =
+            |c: &WatchCase| HrvReadiness::evaluate(&c.1).unwrap().tier == ReadinessTier::Suppressed;
+        let scorers: [Scorer<&WatchCase, bool>; 3] =
+            [("always on", &always_on), ("always off", &always_off), ("the Suppressed tier", &from_tier)];
+        for (name, f) in scorers {
+            assert!(cases.iter().any(|c| f(c) != c.2), "the do-nothing watch `{name}` reproduces all four arms");
+        }
     }
 
     #[test]
