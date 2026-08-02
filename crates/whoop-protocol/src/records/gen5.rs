@@ -234,9 +234,9 @@ mod tests {
         assert!(decode(f32::NAN).is_none()); // non-finite
     }
 
-    /// One real offloaded v18 second, pinning every per-second field the record carries. Inner 28 and
-    /// 29 are two separate bytes, not one 8.8 fixed-point rate: read as a u16 scaled by 256 the whole
-    /// part is just inner 29 and the fraction just inner 28, so the pairing adds nothing to either.
+    /// One real offloaded v18 second, pinning every field `v18` sets, each against the value this
+    /// strap sent. Inner 28 and 29 are two separate bytes, not one 8.8 fixed-point rate: read as a
+    /// u16 scaled by 256 the whole part is just inner 29 and the fraction just inner 28.
     #[test]
     fn v18_decodes_a_real_frame_end_to_end() {
         const WIRE: &str = "aa01740001003fb12f128066b7760180fc546aeb710056011d0200000000000000002c0481555700\
@@ -262,6 +262,27 @@ ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c02
         assert_eq!(r.sleep_state, Some(0));
         assert_eq!(r.raw_f32_105, Some(-4.869_968_4));
         assert_eq!(r.raw_u16_26, Some(1068));
+
+        // The fields the synthetic round-trips only prove the offset of. Real values, so a wrong
+        // offset that happens to land on another zero byte no longer passes.
+        assert_eq!(r.gravity, Some([0.065_024_41, 0.119_382_32, 1.004_338_4]));
+        assert_eq!(r.dynamic_acceleration_g, Some(0.117_865_92));
+        assert_eq!(r.steps, Some(378));
+        assert_eq!(r.activity_class, Some(0));
+        assert_eq!(r.signal_flags, Some(0));
+        assert_eq!(r.signal_quality, Some(255));
+        assert_eq!(r.optical_baseline_a, Some(173));
+        assert_eq!(r.optical_baseline_b, Some(177));
+        // This second carries the real 128/128 amplitude sentinel: poor is reported, amplitudes are not.
+        assert_eq!(r.optical_signal_poor, Some(true));
+        assert_eq!(r.optical_amp_a, None);
+        assert_eq!(r.optical_amp_b, None);
+        assert_eq!(r.spo2_pct, None); // inner 74 reads 0 awake
+        assert_eq!(r.version, 18);
+
+        // The null arm: a decoder that returns a default record reproduces none of the above.
+        let null = HistoryRecord { version: 18, unix: r.unix, ..Default::default() };
+        assert_ne!(null, r, "an all-default record must not satisfy this frame");
         // Packed in offset order, so slot i is UNPINNED_OFFSETS[i]'s byte.
         let packed = r.unpinned.clone().unwrap();
         assert_eq!(packed.len(), super::super::UNPINNED_OFFSETS.len());
@@ -300,15 +321,23 @@ ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c02
         assert_eq!(r.signal_quality, Some(255));
     }
 
+    /// v21 axis offsets: every one of the 600 samples carries a value unique to its (axis, index), so
+    /// a shifted or swapped axis offset lands on a different number instead of another zero.
     #[test]
-    fn v21_imu_decodes_100_sample_6axis() {
+    fn v21_imu_pins_all_six_axis_offsets_sample_by_sample() {
         // payload index = inner offset − 3. inner = 3 + 1229 = 1232 = gz end (already 4-aligned).
+        const AXES: [(usize, i16); 6] =
+            [(17, 1000), (217, 2000), (417, 3000), (629, -1000), (829, -2000), (1029, -3000)];
         let mut payload = vec![0u8; 1229];
         payload[4..8].copy_from_slice(&1_784_000_000u32.to_le_bytes()); // unix @ inner 7
         payload[13..15].copy_from_slice(&100u16.to_le_bytes()); // count_a @ inner 16
-        payload[17..19].copy_from_slice(&4096i16.to_le_bytes()); // ax[0] @ inner 20 (= 1 g)
         payload[619..621].copy_from_slice(&100u16.to_le_bytes()); // count_b @ inner 622
-        payload[629..631].copy_from_slice(&250i16.to_le_bytes()); // gx[0] @ inner 632
+        for (base, seed) in AXES {
+            for i in 0..IMU_SAMPLES {
+                let v = seed + i as i16;
+                payload[base + i * 2..base + i * 2 + 2].copy_from_slice(&v.to_le_bytes());
+            }
+        }
 
         let wire = framing::encode(Family::Gen5, 47, 21, 0, &payload);
         let frame = framing::decode(Family::Gen5, &wire).unwrap();
@@ -318,11 +347,27 @@ ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c02
         assert_eq!(r.sample_rate_hz, 100);
         assert_eq!(r.accel.len(), 100);
         assert_eq!(r.gyro.len(), 100);
-        assert_eq!(r.accel[0], [4096, 0, 0]);
-        assert_eq!(r.gyro[0], [250, 0, 0]);
+        for i in 0..IMU_SAMPLES {
+            let i16i = i as i16;
+            assert_eq!(r.accel[i], [1000 + i16i, 2000 + i16i, 3000 + i16i], "accel sample {i}");
+            assert_eq!(r.gyro[i], [-1000 + i16i, -2000 + i16i, -3000 + i16i], "gyro sample {i}");
+        }
 
         // An unmapped GEN5 version routes here through the public dispatcher.
         assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Imu(_))));
+    }
+
+    /// The IMU sample scales: raw LSB × these constants are g and deg/s. Full-scale is ±8 g on a
+    /// 16-bit accel word and ±2000 deg/s on the gyro.
+    #[test]
+    fn imu_scales_convert_full_scale_lsb() {
+        use crate::records::{IMU_ACCEL_SCALE_G, IMU_GYRO_SCALE_DPS};
+        assert_eq!(4096.0 * IMU_ACCEL_SCALE_G, 1.0, "4096 LSB is 1 g");
+        assert_eq!(32768.0 * IMU_ACCEL_SCALE_G, 8.0, "the accel word saturates at 8 g");
+        assert_eq!(32768.0 * IMU_GYRO_SCALE_DPS, 2000.0, "the gyro word saturates at 2000 deg/s");
+        // A do-nothing scale of 1.0 (raw LSB reported as engineering units) fails both.
+        assert_ne!(IMU_ACCEL_SCALE_G, 1.0);
+        assert_ne!(IMU_GYRO_SCALE_DPS, 1.0);
     }
 
     #[test]
@@ -346,15 +391,29 @@ ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c02
         assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Imu(_))));
     }
 
+    /// v20 channel offsets: every one of the 150 samples carries a value unique to its (channel,
+    /// index) and half of them are negative, so a shifted channel offset changes the number read.
     #[test]
-    fn v20_optical_decodes_6_channels_25_samples() {
+    fn v20_optical_pins_all_six_channel_offsets_sample_by_sample() {
         // payload index = inner offset − 3; inner = 2128 (frame 2140 − 8 header − 4 CRC).
+        // Written at literal payload indices, never at `OPTICAL_CHANNELS − 3`: a fixture that reads
+        // the constant it is testing moves with it and pins nothing.
+        const BASES: [usize; 6] = [36, 236, 1302, 1502, 1724, 1924];
+        assert_eq!(OPTICAL_CHANNELS, BASES.map(|p| p + 3), "channel inner offsets");
+        let want = |ch: usize, s: usize| (ch as i32 + 1) * 1000 + s as i32 - 12;
         let mut payload = vec![0u8; 2125];
         payload[4..8].copy_from_slice(&1_784_000_000u32.to_le_bytes()); // unix @ inner 7
         payload[17..19].copy_from_slice(&1400u16.to_le_bytes()); // green LED @ inner 20
         payload[20..22].copy_from_slice(&2800u16.to_le_bytes()); // 2×green echo @ inner 23
-        payload[36..40].copy_from_slice(&12345u32.to_le_bytes()); // ch0[0] @ inner 39
-        payload[40..44].copy_from_slice(&0x000F_FFFBu32.to_le_bytes()); // ch0[1] = −5 (20-bit signed)
+        for (ch, base) in BASES.into_iter().enumerate() {
+            for s in 0..OPTICAL_SAMPLES {
+                // 20-bit two's complement in the low bits; the high 12 are ignored, so they carry a
+                // marker that must not reach the sample.
+                let w = (want(ch, s) as u32 & 0x000F_FFFF) | 0xABC0_0000;
+                let p = base + s * 4;
+                payload[p..p + 4].copy_from_slice(&w.to_le_bytes());
+            }
+        }
 
         let wire = framing::encode(Family::Gen5, 47, 20, 0, &payload);
         let frame = framing::decode(Family::Gen5, &wire).unwrap();
@@ -362,10 +421,32 @@ ffb063f13d852b853db87ef43d298e803f7a01a100000000000000000051015901db0d6006010c02
         assert_eq!(r.unix, 1_784_000_000);
         assert_eq!(r.sample_rate_hz, 25);
         assert_eq!(r.channels.len(), 6);
-        assert!(r.channels.iter().all(|c| c.len() == 25));
-        assert_eq!(r.channels[0][0], 12345);
-        assert_eq!(r.channels[0][1], -5);
+        for (ch, samples) in r.channels.iter().enumerate() {
+            assert_eq!(samples.len(), OPTICAL_SAMPLES, "channel {ch} length");
+            for (s, &v) in samples.iter().enumerate() {
+                assert_eq!(v, want(ch, s), "channel {ch} sample {s}");
+            }
+        }
         assert!(matches!(crate::records::decode(&frame), Some(crate::records::Record::Optical(_))));
+    }
+
+    /// 20-bit sign extension across the whole signed range, and the discard of the high 12 bits.
+    /// The null arm is the identity read (`v as i32`), which is right on positives and wrong on every
+    /// negative.
+    #[test]
+    fn sign_extend_20_covers_the_signed_range_and_drops_the_high_bits() {
+        assert_eq!(sign_extend_20(0), 0);
+        assert_eq!(sign_extend_20(1), 1);
+        assert_eq!(sign_extend_20(0x0007_FFFF), 524_287); // largest positive
+        assert_eq!(sign_extend_20(0x0008_0000), -524_288); // most negative
+        assert_eq!(sign_extend_20(0x000F_FFFF), -1);
+        assert_eq!(sign_extend_20(0x000F_FFFB), -5);
+        // Anything above bit 19 is not part of the sample.
+        assert_eq!(sign_extend_20(0xFFF0_0000 | 7), 7);
+        assert_eq!(sign_extend_20(0xABC0_0000 | 0x000F_FFFF), -1);
+        for v in [0x0008_0000u32, 0x000F_FFFF, 0x000F_FFFB] {
+            assert_ne!(sign_extend_20(v), v as i32, "an identity read must not pass on {v:#x}");
+        }
     }
 
     #[test]
