@@ -403,11 +403,11 @@
   ],
   "ppg_hr": {
     "_comment": "physio_algo::ppg::estimate over the concatenated ppg_frames; first estimate is the deterministic golden anchor (sub-lag parabolic-refined).",
-    "estimate_count": 22,
+    "estimate_count": 10,
     "first": {
       "ts": 1783955687,
       "bpm": 78,
-      "conf": 0.731
+      "conf": 0.733
     },
     "confident_bpm_range": [
       60,

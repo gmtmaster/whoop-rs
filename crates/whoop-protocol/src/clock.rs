@@ -4,7 +4,7 @@
 //! correction that overshoots wall time is discarded. `wall_now` is supplied by the caller (pure fn).
 
 const DAY: i64 = 86_400;
-const GRID: i64 = 300; // 5-minute snap
+const SNAP_GRID_SECS: i64 = 300; // 5-minute snap
 
 /// Correct a device timestamp to wall-clock seconds. Trusted (|offset| ≤ 1 day) → returned unchanged.
 pub fn to_wall(device_unix: u32, wall_now: i64) -> i64 {
@@ -13,7 +13,7 @@ pub fn to_wall(device_unix: u32, wall_now: i64) -> i64 {
     if offset.abs() <= DAY {
         return device;
     }
-    let snapped = (offset / GRID) * GRID;
+    let snapped = (offset / SNAP_GRID_SECS) * SNAP_GRID_SECS;
     let corrected = device + snapped;
     if corrected > wall_now {
         device
@@ -52,7 +52,7 @@ mod tests {
         let wall = 1_784_000_000;
         let out = to_wall(60_000_000, wall);
         assert_ne!(out, 60_000_000); // not the raw stale ts
-        assert!(out <= wall && (wall - out) < GRID);
+        assert!(out <= wall && (wall - out) < SNAP_GRID_SECS);
     }
 
     #[test]

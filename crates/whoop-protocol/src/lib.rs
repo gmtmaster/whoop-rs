@@ -26,9 +26,11 @@ pub mod packet;
 pub mod records;
 pub mod response;
 pub mod trim;
+pub mod variant;
 
 pub use error::ProtocolError;
 pub use family::{Channel, Family};
+pub use variant::Variant;
 pub use offload::{Offload, OffloadStep};
 pub use packet::{Frame, PacketType};
 pub use records::{HistoryRecord, ImuRecord, PpgRecord, Record, IMU_ACCEL_SCALE_G, IMU_GYRO_SCALE_DPS};
