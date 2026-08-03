@@ -11,8 +11,8 @@ mod window;
 pub use daily::{daily_stress, StressDay};
 pub use index::{components_raw, stress_index_raw, StressComponents, MIN_BEATS};
 pub use window::{
-    daytime_stress, sleep_stress, windowed_stress, HourPoint, ScoredHour, StressWindowCfg,
-    StressWindows,
+    daytime_stress, sleep_stress, windowed_stress, HourPoint, ScoredHour, SpanMs, StressWindowCfg,
+    StressWindows, Suppression, SuppressedBucket, ACTIVITY_GATE_G,
 };
 
 /// Score ceiling. The three bands split it into thirds, and a zero z-sum lands mid-scale at 1.5.
