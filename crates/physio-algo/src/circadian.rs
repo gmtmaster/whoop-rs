@@ -1,6 +1,10 @@
 //! Single-component cosinor (Halberg cosine fit) over a rest-activity rhythm → MESOR, amplitude and
 //! acrophase, plus a body-clock phase estimate vs the habitual wake time. Pure. Feeds bodyClock + the
 //! biological-age (CosinorAge) model. The nightly skin-temperature minimum can corroborate the phase.
+//!
+//! The activity input is the strap's own on-chip gravity-removed motion magnitude (ENMO, g) at 1 Hz, not
+//! a derived |delta gravity| jerk. The 24 h fundamental sits far below that 0.5 Hz Nyquist, so the rate
+//! costs this fit nothing.
 
 use std::f64::consts::PI;
 
@@ -16,7 +20,9 @@ pub const GOOD_DAYS_FOR_FIT: u32 = 14;
 const CBT_MIN_BEFORE_WAKE_HOURS: f64 = 2.5;
 const ACROPHASE_AFTER_CBT_MIN_HOURS: f64 = 12.0;
 
-/// One per-hour rest-activity sample: local clock hour (0..24, may be fractional) + motion volume.
+/// One per-hour rest-activity sample: local clock hour (0..24, may be fractional) + mean motion magnitude.
+/// Units are the caller's: MESOR and amplitude carry that scale, while acrophase and relative amplitude are
+/// scale-invariant — so the phase path needs no unit conversion and the age path applies its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActivityBin {
     pub hour: f64,
@@ -241,6 +247,22 @@ mod tests {
         // acrophase 6h → −6·(2π/24) = −π/2, inside (−2π, 0].
         assert!((fit.acrophase_radians() - (-PI / 2.0)).abs() < 1e-6);
         assert!(fit.acrophase_radians() > -2.0 * PI && fit.acrophase_radians() <= 0.0);
+    }
+
+    /// The phase path feeds raw g and the age path feeds mg-ENMO through the SAME fit, which is only sound
+    /// because a positive rescale moves MESOR/amplitude together and leaves acrophase + relative amplitude fixed.
+    #[test]
+    fn a_positive_rescale_leaves_phase_and_relative_amplitude_fixed() {
+        let base = cosinor(&synth(0.062, 0.057, 15.0)).unwrap();
+        let scaled_bins: Vec<ActivityBin> = synth(0.062, 0.057, 15.0)
+            .into_iter()
+            .map(|b| ActivityBin { hour: b.hour, activity: b.activity * 1000.0 })
+            .collect();
+        let scaled = cosinor(&scaled_bins).unwrap();
+        assert!((scaled.acrophase_hours - base.acrophase_hours).abs() < 1e-9);
+        assert!((scaled.relative_amplitude() - base.relative_amplitude()).abs() < 1e-9);
+        assert!((scaled.mesor - base.mesor * 1000.0).abs() < 1e-6);
+        assert!((scaled.amplitude - base.amplitude * 1000.0).abs() < 1e-6);
     }
 
     #[test]

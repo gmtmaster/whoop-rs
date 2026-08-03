@@ -1,7 +1,10 @@
 //! Approximate sleeping respiratory rate (breaths/min) from the R-R interval stream via respiratory
 //! sinus arrhythmia: reconstruct a beat-interval tachogram, resample to 4 Hz, detrend, then per 5-min
 //! window peak-pick the breathing modulation and take the median rate. Pure; `None` = no usable estimate.
+//! The only respiratory source for both generations: the 4.0 v24 register decoded as `resp_raw` carries
+//! a status byte, not a breathing signal, so nothing here reads it (measured; see `docs/algorithms.md`).
 
+use crate::signal::{find_peaks, moving_average_centred};
 use crate::stats::{median, population_sd};
 
 const RR_MIN_MS: f64 = 300.0;
@@ -74,13 +77,8 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
     }
 
     let half_w = ((RSA_DETREND_WINDOW_S * RSA_RESAMPLE_HZ / 2.0).round() as usize).max(1);
-    let mut detrended = vec![0.0; n_grid];
-    for i in 0..n_grid {
-        let lo = i.saturating_sub(half_w);
-        let hi = (i + half_w).min(n_grid - 1);
-        let sum: f64 = grid[lo..=hi].iter().sum();
-        detrended[i] = grid[i] - sum / (hi - lo + 1) as f64;
-    }
+    let baseline = moving_average_centred(&grid, 2 * half_w + 1);
+    let detrended: Vec<f64> = (0..n_grid).map(|i| grid[i] - baseline[i]).collect();
     if population_sd(&detrended) <= 1e-9 {
         return None;
     }
@@ -118,54 +116,6 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
     (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&m).then_some(m)
 }
 
-/// Local-maxima peak finder: a plateau-aware maximum at or above `height`, with peaks closer than
-/// `distance` samples resolved by keeping the taller.
-fn find_peaks(x: &[f64], distance: usize, height: f64) -> Vec<usize> {
-    let n = x.len();
-    if n < 3 {
-        return Vec::new();
-    }
-    let mut candidates = Vec::new();
-    let mut i = 1;
-    while i < n - 1 {
-        if x[i] > x[i - 1] && x[i] >= height {
-            let mut j = i;
-            while j + 1 < n && x[j + 1] == x[i] {
-                j += 1;
-            }
-            if j + 1 < n && x[j + 1] < x[i] {
-                candidates.push((i + j) / 2);
-            }
-            i = j + 1;
-        } else {
-            i += 1;
-        }
-    }
-    if distance <= 1 || candidates.is_empty() {
-        return candidates;
-    }
-    let mut by_height: Vec<usize> = (0..candidates.len()).collect();
-    by_height.sort_by(|&a, &b| x[candidates[b]].partial_cmp(&x[candidates[a]]).unwrap());
-    let mut keep = vec![true; candidates.len()];
-    for &pi in &by_height {
-        if !keep[pi] {
-            continue;
-        }
-        let p = candidates[pi] as isize;
-        for qi in 0..candidates.len() {
-            if qi != pi && keep[qi] && (candidates[qi] as isize - p).unsigned_abs() < distance {
-                keep[qi] = false;
-            }
-        }
-    }
-    candidates
-        .iter()
-        .enumerate()
-        .filter(|(off, _)| keep[*off])
-        .map(|(_, &c)| c)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,12 +135,82 @@ mod tests {
         (rows, start, end)
     }
 
+    /// Planted breathing rates the sweep walks; the 10 bpm span is what no constant can cover.
+    const SWEPT_BPM: [f64; 5] = [10.0, 12.0, 15.0, 18.0, 20.0];
+    /// `(mean HR, RSA amplitude ms, span s)`: three tachogram densities per planted rate.
+    const SWEPT_PROFILES: [(f64, f64, f64); 3] = [(60.0, 40.0, 600.0), (55.0, 45.0, 600.0), (70.0, 30.0, 900.0)];
+    /// Worst measured error over the sweep is 2.0 bpm, at 18/min on the 60 bpm profile.
+    const SWEPT_TOL_BPM: f64 = 2.5;
+
+    /// Anything that turns an in-bed R-R window into a breathing rate: the shipped function, or a null.
+    type RespScorer<'a> = &'a dyn Fn(&[(i64, u16)], i64, i64) -> Option<f64>;
+
+    /// Arms of the sweep a scorer misses, as `(planted, profile HR, returned)`. Empty = it tracks.
+    fn sweep_misses(scorer: RespScorer) -> Vec<(f64, f64, Option<f64>)> {
+        let mut bad = Vec::new();
+        for bpm in SWEPT_BPM {
+            for (hr, amp, span) in SWEPT_PROFILES {
+                let (rows, start, end) = synth(bpm / 60.0, 60_000.0 / hr, amp, span);
+                let got = scorer(&rows, start, end);
+                if !got.is_some_and(|v| (v - bpm).abs() <= SWEPT_TOL_BPM) {
+                    bad.push((bpm, hr, got));
+                }
+            }
+        }
+        bad
+    }
+
+    /// The estimate tracks a planted rate across 10-20 breaths/min on three tachogram densities, so
+    /// what is measured is the recovery of a VARYING rate, not one lucky tone.
     #[test]
-    fn recovers_known_breathing_frequency() {
-        // 15 breaths/min (0.25 Hz), mean HR 60, +/-40 ms RSA, ~7 min.
-        let (rows, start, end) = synth(0.25, 1000.0, 40.0, 420.0);
-        let est = resp_rate_from_rr(&rows, start, end).expect("finite estimate");
-        assert!((est - 15.0).abs() <= 3.0, "expected ~15, got {est}");
+    fn tracks_a_swept_breathing_rate_across_the_band() {
+        assert!(sweep_misses(&resp_rate_from_rr).is_empty(), "{:?}", sweep_misses(&resp_rate_from_rr));
+    }
+
+    /// The null arm: no constant, and no refusal, survives the sweep. A single 15/min tone alone was
+    /// satisfied by the constant 13.0, which also satisfied the slow-breather gate below.
+    #[test]
+    fn no_constant_breathing_rate_survives_the_sweep() {
+        let mut c = RESP_PLAUSIBLE_MIN_BPM;
+        while c <= RESP_PLAUSIBLE_MAX_BPM {
+            assert!(!sweep_misses(&|_, _, _| Some(c)).is_empty(), "constant {c} passed the sweep");
+            c += 0.5;
+        }
+        assert!(!sweep_misses(&|_, _, _| None).is_empty(), "a refusing scorer passed the sweep");
+        // The old single-tone pair was blind to exactly this value.
+        assert!(!sweep_misses(&|_, _, _| Some(13.0)).is_empty());
+    }
+
+    /// Sensitivity, not just accuracy: a 10 bpm move in the truth must move the estimate at least
+    /// 6 bpm on every profile. Smallest measured spread is 8.24 bpm.
+    #[test]
+    fn a_ten_bpm_move_in_the_truth_moves_the_estimate() {
+        for (hr, amp, span) in SWEPT_PROFILES {
+            let at = |bpm: f64| {
+                let (rows, s, e) = synth(bpm / 60.0, 60_000.0 / hr, amp, span);
+                resp_rate_from_rr(&rows, s, e).expect("finite estimate")
+            };
+            let spread = at(20.0) - at(10.0);
+            assert!(spread >= 6.0, "HR {hr}: 10 -> 20 bpm moved the estimate only {spread}");
+        }
+    }
+
+    /// Recorded limit, not a desired one: the 2.5 s peak spacing caps the estimator at 24 breaths/min,
+    /// so above ~20 on a slow tachogram adjacent breaths merge and the rate HALVES into a normal-looking
+    /// value. `RESP_PLAUSIBLE_MAX_BPM` sits above that cap and does not catch it.
+    #[test]
+    fn above_the_peak_spacing_cap_the_rate_halves_inside_the_plausible_band() {
+        let at = |bpm: f64, hr: f64, span: f64| {
+            let (rows, s, e) = synth(bpm / 60.0, 60_000.0 / hr, 45.0, span);
+            resp_rate_from_rr(&rows, s, e).expect("finite estimate")
+        };
+        let halved = at(24.0, 60.0, 600.0);
+        assert!((halved - 12.0).abs() < 0.5, "24/min at HR 60 read {halved}");
+        assert!((RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&halved), "and it is in band");
+        // The band ceiling sits above the peak-spacing cap, which is why the halved value stays in band.
+        const { assert!(60.0 / RSA_MIN_PEAK_DISTANCE_S < RESP_PLAUSIBLE_MAX_BPM) };
+        // A faster tachogram carries the same rate, so it is the beat density, not the rate.
+        assert!((at(24.0, 70.0, 900.0) - 24.0).abs() <= 1.0);
     }
 
     #[test]

@@ -176,6 +176,158 @@ pub fn linear_fit(field: &[f64], reference: &[f64]) -> Option<LinearFit> {
     Some(LinearFit { scale, offset: mr - scale * mf, r: pearson(&field[..n], &reference[..n])? })
 }
 
+// ── Weighted trendline over day offsets ───────────────────────────────────
+
+/// 80 % two-sided normal quantile: the interval half-width in standard errors.
+const TREND_CI_Z: f64 = 1.282;
+/// Fewest points a trend may be fitted from; also the `n − 2` the residual variance needs.
+const TREND_MIN_POINTS: usize = 3;
+/// Shortest span a trend may cover, and the fraction of the requested window it must otherwise reach.
+const TREND_MIN_SPAN_FLOOR_DAYS: f64 = 3.0;
+const TREND_MIN_SPAN_WINDOW_FRACTION: f64 = 1.0 / 3.0;
+
+/// Shortest observed span a `window_days`-wide request accepts: a third of the window, never under three
+/// days. Stops three near-adjacent days passing as a trend across a long window.
+pub fn trend_min_span_days(window_days: f64) -> f64 {
+    (window_days * TREND_MIN_SPAN_WINDOW_FRACTION).max(TREND_MIN_SPAN_FLOOR_DAYS)
+}
+
+/// Which way a series moved once its interval is accounted for. `Flat` means the interval straddles
+/// zero, so the direction is not separable from noise — it is not "no movement".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrendDirection {
+    Rising,
+    Falling,
+    Flat,
+}
+
+/// A weighted linear trend over day offsets, carrying its own uncertainty so no caller has to pick a
+/// slope threshold. `slope` is per day; `total_change` spans `start_day`..`end_day`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trendline {
+    pub slope: f64,
+    pub intercept: f64,
+    pub slope_se: f64,
+    pub slope_ci_lo: f64,
+    pub slope_ci_hi: f64,
+    pub start_day: f64,
+    pub end_day: f64,
+    /// Fitted, not observed — the two points a trend line is drawn between.
+    pub start_value: f64,
+    pub end_value: f64,
+    pub total_change: f64,
+    pub total_change_ci_lo: f64,
+    pub total_change_ci_hi: f64,
+    /// |slope| in standard errors — unbounded, so it still ranks two already-certain trends.
+    pub slope_z: f64,
+    /// Monotone squash of `slope_z` into [0, 1). A display scalar, not a probability.
+    pub significance: f64,
+    pub direction: TrendDirection,
+    pub n: usize,
+}
+
+/// Weighted least-squares trend of `values` over `days` (x in days, not sample index), with a residual
+/// based 80 % interval on the slope. `weights` may be empty for unit weights.
+/// `None` under three finite points, under `min_span_days` of observed span, or with no weighted x-spread.
+pub fn weighted_trendline(
+    days: &[f64],
+    values: &[f64],
+    weights: &[f64],
+    min_span_days: f64,
+) -> Option<Trendline> {
+    let pairs = days.len().min(values.len());
+    let (mut x, mut y, mut w) = (Vec::new(), Vec::new(), Vec::new());
+    for i in 0..pairs {
+        let wi = weights.get(i).copied().unwrap_or(1.0);
+        if days[i].is_finite() && values[i].is_finite() && wi.is_finite() && wi >= 0.0 {
+            x.push(days[i]);
+            y.push(values[i]);
+            w.push(wi);
+        }
+    }
+    let n = x.len();
+    if n < TREND_MIN_POINTS {
+        return None;
+    }
+    let start_day = x.iter().copied().fold(f64::INFINITY, f64::min);
+    let end_day = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let span = end_day - start_day;
+    if span < min_span_days {
+        return None;
+    }
+    let w_sum: f64 = w.iter().sum();
+    if w_sum <= 0.0 {
+        return None;
+    }
+    let mean_x = x.iter().zip(&w).map(|(a, b)| a * b).sum::<f64>() / w_sum;
+    let mean_y = y.iter().zip(&w).map(|(a, b)| a * b).sum::<f64>() / w_sum;
+    let (mut ss_xx, mut ss_xy) = (0.0, 0.0);
+    for i in 0..n {
+        let dx = x[i] - mean_x;
+        ss_xx += w[i] * dx * dx;
+        ss_xy += w[i] * dx * (y[i] - mean_y);
+    }
+    // No weighted spread in x: the slope is undefined and the interval would be infinite.
+    if ss_xx <= 0.0 {
+        return None;
+    }
+    let slope = ss_xy / ss_xx;
+    let intercept = mean_y - slope * mean_x;
+    // Residual-based standard error, so the interval widens on a scattered series. A declared-variance
+    // SE (1/ss_xx) cannot see scatter, and we have no validated per-metric measurement CV to declare.
+    let ss_res: f64 = (0..n)
+        .map(|i| {
+            let r = y[i] - (slope * x[i] + intercept);
+            w[i] * r * r
+        })
+        .sum();
+    let slope_se = (ss_res / (n - 2) as f64 / ss_xx).sqrt();
+    let z = if slope_se > 0.0 {
+        slope.abs() / slope_se
+    } else if slope == 0.0 {
+        0.0
+    } else {
+        f64::INFINITY
+    };
+    let half = TREND_CI_Z * slope_se;
+    let (slope_ci_lo, slope_ci_hi) = (slope - half, slope + half);
+    let direction = if slope_ci_lo > 0.0 {
+        TrendDirection::Rising
+    } else if slope_ci_hi < 0.0 {
+        TrendDirection::Falling
+    } else {
+        TrendDirection::Flat
+    };
+    Some(Trendline {
+        slope,
+        intercept,
+        slope_se,
+        slope_ci_lo,
+        slope_ci_hi,
+        start_day,
+        end_day,
+        start_value: slope * start_day + intercept,
+        end_value: slope * end_day + intercept,
+        total_change: slope * span,
+        total_change_ci_lo: slope_ci_lo * span,
+        total_change_ci_hi: slope_ci_hi * span,
+        slope_z: z,
+        significance: 1.0 - (-0.5 * z * z).exp(),
+        direction,
+        n,
+    })
+}
+
+/// Second-half mean minus first-half mean of a series, the odd point going to the second half.
+/// `None` under four points — the window-change number a trend chip shows.
+pub fn half_change(values: &[f64]) -> Option<f64> {
+    if values.len() < 4 {
+        return None;
+    }
+    let mid = values.len() / 2;
+    Some(mean(&values[mid..]) - mean(&values[..mid]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +395,86 @@ mod tests {
         assert!((fit.scale - 2.0).abs() < 1e-9 && (fit.offset - 3.0).abs() < 1e-9 && (fit.r - 1.0).abs() < 1e-9);
         // A flat field has no spread — nothing to calibrate.
         assert!(linear_fit(&[5.0, 5.0, 5.0], &[1.0, 2.0, 3.0]).is_none());
+    }
+
+    #[test]
+    fn trend_min_span_is_a_third_of_the_window_floored_at_three_days() {
+        assert!((trend_min_span_days(7.0) - 3.0).abs() < 1e-12); // 2.33 → floored
+        assert!((trend_min_span_days(31.0) - 31.0 / 3.0).abs() < 1e-12);
+        assert!((trend_min_span_days(366.0) - 122.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trendline_recovers_a_known_line_and_its_fitted_endpoints() {
+        let days = [0.0, 1.0, 2.0, 3.0];
+        let values = [1.0, 2.0, 3.0, 4.0];
+        let t = weighted_trendline(&days, &values, &[], 3.0).unwrap();
+        assert!((t.slope - 1.0).abs() < 1e-12 && (t.intercept - 1.0).abs() < 1e-12);
+        assert!((t.start_value - 1.0).abs() < 1e-12 && (t.end_value - 4.0).abs() < 1e-12);
+        assert!((t.total_change - 3.0).abs() < 1e-12);
+        assert_eq!(t.n, 4);
+        // No scatter → zero SE → the interval collapses onto the slope and the call is Rising.
+        assert_eq!(t.slope_se, 0.0);
+        assert!((t.significance - 1.0).abs() < 1e-12);
+        assert_eq!(t.direction, TrendDirection::Rising);
+    }
+
+    #[test]
+    fn trendline_x_is_days_not_sample_index() {
+        // Three samples 0, 1 and 30 days in on a 1.0/day line. Index-x would read 15.0/sample.
+        let t = weighted_trendline(&[0.0, 1.0, 30.0], &[0.0, 1.0, 30.0], &[], 3.0).unwrap();
+        assert!((t.slope - 1.0).abs() < 1e-12);
+        assert!((t.total_change - 30.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn trendline_interval_sees_scatter_so_the_same_slope_can_read_flat() {
+        // y = 0.5x + 0.5 through [0,2,1]: ss_xx 2, ss_res 1.5 → se sqrt(0.75).
+        let t = weighted_trendline(&[0.0, 1.0, 2.0], &[0.0, 2.0, 1.0], &[], 0.0).unwrap();
+        assert!((t.slope - 0.5).abs() < 1e-12);
+        assert!((t.slope_se - 0.75_f64.sqrt()).abs() < 1e-12);
+        assert!((t.slope_z - 0.5 / 0.75_f64.sqrt()).abs() < 1e-12);
+        assert!((t.significance - 0.153_518_3).abs() < 1e-6);
+        assert_eq!(t.direction, TrendDirection::Flat); // the interval straddles zero
+
+        // The same +0.5/day with no scatter is called, which a fixed slope threshold cannot do.
+        let clean = weighted_trendline(&[0.0, 1.0, 2.0], &[0.0, 0.5, 1.0], &[], 0.0).unwrap();
+        assert!((clean.slope - 0.5).abs() < 1e-12);
+        assert_eq!(clean.direction, TrendDirection::Rising);
+        assert!(clean.slope_se < t.slope_se);
+    }
+
+    #[test]
+    fn trendline_gates_points_span_and_a_degenerate_x_spread() {
+        assert!(weighted_trendline(&[0.0, 5.0], &[1.0, 2.0], &[], 0.0).is_none()); // n < 3
+        assert!(weighted_trendline(&[0.0, 1.0, 2.0], &[1.0, 2.0, 3.0], &[], 3.0).is_none()); // span 2 < 3
+        assert!(weighted_trendline(&[0.0, 1.5, 3.0], &[1.0, 2.0, 3.0], &[], 3.0).is_some()); // span == min
+
+        // All the x-spread carries zero weight: without this gate the interval is ±infinity.
+        let flat_w = &[1.0, 1.0, 0.0];
+        assert!(weighted_trendline(&[0.0, 0.0, 20.0], &[1.0, 2.0, 3.0], flat_w, 0.0).is_none());
+        // Non-finite rows are dropped, and dropping enough of them fails the point gate.
+        let holed = weighted_trendline(&[0.0, 1.0, 2.0, 3.0], &[1.0, f64::NAN, 3.0, 4.0], &[], 0.0);
+        assert_eq!(holed.unwrap().n, 3);
+        assert!(weighted_trendline(&[0.0, 1.0, 2.0], &[1.0, f64::NAN, 3.0], &[], 0.0).is_none());
+    }
+
+    #[test]
+    fn trendline_weights_shift_the_fit_toward_the_trusted_points() {
+        let days = [0.0, 1.0, 2.0, 3.0];
+        let values = [0.0, 1.0, 2.0, 30.0];
+        let plain = weighted_trendline(&days, &values, &[], 3.0).unwrap();
+        assert!((plain.slope - 9.1).abs() < 1e-9); // the outlier drags the unweighted fit
+        let low = &[1.0, 1.0, 1.0, 0.001];
+        let downweighted = weighted_trendline(&days, &values, low, 3.0).unwrap();
+        assert!((downweighted.slope - 1.0).abs() < 0.05); // back on the 1.0/day line
+    }
+
+    #[test]
+    fn half_change_needs_four_points_and_gives_the_odd_one_to_the_recent_half() {
+        assert_eq!(half_change(&[1.0, 2.0, 3.0]), None);
+        assert!((half_change(&[1.0, 2.0, 3.0, 4.0]).unwrap() - 2.0).abs() < 1e-12);
+        // 5 points: first half is [1,2], second [3,4,5] → 4.0 − 1.5.
+        assert!((half_change(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap() - 2.5).abs() < 1e-12);
     }
 }

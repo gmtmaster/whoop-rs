@@ -1,6 +1,9 @@
 //! Activity features from decoded 5/MG raw 6-axis IMU: turn a window of 100 Hz accel+gyro samples into a
 //! compact vector (energy, jerk, gait cadence) for coarse activity classification. Cadence is an
 //! autocorrelation-peak FEATURE reported with its own strength, never fed to a physiological gate. Pure.
+//!
+//! The 1 Hz on-chip ENMO channel is a DIFFERENT motion source: good for magnitude, activity level and
+//! circadian rhythm, never for cadence or steps — see [`CADENCE_BAND_LO_HZ`].
 
 /// One raw IMU sample: 3-axis accelerometer (g) + 3-axis gyroscope (deg/s).
 #[derive(Clone, Copy, Debug)]
@@ -30,18 +33,20 @@ pub struct ImuActivityFeatures {
 }
 
 /// Cadence search band, Hz — human gait/pedal foot rate (~72-210 steps/min), below the IMU Nyquist.
+/// A 1 Hz source (the on-chip ENMO channel) has a 0.5 Hz Nyquist UNDER this whole band, so any peak it
+/// showed would be an alias; at `sample_rate_hz = 1` the lag window collapses and cadence stays `None`.
 pub const CADENCE_BAND_LO_HZ: f64 = 1.2;
 pub const CADENCE_BAND_HI_HZ: f64 = 3.5;
 
 /// A cadence peak below this normalized autocorrelation strength reads as "no rhythm" (→ `None` Hz).
 pub const MIN_CADENCE_STRENGTH: f64 = 0.20;
 
-const MIN_SAMPLES: usize = 8;
+const MIN_IMU_SAMPLES: usize = 8;
 
 /// Extract features from `samples` (from one or more IMU frames, in order) at `sample_rate_hz`.
 pub fn extract(samples: &[ImuSample], sample_rate_hz: i32) -> ImuActivityFeatures {
     let n = samples.len();
-    if n < MIN_SAMPLES || sample_rate_hz <= 0 {
+    if n < MIN_IMU_SAMPLES || sample_rate_hz <= 0 {
         return ImuActivityFeatures {
             accel_energy_g: 0.0,
             gyro_energy_dps: 0.0,
@@ -167,6 +172,26 @@ mod tests {
     fn gyro_energy_reflects_rotation() {
         let f = extract(&gait_samples(2.0, 0.2, 6.0, 45.0), 100);
         assert!((f.gyro_energy_dps - 45.0).abs() <= 1.0, "constant 45 dps should read back");
+    }
+
+    /// Guards the on-chip ENMO channel against being fed here for cadence: at 1 Hz the gait-band lag window
+    /// collapses, so a genuinely varying signal still reports no rhythm rather than an aliased one.
+    #[test]
+    fn a_one_hz_source_reports_no_cadence() {
+        let enmo: Vec<ImuSample> = (0..600)
+            .map(|i| ImuSample {
+                ax: 0.0,
+                ay: 0.0,
+                az: 1.0 + 0.2 * (i as f64 * 0.7).sin(),
+                gx: 0.0,
+                gy: 0.0,
+                gz: 0.0,
+            })
+            .collect();
+        let f = extract(&enmo, 1);
+        assert!(f.accel_energy_g > 0.05, "the input must vary, or this passes for the wrong reason");
+        assert!(f.cadence_hz.is_none(), "0.5 Hz Nyquist cannot carry a 1.2-3.5 Hz cadence");
+        assert_eq!(f.cadence_strength, 0.0);
     }
 
     #[test]

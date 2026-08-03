@@ -4,6 +4,7 @@
 //! athletes sit low, and there is no arrest detector on this hardware). Wellness only, never medical.
 
 use crate::stats::percentile;
+use crate::worn::worn_state;
 use whoop_protocol::HistoryRecord;
 
 /// Eligible at-rest samples needed before a personal baseline (and any nudge) is trustworthy.
@@ -17,8 +18,6 @@ const ELEV_MARGIN: u8 = 45;
 const HIGH_ABS: u8 = 100;
 /// Minimum PPG `signal_quality` for a record to be trusted (the "good" band boundary).
 const QUAL_MIN: u8 = 192;
-/// `signal_flags` bit that marks the strap off-wrist.
-const OFF_WRIST_BIT: u8 = 0x10;
 /// Personal resting HR = this low percentile of eligible at-rest HR.
 const RESTING_PCT: f64 = 0.10;
 
@@ -73,12 +72,14 @@ impl HrWatch {
     }
 }
 
-/// A record is eligible if it is at rest (still or asleep), on-wrist, has a trustworthy PPG signal, and
-/// carries a non-zero heart rate.
+/// A record is eligible if it is at rest (still or asleep), not proven off-wrist, has a trustworthy PPG
+/// signal, and carries a non-zero heart rate. Wear comes from [`worn_state`], never from the off-wrist
+/// bit alone — that bit reads clear on real off-wrist records.
 fn eligible(h: &HistoryRecord) -> Option<(u32, u8)> {
     let at_rest = h.activity_class == Some(0) || h.sleep_state == Some(2);
-    let good = h.signal_quality.is_some_and(|q| q >= QUAL_MIN);
-    let on_wrist = h.signal_flags.is_none_or(|f| f & OFF_WRIST_BIT == 0);
+    // The band's own per-second verdict on its beat detection, alongside the confidence floor.
+    let good = h.signal_quality.is_some_and(|q| q >= QUAL_MIN) && h.optical_signal_poor != Some(true);
+    let on_wrist = !worn_state(h).is_off();
     let hr = h.heart_rate?;
     (at_rest && good && on_wrist && hr > 0).then_some((h.unix, hr))
 }
@@ -124,6 +125,30 @@ mod tests {
         h.extend((600..610).map(|i| rec(i, 120))); // 10 s only
         h.extend((610..1000).map(|i| rec(i, 60)));
         assert_eq!(HrWatch::evaluate(&h), HrWatchState::Normal);
+    }
+
+    #[test]
+    fn an_off_wrist_run_is_never_eligible_though_its_off_wrist_bit_is_clear() {
+        let mut h: Vec<_> = (0..600).map(|i| rec(i, 60)).collect();
+        h.extend((600..1000).map(|i| {
+            let mut r = rec(i, 150);
+            r.optical_signal_poor = Some(true); // baselines both 0 → decoded None; the flags bit stays clear
+            r
+        }));
+        assert_eq!(HrWatch::evaluate(&h), HrWatchState::Normal);
+    }
+
+    #[test]
+    fn a_band_flagged_poor_second_is_never_eligible() {
+        let h: Vec<_> = (0..1000)
+            .map(|i| {
+                let mut r = rec(i, 60);
+                r.optical_baseline_a = Some(101); // worn, but the band distrusts its own beat detection
+                r.optical_signal_poor = Some(true);
+                r
+            })
+            .collect();
+        assert_eq!(HrWatch::evaluate(&h), HrWatchState::Calibrating { have: 0, need: MIN_BASELINE_SAMPLES });
     }
 
     #[test]

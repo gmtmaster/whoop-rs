@@ -1,16 +1,13 @@
 //! HR-max and five %HRmax heart-rate zones with time-in-zone from an HR stream. Max HR comes from the
 //! Tanaka age formula (208 − 0.7·age) or a manual override; zones are the conventional 50/60/70/80/90/100%
 //! bands and the top zone is inclusive at HRmax. Time-in-zone credits each sample until the next reading,
-//! capped at [`DROPOUT_CAP_SECONDS`] so a wear gap is not counted as time in a zone; the tail sample gets
-//! the median inter-sample gap. Pure.
+//! gated by the position-dependent ceilings in [`crate::hr_gap`] so a wear gap is not counted as time in
+//! a zone; the tail sample gets the median inter-sample gap. Pure.
 
 /// %HRmax band edges for zones 1..5.
 pub const ZONE_EDGES: [f64; 6] = [0.50, 0.60, 0.70, 0.80, 0.90, 1.00];
 
-/// Longest inter-sample gap credited to a zone; past it the strap was not reporting, so the time is
-/// a wear gap rather than time spent in that zone. Shared ceiling with the strain TRIMP integrator.
-pub const DROPOUT_CAP_SECONDS: f64 = crate::strain::DROPOUT_CAP_SECONDS as f64;
-
+pub use crate::hr_gap::{creditable_seconds, GapAccounting, GapPosition};
 pub use crate::hr_sample::HrSample;
 
 /// A single zone as a bpm interval `[lower, upper)` plus its %HRmax band.
@@ -47,11 +44,15 @@ impl HrZoneSet {
     }
 }
 
-/// Seconds in each of the five zones (index 0 == Zone 1) plus time below Zone 1.
+/// Seconds in each of the five zones (index 0 == Zone 1) plus time below Zone 1, and the provenance
+/// of those seconds: how many were bridged across a real gap rather than measured, and how much
+/// elapsed time was refused outright. A bridged second is held-forward, not observed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimeInZone {
     pub seconds: [f64; 5],
     pub below_zone1: f64,
+    pub bridged_seconds: f64,
+    pub refused_seconds: f64,
 }
 
 impl TimeInZone {
@@ -104,28 +105,34 @@ pub fn zones_from_max(max_hr: f64, source: &str) -> HrZoneSet {
 }
 
 /// Time-in-zone (seconds) from a time-ordered (or unordered) HR stream. Each sample is credited with the
-/// duration until the next sample, capped at [`DROPOUT_CAP_SECONDS`]; the tail sample gets the median gap.
+/// duration until the next sample when that gap is within its position ceiling and with nothing when it
+/// is past it; the tail sample gets the median gap, judged as a trailing gap.
 pub fn time_in_zone(hr: &[HrSample], zone_set: &HrZoneSet) -> TimeInZone {
     let mut sorted: Vec<HrSample> = hr.to_vec();
     sorted.sort_by_key(|s| s.ts);
     let mut zone_seconds = [0.0f64; 5];
     let mut below = 0.0;
+    let mut acct = GapAccounting::default();
     if sorted.is_empty() {
-        return TimeInZone { seconds: zone_seconds, below_zone1: 0.0 };
+        return TimeInZone {
+            seconds: zone_seconds,
+            below_zone1: 0.0,
+            bridged_seconds: 0.0,
+            refused_seconds: 0.0,
+        };
     }
 
     let tail_duration = median_interval(&sorted);
     for i in 0..sorted.len() {
-        let dur = if i < sorted.len() - 1 {
-            let gap = (sorted[i + 1].ts - sorted[i].ts) as f64;
-            if gap > 0.0 {
-                gap.min(DROPOUT_CAP_SECONDS)
-            } else {
-                tail_duration
-            }
+        // Non-positive spacing means same-second duplicates, not a gap: they get the median cadence.
+        let (gap, position) = if i < sorted.len() - 1 {
+            let g = (sorted[i + 1].ts - sorted[i].ts) as f64;
+            if g > 0.0 { (g, GapPosition::Interior) } else { (tail_duration, GapPosition::Interior) }
         } else {
-            tail_duration
+            (tail_duration, GapPosition::Trailing)
         };
+        acct.add(gap, position);
+        let dur = creditable_seconds(gap, position);
         let z = zone_set.zone_number(sorted[i].bpm as f64);
         if z >= 1 {
             zone_seconds[(z - 1) as usize] += dur;
@@ -133,7 +140,12 @@ pub fn time_in_zone(hr: &[HrSample], zone_set: &HrZoneSet) -> TimeInZone {
             below += dur;
         }
     }
-    TimeInZone { seconds: zone_seconds, below_zone1: below }
+    TimeInZone {
+        seconds: zone_seconds,
+        below_zone1: below,
+        bridged_seconds: acct.bridged_seconds,
+        refused_seconds: acct.refused_seconds,
+    }
 }
 
 /// Median spacing between consecutive timestamps, restricted to plausible (0, 300 s) gaps. Falls back to
@@ -183,12 +195,14 @@ mod tests {
         let tiz = time_in_zone(&hr, &zs);
         assert!((tiz.total() - 10.0).abs() < 1e-9);
         assert!((tiz.seconds_in_zone(3) - 10.0).abs() < 1e-9); // 150/200 = 75% → Zone 3
+        assert_eq!(tiz.bridged_seconds, 0.0); // every second measured at cadence
+        assert_eq!(tiz.refused_seconds, 0.0);
     }
 
     #[test]
-    fn caps_huge_positive_gap_at_the_dropout_ceiling() {
-        // Three 1 Hz zone-1 samples then one an hour later. The 3600 s gap is a wear gap: it is credited
-        // at DROPOUT_CAP_SECONDS, not in full, so one dropout can't dominate a bucket.
+    fn refuses_an_interior_gap_past_its_ceiling() {
+        // Three 1 Hz zone-1 samples then one an hour later. The 3600 s gap is past the interior
+        // ceiling, so it is billed to no zone at all and shows up as refused time.
         let zs = zones_from_max(200.0, "manual");
         let hr = [
             HrSample { ts: 0, bpm: 110 },
@@ -197,10 +211,39 @@ mod tests {
             HrSample { ts: 3602, bpm: 110 },
         ];
         let tiz = time_in_zone(&hr, &zs);
-        // 1 + 1 + capped(3600) + tail(median 1) = 1203, well under the 3602 s span.
-        assert!((tiz.total() - (2.0 + DROPOUT_CAP_SECONDS + 1.0)).abs() < 1e-9, "got {}", tiz.total());
-        assert!(tiz.total() < 3602.0 * 0.4, "a dropout must not be billed in full");
+        assert!((tiz.total() - 3.0).abs() < 1e-9, "got {}", tiz.total()); // 1 + 1 + 0 + tail(1)
+        assert!((tiz.refused_seconds - 3600.0).abs() < 1e-9, "got {}", tiz.refused_seconds);
+        assert_eq!(tiz.bridged_seconds, 0.0);
         assert!((tiz.total() - tiz.seconds_in_zone(1)).abs() < 1e-9); // all zone 1
+    }
+
+    #[test]
+    fn bridges_an_interior_gap_within_its_ceiling_and_marks_it() {
+        // A 900 s gap is bracketed by measured HR and inside the 1800 s interior ceiling, so it is
+        // billed in full — but every one of those seconds is flagged as bridged, not measured.
+        let zs = zones_from_max(200.0, "manual");
+        let hr = [
+            HrSample { ts: 0, bpm: 110 },
+            HrSample { ts: 1, bpm: 110 },
+            HrSample { ts: 2, bpm: 110 },
+            HrSample { ts: 902, bpm: 110 },
+        ];
+        let tiz = time_in_zone(&hr, &zs);
+        assert!((tiz.total() - 903.0).abs() < 1e-9, "got {}", tiz.total()); // 1 + 1 + 900 + tail(1)
+        assert!((tiz.bridged_seconds - 900.0).abs() < 1e-9, "got {}", tiz.bridged_seconds);
+        assert_eq!(tiz.refused_seconds, 0.0);
+        assert!(tiz.bridged_seconds < tiz.total(), "bridged time is a subset of counted time");
+    }
+
+    #[test]
+    fn interior_ceiling_is_inclusive_at_its_edge() {
+        let zs = zones_from_max(200.0, "manual");
+        let at = [HrSample { ts: 0, bpm: 110 }, HrSample { ts: 1800, bpm: 110 }];
+        let past = [HrSample { ts: 0, bpm: 110 }, HrSample { ts: 1810, bpm: 110 }];
+        // Two samples 1800 s apart: no plausible (0, 300 s) gap exists, so the tail falls back to 1 s.
+        assert!((time_in_zone(&at, &zs).total() - 1801.0).abs() < 1e-9);
+        assert!((time_in_zone(&past, &zs).total() - 1.0).abs() < 1e-9);
+        assert!((time_in_zone(&past, &zs).refused_seconds - 1810.0).abs() < 1e-9);
     }
 
     #[test]
