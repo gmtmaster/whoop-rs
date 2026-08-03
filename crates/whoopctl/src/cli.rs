@@ -121,4 +121,61 @@ pub(crate) enum Cmd {
         /// The deep-capture JSON Lines file.
         file: PathBuf,
     },
+    /// Draw an ECG as stacked rhythm strips at a true, stated scale. Offline only for now: `--demo`
+    /// streams a synthetic waveform, because the strap's packet layout and counts-per-mV are unread.
+    Ecg(EcgArgs),
+}
+
+/// The ECG renderer's surface. Every scale here is honoured or refused, never quietly changed.
+#[derive(clap::Args)]
+pub(crate) struct EcgArgs {
+    /// Stream a synthetic waveform instead of a band. Required until the R16 layout is known.
+    #[arg(long)]
+    pub(crate) demo: bool,
+    /// Which synthetic waveform: `pulse` (1 mV / 1 Hz square) or `ecg` (PQRST at 62 bpm).
+    #[arg(long = "demo-signal", default_value = "pulse")]
+    pub(crate) demo_signal: String,
+    /// Inject lead-off spans, to see them marked rather than interpolated.
+    #[arg(long = "demo-lead-off")]
+    pub(crate) demo_lead_off: bool,
+    /// Wall-clock multiplier: 1 streams in real time, 0 renders as fast as it can.
+    #[arg(long, default_value_t = 1.0)]
+    pub(crate) speed: f64,
+    #[arg(long, default_value_t = 30.0)]
+    pub(crate) duration: f64,
+    #[arg(long = "strip-seconds", default_value_t = 5.0)]
+    pub(crate) strip_seconds: f64,
+    /// Sweep speed. Honoured or refused — never silently changed to fit a narrow terminal.
+    #[arg(long = "mm-per-s", default_value_t = 25.0)]
+    pub(crate) mm_per_s: f64,
+    /// Amplitude scale. Used only once a counts-per-mV is supplied.
+    #[arg(long = "mm-per-mv", default_value_t = 10.0)]
+    pub(crate) mm_per_mv: f64,
+    /// ADC counts per millivolt. THERE IS NO DEFAULT: without it the y axis stays raw counts and every
+    /// label says so. The strap's own conversion has not been read.
+    #[arg(long = "counts-per-mv")]
+    pub(crate) counts_per_mv: Option<f64>,
+    /// Height of one strip's window, in screen millimetres.
+    #[arg(long = "strip-mm", default_value_t = 24.0)]
+    pub(crate) strip_mm: f64,
+    /// Terminal cell height / width. A braille dot is square at 2.0; nothing can measure it, so it is
+    /// assumed and printed as assumed.
+    #[arg(long = "cell-aspect", default_value_t = 2.0)]
+    pub(crate) cell_aspect: f64,
+    /// Force the horizontal dot resolution instead of fitting it to the width.
+    #[arg(long = "dots-per-mm")]
+    pub(crate) dots_per_mm: Option<f64>,
+    /// Sample rate. ASSUMED until the strap's rate code is read.
+    #[arg(long = "sample-rate", default_value_t = 500.0)]
+    pub(crate) sample_rate: f64,
+    #[arg(long)]
+    pub(crate) width: Option<usize>,
+    #[arg(long)]
+    pub(crate) height: Option<usize>,
+    /// Drop the millimetre grid.
+    #[arg(long = "no-grid")]
+    pub(crate) no_grid: bool,
+    /// Never emit colour, even to a terminal.
+    #[arg(long = "no-colour")]
+    pub(crate) no_colour: bool,
 }

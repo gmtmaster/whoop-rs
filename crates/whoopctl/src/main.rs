@@ -236,7 +236,58 @@ async fn main() -> Result<()> {
             let (strap, records) = decode_capture(file, fam)?;
             report::decode_report(file, strap.as_deref(), &records);
         }
+        Cmd::Ecg(args) => render_ecg(args)?,
     }
+    Ok(())
+}
+
+/// Draw the ECG strips. Offline only: the R16 packet layout and the counts-per-mV are unread, so
+/// there is nothing to decode off a strap yet and building the session first would mean guessing.
+fn render_ecg(args: &cli::EcgArgs) -> Result<()> {
+    use whoopctl::ecg_render::{demo, driver, fit, Request};
+
+    if !args.demo {
+        anyhow::bail!(
+            "live ECG capture is not implemented: the R16 packet layout and the strap's counts-per-mV \
+             have not been read, so any decode would be a guess. Use --demo to render the synthetic \
+             waveform at the true scale."
+        );
+    }
+    let signal = demo::DemoSignal::parse(&args.demo_signal)
+        .ok_or_else(|| anyhow::anyhow!("unknown --demo-signal {:?}; try pulse or ecg", args.demo_signal))?;
+
+    let req = Request {
+        duration_s: args.duration,
+        strip_s: args.strip_seconds,
+        mm_per_s: args.mm_per_s,
+        mm_per_mv: args.mm_per_mv,
+        strip_mm: args.strip_mm,
+        cell_aspect: args.cell_aspect,
+        dots_per_mm_x: args.dots_per_mm,
+        counts_per_mv: args.counts_per_mv,
+        sample_rate_hz: args.sample_rate,
+        grid: !args.no_grid,
+        ..Request::default()
+    };
+    let term = driver::terminal(args.width, args.height);
+    // Refuse loudly rather than draw at a scale the label does not match.
+    fit(&req, term).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let opts = demo::DemoOptions {
+        signal,
+        lead_off: args.demo_lead_off,
+        speed: args.speed.max(0.0),
+        colour: !args.no_colour && driver::stdout_is_terminal(),
+    };
+    println!(
+        "terminal {}x{} ({} / {})",
+        term.cols,
+        term.rows,
+        term.cols_from.tag(),
+        term.rows_from.tag(),
+    );
+    let mut out = std::io::stdout();
+    demo::run(&req, term, &opts, &mut out).map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 

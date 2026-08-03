@@ -302,21 +302,81 @@ mod tests {
     use super::format_hr_watch;
     use physio_algo::HrWatchState;
 
+    /// Words that assert a clinical CONCLUSION. Banned in every user-facing line, in every framing,
+    /// because there is no honest wellness sentence that needs them.
+    pub(crate) const VERDICT_TERMS: [&str; 8] =
+        ["diagnos", "you have", "rule out", "ruled out", "clinically", "medically", "medical grade", "medical-grade"];
+
+    /// Names of clinical CONDITIONS. Allowed only inside an explicit non-claim — "this is not a test
+    /// for atrial fibrillation" has to be sayable, and a blunt substring ban would forbid the very
+    /// disclaimer that keeps the output honest.
+    pub(crate) const CONDITION_TERMS: [&str; 6] =
+        ["afib", "a-fib", "atrial fibrillation", "fibrillat", "arrhythm", "tachycard"];
+
+    /// Markers that turn a condition name into a disclaimer rather than a claim.
+    const DISCLAIMER_MARKERS: [&str; 6] = ["not a", "not intended", "cannot", "does not", "no substitute", "never medical"];
+
+    /// Names of MEASUREMENTS — "ecg", "lead I", "rhythm", "bpm". Deliberately NOT banned.
+    /// Naming what was measured is a statement of fact, like "heart rate"; it is the interpretation
+    /// that has to stay in the wellness register. Rescoped 2026-08-01: the old list banned "ecg"
+    /// outright, which would have made it impossible for an ECG feature to name its own output.
+    ///
+    /// `strict` = the line comes from a feature with no ECG behind it (the PPG-only HR watch), where
+    /// even naming a modality we did not use would mislead.
+    pub(crate) fn check_wellness_wording(line: &str, strict: bool) -> Result<(), String> {
+        let low = line.to_lowercase();
+        for term in VERDICT_TERMS {
+            if low.contains(term) {
+                return Err(format!("verdict term '{term}' in: {line}"));
+            }
+        }
+        for term in CONDITION_TERMS {
+            if low.contains(term) && !DISCLAIMER_MARKERS.iter().any(|m| low.contains(m)) {
+                return Err(format!("condition '{term}' stated as a claim, with no disclaimer, in: {line}"));
+            }
+        }
+        if strict {
+            for term in ["ecg", "ekg", "cardiac", "alarm", "emergency"] {
+                if low.contains(term) {
+                    return Err(format!("modality term '{term}' in a PPG-only line: {line}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn hr_watch_line_carries_no_clinical_terms() {
-        // Every wording the HR watch can emit must read as wellness, never as a diagnosis.
-        let banned = ["afib", "fibrillat", "arrhythm", "cardiac", "ecg", "ekg", "diagnos", "alarm", "emergency"];
+        // The HR watch is a PPG-only wellness nudge, so it takes the strict setting: no verdicts, no
+        // condition names, and not even a modality it never measured.
         let lines = [
             format_hr_watch(HrWatchState::Calibrating { have: 10, need: 600 }),
             format_hr_watch(HrWatchState::Normal),
             format_hr_watch(HrWatchState::ElevatedAtRest { peak_bpm: 118, start_unix: 0, dur_s: 480 }),
         ];
         for line in lines {
-            let low = line.to_lowercase();
-            for term in banned {
-                assert!(!low.contains(term), "clinical term '{term}' in HR-watch line: {line}");
-            }
+            check_wellness_wording(&line, true).unwrap();
         }
+    }
+
+    #[test]
+    fn wording_policy_separates_a_claim_from_a_disclaimer() {
+        // The distinction the rescope exists to make. Both mention the condition; only one asserts it.
+        assert!(check_wellness_wording("Atrial fibrillation detected.", false).is_err());
+        assert!(check_wellness_wording(
+            "Irregular rhythm in 2 of 6 windows. This is not a test for atrial fibrillation.",
+            false
+        )
+        .is_ok());
+
+        // Naming the measurement is fine for a feature that actually took one...
+        assert!(check_wellness_wording("ECG capture complete: 30 s, lead I, 512 Hz.", false).is_ok());
+        // ...and not fine for one that did not.
+        assert!(check_wellness_wording("ECG capture complete: 30 s, lead I, 512 Hz.", true).is_err());
+
+        // A verdict is banned however it is dressed.
+        assert!(check_wellness_wording("This does not diagnose anything.", false).is_err());
+        assert!(check_wellness_wording("Medical-grade recording.", false).is_err());
     }
 
     #[test]
