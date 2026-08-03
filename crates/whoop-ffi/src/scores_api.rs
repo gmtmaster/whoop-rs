@@ -45,29 +45,135 @@ pub struct RecoveryDrivers {
     pub prior_day_effort: Option<f64>,
 }
 
+impl From<RecoveryDrivers> for recovery::RecoveryInput {
+    fn from(d: RecoveryDrivers) -> Self {
+        recovery::RecoveryInput {
+            hrv: d.hrv,
+            rhr: d.rhr,
+            resp: d.resp,
+            hrv_baseline: d.hrv_baseline.map(Into::into),
+            rhr_baseline: d.rhr_baseline.map(Into::into),
+            resp_baseline: d.resp_baseline.map(Into::into),
+            sleep_perf: d.sleep_perf,
+            skin_temp_dev: d.skin_temp_dev,
+            hrv_baseline_usable: d.hrv_baseline_usable,
+            recovery_index_slope: d.recovery_index_slope,
+            effort_baseline: d.effort_baseline.map(Into::into),
+            prior_day_effort: d.prior_day_effort,
+        }
+    }
+}
+
 /// Recovery "Charge" score in [0, 100]. `None` at cold-start or when no driver is available.
 #[uniffi::export]
 pub fn recovery_score(d: RecoveryDrivers) -> Option<f64> {
-    recovery::recovery(&recovery::RecoveryInput {
-        hrv: d.hrv,
-        rhr: d.rhr,
-        resp: d.resp,
-        hrv_baseline: d.hrv_baseline.map(Into::into),
-        rhr_baseline: d.rhr_baseline.map(Into::into),
-        resp_baseline: d.resp_baseline.map(Into::into),
-        sleep_perf: d.sleep_perf,
-        skin_temp_dev: d.skin_temp_dev,
-        hrv_baseline_usable: d.hrv_baseline_usable,
-        recovery_index_slope: d.recovery_index_slope,
-        effort_baseline: d.effort_baseline.map(Into::into),
-        prior_day_effort: d.prior_day_effort,
-    })
+    recovery::recovery(&d.into())
 }
 
 /// Recovery colour band ("red" | "yellow" | "green") for a score.
 #[uniffi::export]
 pub fn recovery_band(score: f64) -> String {
     recovery::band(score).to_string()
+}
+
+/// The one-word state band a recovery score falls in. The word and its colour are the caller's.
+#[derive(uniffi::Enum)]
+pub enum RecoveryState {
+    Depleted,
+    Low,
+    Moderate,
+    Primed,
+    Peak,
+}
+
+impl From<recovery::RecoveryState> for RecoveryState {
+    fn from(s: recovery::RecoveryState) -> Self {
+        match s {
+            recovery::RecoveryState::Depleted => RecoveryState::Depleted,
+            recovery::RecoveryState::Low => RecoveryState::Low,
+            recovery::RecoveryState::Moderate => RecoveryState::Moderate,
+            recovery::RecoveryState::Primed => RecoveryState::Primed,
+            recovery::RecoveryState::Peak => RecoveryState::Peak,
+        }
+    }
+}
+
+/// The state band of a recovery score in [0, 100] — finer than [`recovery_band`]'s three colours.
+#[uniffi::export]
+pub fn recovery_state(score: f64) -> RecoveryState {
+    recovery::state(score).into()
+}
+
+/// Which signal a driver row describes; the caller owns its label, unit and value text.
+#[derive(uniffi::Enum)]
+pub enum DriverKind {
+    Hrv,
+    RestingHr,
+    Sleep,
+    Respiratory,
+    SkinTemp,
+    RecoveryIndex,
+    ActivityBalance,
+}
+
+impl From<recovery_drivers::DriverKind> for DriverKind {
+    fn from(k: recovery_drivers::DriverKind) -> Self {
+        match k {
+            recovery_drivers::DriverKind::Hrv => DriverKind::Hrv,
+            recovery_drivers::DriverKind::RestingHr => DriverKind::RestingHr,
+            recovery_drivers::DriverKind::Sleep => DriverKind::Sleep,
+            recovery_drivers::DriverKind::Respiratory => DriverKind::Respiratory,
+            recovery_drivers::DriverKind::SkinTemp => DriverKind::SkinTemp,
+            recovery_drivers::DriverKind::RecoveryIndex => DriverKind::RecoveryIndex,
+            recovery_drivers::DriverKind::ActivityBalance => DriverKind::ActivityBalance,
+        }
+    }
+}
+
+/// How a driver reads against its baseline. `LimitingHigh` / `LimitingLow` carry the side for the
+/// symmetric skin-temp term; every single-sided driver yields only the first three.
+#[derive(uniffi::Enum)]
+pub enum DriverVerdict {
+    Supporting,
+    Neutral,
+    Limiting,
+    LimitingHigh,
+    LimitingLow,
+}
+
+impl From<recovery_drivers::DriverVerdict> for DriverVerdict {
+    fn from(v: recovery_drivers::DriverVerdict) -> Self {
+        match v {
+            recovery_drivers::DriverVerdict::Supporting => DriverVerdict::Supporting,
+            recovery_drivers::DriverVerdict::Neutral => DriverVerdict::Neutral,
+            recovery_drivers::DriverVerdict::Limiting => DriverVerdict::Limiting,
+            recovery_drivers::DriverVerdict::LimitingHigh => DriverVerdict::LimitingHigh,
+            recovery_drivers::DriverVerdict::LimitingLow => DriverVerdict::LimitingLow,
+        }
+    }
+}
+
+/// One driver row behind a Charge score: the signal, its marginal swing in whole points, and its
+/// direction. `delta_points` is NaN when that driver's own value is.
+#[derive(uniffi::Record)]
+pub struct DriverRow {
+    pub kind: DriverKind,
+    pub delta_points: f64,
+    pub verdict: DriverVerdict,
+}
+
+/// The per-driver breakdown behind [`recovery_score`], from the identical input: biggest mover first,
+/// ties in emission order, empty exactly where the score returns `None`.
+#[uniffi::export]
+pub fn recovery_driver_rows(d: RecoveryDrivers) -> Vec<DriverRow> {
+    recovery_drivers::driver_rows(&d.into())
+        .into_iter()
+        .map(|r| DriverRow {
+            kind: r.kind.into(),
+            delta_points: r.delta_points,
+            verdict: r.verdict.into(),
+        })
+        .collect()
 }
 
 /// Overnight HR-decline slope (bpm/hour) — the recovery-index driver.
