@@ -174,7 +174,7 @@ pub fn nap_defaults() -> NapDefaultsInfo {
 }
 
 /// Sleep-detection window edges: the daytime-nap band, the session gap ceiling and the sparse-gravity
-/// span fraction; plus the overnight band and habitual-midsleep floor the main-night pick uses.
+/// span fraction; plus the overnight band and the habitual-midsleep day floor and trailing window span.
 #[derive(uniffi::Record)]
 pub struct SleepWindowCfgInfo {
     pub daytime_band_start_hour: i64,
@@ -184,6 +184,7 @@ pub struct SleepWindowCfgInfo {
     pub overnight_start_hour: i64,
     pub overnight_end_hour: i64,
     pub habitual_min_days: u32,
+    pub habitual_window_days: u32,
 }
 
 /// The window edges the sleep pipeline detects and picks a main night by.
@@ -197,5 +198,6 @@ pub fn sleep_window_cfg() -> SleepWindowCfgInfo {
         overnight_start_hour: sleep::OVERNIGHT_START_HOUR,
         overnight_end_hour: sleep::OVERNIGHT_END_HOUR,
         habitual_min_days: sleep::HABITUAL_MIN_DAYS as u32,
+        habitual_window_days: sleep::HABITUAL_WINDOW_DAYS as u32,
     }
 }

@@ -14,6 +14,10 @@ const MEANINGFUL_BONUS_EPSILON: f64 = 1e-9;
 const GAP_BRIDGE_MAX_MIN: i64 = 60;
 const NIGHT_TAIL_BRIDGE_MAX_MIN: i64 = 90;
 pub const HABITUAL_MIN_DAYS: usize = 14;
+/// Trailing calendar span the per-day habitual series averages over. Three whole weeks, so a weekend
+/// lie-in enters and leaves the window together, and the slack over `HABITUAL_MIN_DAYS` keeps a few
+/// unworn nights from blanking the series.
+pub const HABITUAL_WINDOW_DAYS: usize = 21;
 const CIRCULAR_MEAN_MIN_RESULTANT: f64 = 1e-9;
 
 /// One candidate block for selection: `[start, end]` unix seconds. A user wake/bed edit moves `end`.
@@ -85,6 +89,11 @@ pub struct HistoryBlock {
 /// Local time-of-day in `[0, SECONDS_PER_DAY)` of a unix timestamp shifted east by `offset_s`.
 fn local_sec_of_day(ts: i64, offset_s: i64) -> i64 {
     (ts + offset_s).rem_euclid(SECONDS_PER_DAY)
+}
+
+/// Local calendar-day number of a unix timestamp shifted east by `offset_s`.
+fn local_day_index(ts: i64, offset_s: i64) -> i64 {
+    (ts + offset_s).div_euclid(SECONDS_PER_DAY)
 }
 
 /// Smallest circular distance (seconds, `0..=43200`) between two times-of-day.
@@ -308,15 +317,17 @@ pub fn main_night_selection_scored(
     Some(MainNightSelection { index: idx, reason, asleep_sec })
 }
 
-/// The user's habitual midsleep (local time-of-day seconds), or `None` on too little history. The circular
-/// mean of the midpoint time-of-day of the longest block per local day (selection-independent).
-pub fn habitual_midsleep_sec(history: &[HistoryBlock], offset_s: i64, min_days: usize) -> Option<i64> {
-    if history.is_empty() {
-        return None;
-    }
-    let mut longest_by_day: std::collections::HashMap<&str, &HistoryBlock> = std::collections::HashMap::new();
+/// Midpoint unix second of a history block.
+fn history_midpoint(b: &HistoryBlock) -> i64 {
+    b.start + (b.end - b.start) / 2
+}
+
+/// The longest block of each local day, keyed by `day_key`. Selection-independent, so a nap drops out
+/// without asking the main-night pick which block won.
+fn longest_by_day(history: &[HistoryBlock]) -> std::collections::HashMap<&str, &HistoryBlock> {
+    let mut out: std::collections::HashMap<&str, &HistoryBlock> = std::collections::HashMap::new();
     for b in history {
-        let better = match longest_by_day.get(b.day_key.as_str()) {
+        let better = match out.get(b.day_key.as_str()) {
             None => true,
             Some(cur) => {
                 let (bd, cd) = (b.end - b.start, cur.end - cur.start);
@@ -324,17 +335,54 @@ pub fn habitual_midsleep_sec(history: &[HistoryBlock], offset_s: i64, min_days: 
             }
         };
         if better {
-            longest_by_day.insert(b.day_key.as_str(), b);
+            out.insert(b.day_key.as_str(), b);
         }
     }
-    if longest_by_day.len() < min_days {
+    out
+}
+
+/// The user's habitual midsleep (local time-of-day seconds), or `None` on too little history. The circular
+/// mean of the midpoint time-of-day of the longest block per local day (selection-independent).
+pub fn habitual_midsleep_sec(history: &[HistoryBlock], offset_s: i64, min_days: usize) -> Option<i64> {
+    let longest = longest_by_day(history);
+    if longest.len() < min_days {
         return None;
     }
-    let mid_secs: Vec<i64> = longest_by_day
-        .values()
-        .map(|b| local_sec_of_day(b.start + (b.end - b.start) / 2, offset_s))
-        .collect();
+    let mid_secs: Vec<i64> =
+        longest.values().map(|b| local_sec_of_day(history_midpoint(b), offset_s)).collect();
     circular_mean_sec(&mid_secs)
+}
+
+/// The habitual midsleep as it MOVES: one entry per local day in `history`, ascending, each the circular
+/// mean over the trailing `window_days` calendar days ending on that day. `None` where the window holds
+/// fewer than `min_days` days, so the consistency band leaves a gap rather than inventing a value.
+pub fn habitual_midsleep_series(
+    history: &[HistoryBlock],
+    offset_s: i64,
+    min_days: usize,
+    window_days: usize,
+) -> Vec<(String, Option<i64>)> {
+    let longest = longest_by_day(history);
+    let mut days: Vec<(i64, &str, i64)> = longest
+        .iter()
+        .map(|(k, b)| {
+            let mid = history_midpoint(b);
+            (local_day_index(mid, offset_s), *k, local_sec_of_day(mid, offset_s))
+        })
+        .collect();
+    days.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+    let span = window_days.max(1) as i64;
+    let mut out = Vec::with_capacity(days.len());
+    let mut lo = 0usize;
+    for (i, day) in days.iter().enumerate() {
+        while days[lo].0 <= day.0 - span {
+            lo += 1;
+        }
+        let mids: Vec<i64> = days[lo..=i].iter().map(|d| d.2).collect();
+        let mean = if mids.len() < min_days { None } else { circular_mean_sec(&mids) };
+        out.push((day.1.to_string(), mean));
+    }
+    out
 }
 
 /// Circular mean of times-of-day (seconds) via the mean unit vector. `None` when the resultant is degenerate.
@@ -609,5 +657,98 @@ mod tests {
             anti.push(HistoryBlock { start: onset, end: onset + 7 * 3600, day_key: format!("a{d}") });
         }
         assert_eq!(habitual_midsleep_sec(&anti, 0, HABITUAL_MIN_DAYS), None); // antipodal -> cold-start fallback
+    }
+
+    /// One 7 h night per day `d`, its onset shifted by `skew_sec` off 23:00 the evening before.
+    fn nightly(days: std::ops::Range<i64>, skew_sec: impl Fn(i64) -> i64) -> Vec<HistoryBlock> {
+        days.map(|d| {
+            let onset = at_hour(23) - 86_400 + d * 86_400 + skew_sec(d);
+            HistoryBlock { start: onset, end: onset + 7 * 3600, day_key: format!("n{d:02}") }
+        })
+        .collect()
+    }
+
+    fn defined(series: &[(String, Option<i64>)]) -> Vec<i64> {
+        series.iter().filter_map(|(_, v)| *v).collect()
+    }
+
+    #[test]
+    fn habitual_series_holds_still_for_a_stable_sleeper() {
+        let hist = nightly(0..40, |_| 0);
+        let series = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        assert_eq!(series.len(), 40);
+        assert!(series[..HABITUAL_MIN_DAYS - 1].iter().all(|(_, v)| v.is_none())); // cold start
+        let vals = defined(&series);
+        assert_eq!(vals.len(), 40 - (HABITUAL_MIN_DAYS - 1));
+        assert!(vals.iter().all(|&v| (v - sod(2, 30)).abs() <= 1), "an unchanging habit must not drift");
+    }
+
+    #[test]
+    fn habitual_series_is_none_under_the_day_floor() {
+        let series = habitual_midsleep_series(&nightly(0..10, |_| 0), 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        assert_eq!(series.len(), 10);
+        assert!(series.iter().all(|(_, v)| v.is_none()));
+        assert!(habitual_midsleep_series(&[], 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS).is_empty());
+    }
+
+    /// The slack between the window span and the day floor is what keeps a few unworn nights from
+    /// blanking the band: the same history under a window equal to the floor loses days it holds here.
+    #[test]
+    fn habitual_series_survives_a_few_unworn_nights() {
+        let hist: Vec<HistoryBlock> =
+            nightly(0..40, |_| 0).into_iter().enumerate().filter(|(d, _)| !(20..24).contains(d)).map(|(_, b)| b).collect();
+        assert_eq!(hist.len(), 36);
+        let series = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        assert!(series.last().expect("36 days in").1.is_some());
+        let tight = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_MIN_DAYS);
+        assert!(defined(&tight).len() < defined(&series).len());
+    }
+
+    #[test]
+    fn habitual_series_drifts_with_a_walking_bedtime() {
+        const DAYS: i64 = 30;
+        const STEP_SEC: i64 = 2 * 3600 / DAYS; // 2 h of walk spread across the month
+        let series =
+            habitual_midsleep_series(&nightly(0..DAYS, |d| d * STEP_SEC), 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        let vals = defined(&series);
+        assert!(vals.windows(2).all(|w| w[1] >= w[0]), "a one-way walk must never reverse");
+        assert!(vals[vals.len() - 1] - vals[0] > 30 * 60, "the trailing mean must carry the walk");
+        // Slightly: no one night moves the window mean by more than a few minutes.
+        assert!(vals.windows(2).all(|w| w[1] - w[0] <= 5 * 60));
+    }
+
+    /// A habit that walks THROUGH midnight: the series must stay circular, so consecutive days differ by
+    /// minutes even where the raw seconds wrap from 23:5x to 00:0x.
+    #[test]
+    fn habitual_series_crossing_midnight_never_jumps_a_day() {
+        const DAYS: i64 = 30;
+        let hist: Vec<HistoryBlock> = (0..DAYS)
+            .map(|d| {
+                let mid = at_min(23, 30) - 86_400 + d * 86_400 + d * 240;
+                HistoryBlock {
+                    start: mid - 3 * 3600 - 1800,
+                    end: mid + 3 * 3600 + 1800,
+                    day_key: format!("n{d:02}"),
+                }
+            })
+            .collect();
+        let vals = defined(&habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS));
+        assert!(vals.windows(2).all(|w| circular_distance_sec(w[1], w[0]) <= 5 * 60), "no 24 h jump");
+        assert!(vals.windows(2).any(|w| (w[1] - w[0]).abs() > 12 * 3600), "the window must actually wrap");
+    }
+
+    #[test]
+    fn habitual_series_last_day_matches_the_scalar_over_the_same_window() {
+        let hist = nightly(0..40, |d| (d % 5) * 900);
+        let series = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        let last = hist.iter().map(|b| local_day_index(history_midpoint(b), 0)).max().expect("40 days in");
+        let tail: Vec<HistoryBlock> = hist
+            .iter()
+            .filter(|b| local_day_index(history_midpoint(b), 0) > last - HABITUAL_WINDOW_DAYS as i64)
+            .cloned()
+            .collect();
+        let scalar = habitual_midsleep_sec(&tail, 0, HABITUAL_MIN_DAYS);
+        assert!(scalar.is_some());
+        assert_eq!(series.last().expect("40 days in").1, scalar);
     }
 }

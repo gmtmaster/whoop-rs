@@ -101,6 +101,33 @@ pub fn habitual_midsleep_sec(history: Vec<SleepHistoryBlock>, offset_s: i64, min
     sleep::habitual_midsleep_sec(&h, offset_s, min_days as usize)
 }
 
+/// One local day of the habitual-midsleep series; `midsleep_sec` is None where the trailing window holds
+/// fewer than the day floor.
+#[derive(uniffi::Record)]
+pub struct HabitualMidsleepDay {
+    pub day: String,
+    pub midsleep_sec: Option<i64>,
+}
+
+/// The habitual midsleep PER DAY over a trailing `window_days` window, ascending, so the consistency
+/// band bends with the habit instead of sitting flat. A day whose window is too thin carries None.
+#[uniffi::export]
+pub fn habitual_midsleep_series(
+    history: Vec<SleepHistoryBlock>,
+    offset_s: i64,
+    min_days: u32,
+    window_days: u32,
+) -> Vec<HabitualMidsleepDay> {
+    let h: Vec<sleep::HistoryBlock> = history
+        .into_iter()
+        .map(|b| sleep::HistoryBlock { start: b.start, end: b.end, day_key: b.day_key })
+        .collect();
+    sleep::habitual_midsleep_series(&h, offset_s, min_days as usize, window_days as usize)
+        .into_iter()
+        .map(|(day, midsleep_sec)| HabitualMidsleepDay { day, midsleep_sec })
+        .collect()
+}
+
 /// Stage one already-detected in-bed span with the V2 recipe + motion-aware wake refinement (the
 /// single-span edit self-heal path). Per-30 s-epoch stage segments over `[start, end]`.
 #[uniffi::export]

@@ -38,10 +38,11 @@ pub use refine::{
     RefineParams, MIN_DENSE_FRACTION,
 };
 pub use mainnight::{
-    bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, main_night_group_indices,
-    main_night_group_indices_scored, main_night_index, main_night_index_scored, main_night_selection,
-    main_night_selection_scored, BridgedNightGroup, HistoryBlock, MainNightReason, MainNightSelection, NightBlock,
-    ScoredNightBlock, HABITUAL_MIN_DAYS, OVERNIGHT_END_HOUR, OVERNIGHT_START_HOUR,
+    bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, habitual_midsleep_series,
+    main_night_group_indices, main_night_group_indices_scored, main_night_index, main_night_index_scored,
+    main_night_selection, main_night_selection_scored, BridgedNightGroup, HistoryBlock, MainNightReason,
+    MainNightSelection, NightBlock, ScoredNightBlock, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS,
+    OVERNIGHT_END_HOUR, OVERNIGHT_START_HOUR,
 };
 
 /// The stream bundle for one detection window: raw per-sample signals plus the wrist-off intervals, band
