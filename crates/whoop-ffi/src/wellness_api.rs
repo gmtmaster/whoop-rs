@@ -20,22 +20,47 @@ pub fn daily_stress(today: StressDayInfo, baseline: Vec<StressDayInfo>) -> Optio
 
 // ── Windowed stress (intraday + overnight autonomic activation) ────────────
 
-/// One hour's aggregates: local `hour` (0–23), mean HR (None below the sample gate) and RMSSD (None on
-/// insufficient clean R-R).
+/// One bucket's aggregates: epoch-ms start, local `hour` (0–23), mean HR (None below the sample gate),
+/// RMSSD (None on insufficient clean R-R) and the bucket's mean dynamic accel in g (None when absent).
 #[derive(uniffi::Record)]
 pub struct HourPointInfo {
     pub hour: i32,
     pub mean_hr: Option<f64>,
     pub rmssd: Option<f64>,
+    pub start_ms: i64,
+    pub motion_g: Option<f64>,
 }
 
-/// One scored waking hour.
+/// One scored bucket.
 #[derive(uniffi::Record)]
 pub struct ScoredHourInfo {
     pub hour: i32,
     pub mean_hr: f64,
     pub rmssd: Option<f64>,
     pub stress: f64,
+    pub start_ms: i64,
+}
+
+/// A `[start, end)` sleep or nap span in epoch ms.
+#[derive(uniffi::Record)]
+pub struct SleepSpanMsInfo {
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+/// Why a bucket was held out of the score — a known state the caller can word, not a gap.
+#[derive(uniffi::Enum, Clone, Copy, PartialEq, Eq)]
+pub enum SuppressionInfo {
+    Active,
+    Asleep,
+}
+
+/// One bucket excluded from both the score and its calm reference.
+#[derive(uniffi::Record)]
+pub struct SuppressedBucketInfo {
+    pub start_ms: i64,
+    pub hour: i32,
+    pub suppression: SuppressionInfo,
 }
 
 /// One scored window set — a day or a night, since both derive from one formula: the per-bucket
@@ -52,6 +77,17 @@ pub struct WindowedStressInfo {
     pub medium_minutes: i64,
     pub high_minutes: i64,
     pub high_share_pct: Option<f64>,
+    pub peak_start_ms: Option<i64>,
+    pub suppressed: Vec<SuppressedBucketInfo>,
+}
+
+impl From<stress::Suppression> for SuppressionInfo {
+    fn from(s: stress::Suppression) -> Self {
+        match s {
+            stress::Suppression::Active => SuppressionInfo::Active,
+            stress::Suppression::Asleep => SuppressionInfo::Asleep,
+        }
+    }
 }
 
 impl From<stress::StressWindows> for WindowedStressInfo {
@@ -59,6 +95,14 @@ impl From<stress::StressWindows> for WindowedStressInfo {
         WindowedStressInfo {
             day_mean: r.mean,
             peak_hour: r.peak_hour,
+            peak_start_ms: r.peak_start_ms,
+            suppressed: r
+                .suppressed
+                .iter()
+                .map(|s| SuppressedBucketInfo {
+                    start_ms: s.start_ms, hour: s.hour, suppression: s.suppression.into(),
+                })
+                .collect(),
             sustained_high: r.sustained_high,
             sustained_run: r.sustained_run as u32,
             low_minutes: r.low_minutes,
@@ -68,7 +112,10 @@ impl From<stress::StressWindows> for WindowedStressInfo {
             hours: r
                 .buckets
                 .into_iter()
-                .map(|s| ScoredHourInfo { hour: s.hour, mean_hr: s.mean_hr, rmssd: s.rmssd, stress: s.stress })
+                .map(|s| ScoredHourInfo {
+                    hour: s.hour, mean_hr: s.mean_hr, rmssd: s.rmssd, stress: s.stress,
+                    start_ms: s.start_ms,
+                })
                 .collect(),
         }
     }
@@ -77,15 +124,24 @@ impl From<stress::StressWindows> for WindowedStressInfo {
 fn to_points(hours: Vec<HourPointInfo>) -> Vec<stress::HourPoint> {
     hours
         .into_iter()
-        .map(|p| stress::HourPoint { hour: p.hour, mean_hr: p.mean_hr, rmssd: p.rmssd })
+        .map(|p| stress::HourPoint {
+            start_ms: p.start_ms, hour: p.hour, mean_hr: p.mean_hr, rmssd: p.rmssd,
+            motion_g: p.motion_g,
+        })
         .collect()
 }
 
-/// Score waking hours for autonomic activation against the day's own calm-hour quartiles (Q25 HR, Q75
-/// RMSSD). Each hour needs its own HR gate applied by the caller (a `None` mean_hr hour is skipped).
+/// Score waking buckets for autonomic activation against the day's own calm quartiles (Q25 HR, Q75
+/// RMSSD). Buckets overlapping `sleep_spans`, and buckets over the motion gate, are dropped BEFORE
+/// that reference is built and returned in `suppressed` instead. Each bucket needs its own HR gate
+/// applied by the caller (a `None` mean_hr bucket is skipped).
 #[uniffi::export]
-pub fn daytime_stress(hours: Vec<HourPointInfo>) -> WindowedStressInfo {
-    stress::daytime_stress(&to_points(hours)).into()
+pub fn daytime_stress(hours: Vec<HourPointInfo>, sleep_spans: Vec<SleepSpanMsInfo>) -> WindowedStressInfo {
+    let spans: Vec<stress::SpanMs> = sleep_spans
+        .into_iter()
+        .map(|s| stress::SpanMs { start_ms: s.start_ms, end_ms: s.end_ms })
+        .collect();
+    stress::daytime_stress(&to_points(hours), &spans).into()
 }
 
 /// Score one sleep window's buckets on the same formula and the same 0–3 bands. No hour-of-day filter
@@ -304,4 +360,78 @@ pub fn series_pearson(xs: Vec<f64>, ys: Vec<f64>) -> Option<f64> {
 #[uniffi::export]
 pub fn z_score(value: f64, mean: f64, spread: f64) -> f64 {
     recovery::z_score(value, mean, spread)
+}
+
+/// Which way a series moved once its interval is accounted for. `Flat` means the interval straddles
+/// zero, so the direction is not separable from noise — it is not "no movement".
+#[derive(uniffi::Enum)]
+pub enum TrendDirectionInfo {
+    Rising,
+    Falling,
+    Flat,
+}
+
+/// A weighted linear trend over day offsets carrying its own uncertainty, so no caller picks a slope
+/// threshold. `slope` is per day; `startValue`/`endValue` are FITTED, not observed.
+#[derive(uniffi::Record)]
+pub struct TrendlineInfo {
+    pub slope: f64,
+    pub intercept: f64,
+    pub slope_se: f64,
+    pub slope_ci_lo: f64,
+    pub slope_ci_hi: f64,
+    pub start_day: f64,
+    pub end_day: f64,
+    pub start_value: f64,
+    pub end_value: f64,
+    pub total_change: f64,
+    pub total_change_ci_lo: f64,
+    pub total_change_ci_hi: f64,
+    pub slope_z: f64,
+    pub significance: f64,
+    pub direction: TrendDirectionInfo,
+    pub n: u32,
+}
+
+/// Weighted trendline of `values` over `days` (day offsets, not sample index) across a `window_days`-wide
+/// request, with a residual-based 80 % interval. `weights` may be empty for unit weights.
+/// `None` under three finite points, under the window's minimum span, or with no weighted x-spread.
+#[uniffi::export]
+pub fn series_trendline(
+    days: Vec<f64>,
+    values: Vec<f64>,
+    weights: Vec<f64>,
+    window_days: f64,
+) -> Option<TrendlineInfo> {
+    let min_span = physio_algo::stats::trend_min_span_days(window_days);
+    let t = physio_algo::stats::weighted_trendline(&days, &values, &weights, min_span)?;
+    Some(TrendlineInfo {
+        slope: t.slope,
+        intercept: t.intercept,
+        slope_se: t.slope_se,
+        slope_ci_lo: t.slope_ci_lo,
+        slope_ci_hi: t.slope_ci_hi,
+        start_day: t.start_day,
+        end_day: t.end_day,
+        start_value: t.start_value,
+        end_value: t.end_value,
+        total_change: t.total_change,
+        total_change_ci_lo: t.total_change_ci_lo,
+        total_change_ci_hi: t.total_change_ci_hi,
+        slope_z: t.slope_z,
+        significance: t.significance,
+        direction: match t.direction {
+            physio_algo::stats::TrendDirection::Rising => TrendDirectionInfo::Rising,
+            physio_algo::stats::TrendDirection::Falling => TrendDirectionInfo::Falling,
+            physio_algo::stats::TrendDirection::Flat => TrendDirectionInfo::Flat,
+        },
+        n: t.n as u32,
+    })
+}
+
+/// Second-half mean minus first-half mean of a series, the odd point going to the recent half. `None`
+/// under four points — the window-change number a trend chip shows.
+#[uniffi::export]
+pub fn series_half_change(values: Vec<f64>) -> Option<f64> {
+    physio_algo::stats::half_change(&values)
 }
