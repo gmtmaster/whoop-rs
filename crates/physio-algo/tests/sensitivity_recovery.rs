@@ -2074,6 +2074,12 @@ fn baselines_shipped_test_count() -> usize {
 /// the gate: `each_channel_can_reject_alone` (:383) is the only test that pins `MIN_SLEEP_SECS` downward
 /// and `WORN_SKIN_TEMP_C.1` upward, and `rejected_night_skip_and_holds` (:374) the only one that pins
 /// fold order.
+///
+/// The negated comparisons below are deliberate and must not be "simplified". `!(x < GATE)` is TRUE
+/// for NaN, so a mutation that produces NaN fails this gate, which is the behaviour a negative
+/// control needs. `x >= GATE` is FALSE for NaN, so the same mutation would slip through and the arm
+/// would silently stop discriminating.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn base_gate_holds(a: &BaseArm) -> bool {
     // :291 cold_start_seeds_first_valid_value
     let s = update_with(&a.p, None, Some(30.0), &a.cfg);

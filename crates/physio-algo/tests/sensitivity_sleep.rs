@@ -184,7 +184,7 @@ impl Table {
         println!();
         println!("=== {} ===", self.metric);
         println!("shipped gate: {}", self.gate);
-        println!("{:<62} {:>11} {:>11}  {:<5}  {}", "arm", "value", "delta", "gate", "verdict");
+        println!("{:<62} {:>11} {:>11}  {:<5}  verdict", "arm", "value", "delta", "gate");
         for r in &self.rows {
             let delta = r.value - base;
             let verdict = match (r.kind, r.pass) {
@@ -418,13 +418,13 @@ fn recipe_arms() -> Vec<RecipeArm> {
 // Stage integers are the harness convention: 0 wake, 1 light, 2 deep, 3 rem.
 // ---------------------------------------------------------------------------------------------
 
-fn out_all_light(p: &mut Vec<i32>) {
+fn out_all_light(p: &mut [i32]) {
     p.iter_mut().for_each(|v| *v = 1);
 }
-fn out_shuffle(p: &mut Vec<i32>) {
+fn out_shuffle(p: &mut [i32]) {
     lcg_shuffle(p, 0x5EED_1234);
 }
-fn out_swap_deep_rem(p: &mut Vec<i32>) {
+fn out_swap_deep_rem(p: &mut [i32]) {
     p.iter_mut().for_each(|v| {
         *v = match *v {
             2 => 3,
@@ -433,7 +433,7 @@ fn out_swap_deep_rem(p: &mut Vec<i32>) {
         }
     });
 }
-fn out_swap_wake_light(p: &mut Vec<i32>) {
+fn out_swap_wake_light(p: &mut [i32]) {
     p.iter_mut().for_each(|v| {
         *v = match *v {
             0 => 1,
@@ -442,20 +442,22 @@ fn out_swap_wake_light(p: &mut Vec<i32>) {
         }
     });
 }
-fn out_reverse(p: &mut Vec<i32>) {
+fn out_reverse(p: &mut [i32]) {
     p.reverse();
 }
 
 /// Shift the sequence forward by `n` samples, holding the first value.
-fn shift_by(p: &mut Vec<i32>, n: usize) {
+fn shift_by(p: &mut [i32], n: usize) {
     if p.is_empty() {
         return;
     }
     let head = p[0];
-    for _ in 0..n {
-        p.insert(0, head);
-        p.pop();
-    }
+    // Equivalent to n rounds of "insert the original head at 0, drop the last": the series slides
+    // right by n and the vacated head positions all carry the ORIGINAL first label. Rotating keeps
+    // the length fixed, which is what lets every arm take a slice.
+    let k = n.min(p.len());
+    p.rotate_right(k);
+    p[..k].iter_mut().for_each(|v| *v = head);
 }
 
 /// Blank the last tenth to Light.
@@ -467,17 +469,29 @@ fn drop_tail_tenth(p: &mut [i32]) {
     }
 }
 
-fn out_shift_one_epoch(p: &mut Vec<i32>) {
+fn out_shift_one_epoch(p: &mut [i32]) {
     shift_by(p, 1);
 }
-fn out_drop_tail(p: &mut Vec<i32>) {
+fn out_drop_tail(p: &mut [i32]) {
     drop_tail_tenth(p);
 }
 
+/// One output arm: its label, its kind, and the mutation it applies to the stage series.
+type OutputArm = (&'static str, Kind, fn(&mut [i32]));
+
+/// The same arm shape when the mutation has to be boxed (per-second goldens build theirs at runtime).
+type BoxedArm<'a> = (&'a str, Kind, Box<dyn Fn(&mut [i32])>);
+
+/// One PARAMETER knob on a params struct: its label, a scaler, and a reader for the current value.
+type Knob<P> = (&'static str, fn(&mut P, f64), fn(&P) -> f64);
+
+/// A knob reached only through the INPUT, when the real constant is private: label plus scaler.
+type Proxy = (&'static str, fn(&mut RestInput, f64));
+
 /// The epoch-indexed NULL and STRUCTURAL arms every hypnogram gate is driven with.
-fn output_arms() -> Vec<(&'static str, Kind, fn(&mut Vec<i32>))> {
+fn output_arms() -> Vec<OutputArm> {
     vec![
-        ("output: every epoch = Light", Kind::Null, out_all_light as fn(&mut Vec<i32>)),
+        ("output: every epoch = Light", Kind::Null, out_all_light as fn(&mut [i32])),
         ("output: labels shuffled in place", Kind::Null, out_shuffle),
         ("output: Deep <-> REM swapped", Kind::Structural, out_swap_deep_rem),
         ("output: Wake <-> Light swapped", Kind::Structural, out_swap_wake_light),
@@ -1014,8 +1028,7 @@ fn sensitivity_frozen_golden_hypnogram() {
     );
 
     // The golden is pinned per SECOND here, so an epoch shift is 30 samples, not 1.
-    let mut second_arms: Vec<(&str, Kind, Box<dyn Fn(&mut Vec<i32>)>)> = Vec::new();
-    second_arms.push(("output: every second = Light", Kind::Null, Box::new(out_all_light)));
+    let mut second_arms: Vec<BoxedArm> = vec![("output: every second = Light", Kind::Null, Box::new(out_all_light))];
     second_arms.push(("output: labels shuffled in place", Kind::Null, Box::new(out_shuffle)));
     second_arms.push(("output: Deep <-> REM swapped", Kind::Structural, Box::new(out_swap_deep_rem)));
     second_arms.push(("output: Wake <-> Light swapped", Kind::Structural, Box::new(out_swap_wake_light)));
@@ -1132,7 +1145,7 @@ fn sensitivity_in_bed_detection() {
     t.push("input: 25-min gravity hole (proxy for MAX_GAP_MIN, a bare const)", Kind::Structural, o.seconds as f64, detect_gate(&o));
 
     // PARAMETER arms — DetectParams is public with public fields, so these are the real knobs.
-    let dknobs: Vec<(&str, fn(&mut DetectParams, f64), fn(&DetectParams) -> f64)> = vec![
+    let dknobs: Vec<Knob<DetectParams>> = vec![
         ("still_enter", |p, k| p.still_enter *= k, |p| p.still_enter),
         ("still_exit", |p, k| p.still_exit *= k, |p| p.still_exit),
         ("min_sleep_min", |p, k| p.min_sleep_min = (p.min_sleep_min as f64 * k).round() as i64, |p| p.min_sleep_min as f64),
@@ -1255,7 +1268,7 @@ fn sensitivity_wake_refinement() {
     t.push("input: step stream thinned to 33% (proxy for MIN_DENSE_FRACTION)", Kind::Structural, v as f64, pass(v));
 
     // PARAMETER arms — RefineParams is public with public fields.
-    let rknobs: Vec<(&str, fn(&mut RefineParams, f64), fn(&RefineParams) -> f64)> = vec![
+    let rknobs: Vec<Knob<RefineParams>> = vec![
         (
             "min_wake_segment_seconds",
             |p, k| p.min_wake_segment_seconds = (p.min_wake_segment_seconds as f64 * k).round() as i64,
@@ -1527,7 +1540,7 @@ fn sensitivity_rest_composite() {
     }
     let s = RestInput { consistency: None, ..RestInput::perfect() };
     t.push("param: consistency absent (proxy for NEUTRAL_CONSISTENCY)", Kind::Parameter, s.score(), pass(s.score()));
-    let proxies: Vec<(&str, fn(&mut RestInput, f64))> = vec![
+    let proxies: Vec<Proxy> = vec![
         ("asleep_seconds (proxy W_DURATION)", |s, k| s.asleep_s *= k),
         ("efficiency (proxy W_EFFICIENCY)", |s, k| s.efficiency = (s.efficiency * k).min(1.0)),
         ("deep+REM seconds (proxy W_RESTORATIVE)", |s, k| {
@@ -1947,7 +1960,7 @@ fn sensitivity_nap_verdicts() {
     }
 
     // PARAMETER arms — NapConfig is the algorithm's own params struct.
-    let cknobs: Vec<(&str, fn(&mut NapConfig, f64), fn(&NapConfig) -> f64)> = vec![
+    let cknobs: Vec<Knob<NapConfig>> = vec![
         ("min_nap_minutes", |c, k| c.min_nap_minutes = (c.min_nap_minutes as f64 * k).round() as i32, |c| c.min_nap_minutes as f64),
         ("max_nap_minutes", |c, k| c.max_nap_minutes = (c.max_nap_minutes as f64 * k).round() as i32, |c| c.max_nap_minutes as f64),
         ("still_threshold_g", |c, k| c.still_threshold_g *= k, |c| c.still_threshold_g),
@@ -2149,7 +2162,7 @@ fn sensitivity_sleep_error_propagation() {
 
     // PARAMETER arms. The recovery weights (W_HRV, W_SLEEP, ...), LOGISTIC_K/Z0, SLEEP_PERF_CENTER and
     // the Rest weights are all `pub const` with no injection point; these are the caller-supplied ones.
-    let ck: Vec<(&str, fn(&mut ChainKnobs, f64), fn(&ChainKnobs) -> f64)> = vec![
+    let ck: Vec<Knob<ChainKnobs>> = vec![
         ("sleep_need_hours", |c, k| c.need_h *= k, |c| c.need_h),
         ("rhr", |c, k| c.rhr *= k, |c| c.rhr),
         ("hrv_baseline.mean", |c, k| c.hrv_mean *= k, |c| c.hrv_mean),
