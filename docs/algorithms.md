@@ -104,9 +104,13 @@ resp_reg  = R-R tachogram -> 4 Hz resample -> detrend -> DFT peak/sum over 0.15-
 cycle prior: deep decays to 0 after 55% of night; rem suppressed in first 12%
 Viterbi 4-state, sticky self-transitions (deep 0.76, rem 0.92, light 0.80, wake 0.90)
 ```
-Validated on DREAMT n=100 (kappa 0.311, at the wrist-optical ceiling), AAUWSS (0.412), and sleep-accel /
-Walch (0.379). Those three are the numbers `tests/dataset_parity.rs` asserts, and the status table below
-quotes the same three; a frozen golden hypnogram test pins the tuned constants.
+Validated on DREAMT n=100 (**4-class** kappa **0.312**, at the wrist-optical ceiling), AAUWSS (**0.412**,
+n=13) and sleep-accel / Walch (**0.379**, n=31), all re-measured 2026-08-02 on `fixtures_multi_clean2`.
+Every kappa in this doc is 4-class over Wake/Light/Deep/Rem; the 3-class DREAMT figure is a different
+measurement (0.3657) and is not comparable to any of them. `tests/dataset_parity.rs` asserts these three
+against constants 0.311 / 0.412 / 0.379 at ±0.008, so DREAMT's measured 0.312 sits 0.001 from its
+constant and the constant was left unchanged. The status table below quotes the same three; a frozen golden
+hypnogram test pins the tuned constants.
 
 **Motion-aware wake refinement** (`sleep/refine.rs`): a wake segment >= 5 min at the night motion floor with
 stable posture and no locomotion demotes its non-burst minutes to light.
@@ -177,6 +181,22 @@ resting HR = min of the per-session floors.
 
 `respiratory_rate.rs`. R-R tachogram -> 4 Hz resample -> 8 s detrend -> per 5-min window peak-pick the
 breathing modulation -> median rate. Plausible band 8-25 bpm, else `None`.
+
+Measured on the one real 4.0 offload (5.91 days, 3 nights,
+`whoop-data/own-data/strap-data/mine/noop-debug-db-20260731`): 14.1 / 14.1 / 13.3 bpm per night, hourly
+sub-windows 12-15 bpm, and 14.1 / 13.3 / 13.7 when repeated beats are dropped first, so beat duplication
+moves it by under 1 bpm. First evidence the RSA path works on 4.0 hardware, not only on 5.0/MG.
+
+**The 4.0 v24 register decoded as `resp_raw` (`gen4.rs`, inner u16 @76) is NOT respiration, and nothing
+reads it.** Over 195,744 consecutive 1 Hz samples from that offload it takes 3 values: 3073 (99.0 %),
+2817, 1793. The low byte is constant `0x01` in every sample and in the pinned real frame, so the 16-bit
+magnitude is an artefact of packing a tag byte with a status byte; the only variation is the high byte
+stepping 12 -> 11 (or -> 7 before 2026-07-27 00:50) for 27-29 s once every 1155 s exactly, and only on
+nights the strap was worn. A 1 Hz breathing signal cannot be flat for 19 minutes at a time. Structurally
+v24 sits +3 bytes from v18 for HR (17 vs 14), R-R (18/19 vs 15/16) and skin temp (68 vs 65), so @76/@77
+align with v18 @73/@74 = `sleep_state_raw` and the tri-mode sleep-only SpO2/status byte, and both real
+frames carry the same literal `01 0c 02 0c` block there. Do not re-investigate it as a respiration
+channel; the name is the only thing respiratory about it.
 
 ## 6. Effort / Strain  ·  FFI `strain_score`, `strain_default_denominator`
 
@@ -359,7 +379,7 @@ direction. In the other, **17 Kotlin engines still carry maths of their own**, l
 
 | Algorithm | Evidence |
 |---|---|
-| Sleep detection + staging (V2) | Cohen's κ against PSG: **0.311** DREAMT (100 subjects), **0.412** AAUWSS, **0.379** sleep-accel. Those three are asserted by `tests/dataset_parity.rs`. Against our own stored hypnograms, which is a consistency read and not accuracy — the truth column is our own past output — the `--ignored` sheet prints 0.533 killa5 (13), 0.483 strap (46), 0.599 whoop4 (20); those three are printed, not asserted, and were measured on `fixtures_multi_clean2` on 2026-07-31. A re-tune was attempted and **rejected**: it gained 0.044 on the fitting set and lost up to 0.372 on held-out sets |
+| Sleep detection + staging (V2) | Cohen's **4-class** κ against PSG, re-measured 2026-08-02: **0.312** DREAMT (100 subjects), **0.412** AAUWSS (13), **0.379** sleep-accel (31). Those three are asserted by `tests/dataset_parity.rs` against constants 0.311 / 0.412 / 0.379 at ±0.008. The 3-class DREAMT figure is a different measurement (0.3657) and is not comparable. Against our own stored hypnograms, which is a consistency read and not accuracy — the truth column is our own past output — the `--ignored` sheet prints 0.533 killa5 (13), 0.483 strap (46), 0.599 whoop4 (20); those three are printed, not asserted, and were reproduced unchanged on `fixtures_multi_clean2` on 2026-08-02. They are CIRCULAR by construction, so they are not evidence of accuracy. A re-tune was attempted and **rejected**: it gained 0.044 on the fitting set and lost up to 0.372 on held-out sets |
 
 ### ✅ Parity-tested — pinned to the previous implementation
 
