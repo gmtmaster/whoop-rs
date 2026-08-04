@@ -1,6 +1,6 @@
 //! HR-based calorie estimation: Keytel 2005 active energy + revised Harris-Benedict BMR.
-//! Per-bout and whole-day paths share the same per-second model but differ in how they weight
-//! inter-sample gaps (elapsed-time vs flat one-second). APPROXIMATE, not laboratory calorimetry.
+//! One per-second model behind both paths. A second whose motion the workout detector confirmed faces
+//! the ACTIVITY gate; one with no motion evidence faces the TRUST gate. APPROXIMATE, not calorimetry.
 
 /// Sex-specific BMR + active-EE coefficients.
 #[derive(Clone, Copy, Debug)]
@@ -34,15 +34,19 @@ pub const NONBINARY: Coeffs = Coeffs {
     workout_age: 0.13785, workout_alpha: -37.74955,
 };
 
-/// HR-fraction gate for the bout path: active rate applies above resting + this fraction × HRR.
-pub const ACTIVE_HRR_FRACTION: f64 = 0.30;
-/// HR-fraction gate for the day path: higher (50 %) so ordinary low-intensity HR stays on resting BMR.
-pub const DAY_ACTIVE_HRR_FRACTION: f64 = 0.50;
+/// The ACTIVITY question — "is this second work?" — asked only where motion is already confirmed, so
+/// Keytel is applied to the steady-state dynamic exercise it was regressed on. 0.30 HRR is the
+/// light/moderate boundary.
+pub const ACTIVITY_HRR_FRACTION: f64 = 0.30;
+/// The TRUST question — "how high must an HR run before an unconfirmed second is believed to be work?"
+/// A different question from [ACTIVITY_HRR_FRACTION], never a second copy of it: its input carries no
+/// motion evidence, so caffeine, stress, posture and PPG artifact all reach it. UNSOURCED value.
+pub const TRUST_HRR_FRACTION: f64 = 0.50;
 /// 60 s/min × 4.184 kJ/kcal.
 pub const WORKOUT_DIVISOR: f64 = 251.04;
-/// Max inter-sample gap credited in the bout path; the workout detector merges runs on the same gap.
+/// Max inter-sample gap credited inside a bout; the workout detector merges runs on the same gap.
 pub const MERGE_GAP_S: f64 = 150.0;
-/// Max inter-sample gap credited in the day path. Wider than [MERGE_GAP_S] because an ordinary day has
+/// Max inter-sample gap credited outside one. Wider than [MERGE_GAP_S] because an ordinary day has
 /// legitimate sparse stretches, but bounded so a wear gap is not billed as resting metabolism.
 pub const DAY_GAP_CAP_S: f64 = 300.0;
 
@@ -72,9 +76,63 @@ pub fn active_kcal_per_s(c: &Coeffs, hr: f64, hrmax: f64, weight_kg: f64, age: f
 
 pub use crate::hr_sample::HrSample;
 
-/// Estimate (kcal, kJ) for a workout bout. Each sample is weighted by the elapsed time to the next
-/// sample (capped at [MERGE_GAP_S]), so sparse streams are counted over real seconds. An active sample
-/// is floored at the resting rate, so a bout can never burn less than lying still for the same span.
+/// A day's energy split. `total_kcal` is what the model bills, `resting_kcal` the Harris-Benedict floor
+/// over the same credited seconds, and `active_kcal` the excess over lying still — the only one of the
+/// three comparable to a phone's "active energy", which excludes BMR.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DayCalories {
+    pub total_kcal: f64,
+    pub resting_kcal: f64,
+    pub active_kcal: f64,
+}
+
+/// Bill one time-ordered HR series. Each sample is weighted by the elapsed seconds to the next, capped
+/// by its own rule, and billed at Keytel above its own HRR gate, floored at the resting rate. `rule`
+/// maps a sample's timestamp to its `(hrr_fraction, gap_cap_s)`. Returns `(kcal, credited seconds)`.
+#[allow(clippy::too_many_arguments)]
+fn bill<F: Fn(i64) -> (f64, f64)>(
+    ordered: &[&HrSample],
+    coeffs: &Coeffs,
+    weight_kg: f64,
+    age: f64,
+    hrmax: f64,
+    resting_hr: f64,
+    resting_rate: f64,
+    rule: F,
+) -> (f64, f64) {
+    let hr_reserve = (hrmax - resting_hr).max(1.0);
+    let (mut kcal, mut secs) = (0.0, 0.0);
+    for (i, s) in ordered.iter().enumerate() {
+        let (fraction, gap_cap) = rule(s.ts);
+        let dur = match ordered.get(i + 1) {
+            Some(next) => {
+                let gap = (next.ts - s.ts) as f64;
+                if gap > 0.0 { gap.min(gap_cap) } else { 1.0 }
+            }
+            None => 1.0,
+        };
+        let bpm = s.bpm as f64;
+        let rate = if bpm < resting_hr + fraction * hr_reserve {
+            resting_rate
+        } else {
+            resting_rate.max(active_kcal_per_s(coeffs, bpm, hrmax, weight_kg, age))
+        };
+        kcal += rate * dur;
+        secs += dur;
+    }
+    (kcal, secs)
+}
+
+/// Time-ordered borrows of `hr_samples`, the order [bill] needs.
+fn ordered(hr_samples: &[HrSample]) -> Vec<&HrSample> {
+    let mut v: Vec<&HrSample> = hr_samples.iter().collect();
+    v.sort_by_key(|s| s.ts);
+    v
+}
+
+/// Estimate (kcal, kJ) for a workout bout — a span the detector already confirmed motion over, so every
+/// second faces the [ACTIVITY_HRR_FRACTION] gate. Samples are weighted by elapsed time (capped at
+/// [MERGE_GAP_S]) and floored at the resting rate, so a bout never burns less than lying still.
 pub fn estimate_bout_calories(
     hr_samples: &[HrSample],
     weight_kg: f64,
@@ -87,74 +145,48 @@ pub fn estimate_bout_calories(
     if hr_samples.is_empty() {
         return (0.0, 0.0);
     }
-
     let coeffs = resolve_coeffs(sex);
-    let hr_reserve = (hrmax - resting_hr).max(1.0);
-    let active_threshold = resting_hr + ACTIVE_HRR_FRACTION * hr_reserve;
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
-
-    let mut ordered: Vec<&HrSample> = hr_samples.iter().collect();
-    ordered.sort_by_key(|s| s.ts);
-
-    let mut total_kcal = 0.0;
-    for i in 0..ordered.len() {
-        let bpm = ordered[i].bpm as f64;
-        let dur: f64 = if i < ordered.len() - 1 {
-            let gap = (ordered[i + 1].ts - ordered[i].ts) as f64;
-            if gap > 0.0 { gap.min(MERGE_GAP_S) } else { 1.0 }
-        } else {
-            1.0
-        };
-        total_kcal += if bpm < active_threshold {
-            resting_rate * dur
-        } else {
-            resting_rate.max(active_kcal_per_s(&coeffs, bpm, hrmax, weight_kg, age)) * dur
-        };
-    }
-    (total_kcal, total_kcal * 4.184)
+    let (kcal, _) = bill(
+        &ordered(hr_samples), &coeffs, weight_kg, age, hrmax, resting_hr, resting_rate,
+        |_| (ACTIVITY_HRR_FRACTION, MERGE_GAP_S),
+    );
+    (kcal, kcal * 4.184)
 }
 
-/// Whole-day energy estimate (kcal) from HR samples. Each sample is credited with the elapsed time to
-/// the next sample, capped at [DAY_GAP_CAP_S] so an off-wrist stretch is not billed in full; the tail
-/// sample gets one second. Uses the [DAY_ACTIVE_HRR_FRACTION] gate.
+/// Whole-day energy from HR samples, split into its resting and active halves.
+///
+/// A second inside one of `confirmed_bouts` (the `[start, end]` spans the workout detector qualified)
+/// is billed exactly as [estimate_bout_calories] bills it — same gate, same gap cap — because motion is
+/// confirmed there. Every other second faces [TRUST_HRR_FRACTION] and [DAY_GAP_CAP_S].
+#[allow(clippy::too_many_arguments)]
 pub fn estimate_day_calories(
     hr_samples: &[HrSample],
+    confirmed_bouts: &[(i64, i64)],
     weight_kg: f64,
     height_cm: f64,
     age: f64,
     sex: &str,
     hrmax: f64,
     resting_hr: f64,
-) -> f64 {
+) -> DayCalories {
     if hr_samples.is_empty() {
-        return 0.0;
+        return DayCalories { total_kcal: 0.0, resting_kcal: 0.0, active_kcal: 0.0 };
     }
-
     let coeffs = resolve_coeffs(sex);
-    let hr_reserve = (hrmax - resting_hr).max(1.0);
-    let active_threshold = resting_hr + DAY_ACTIVE_HRR_FRACTION * hr_reserve;
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
-
-    let mut ordered: Vec<&HrSample> = hr_samples.iter().collect();
-    ordered.sort_by_key(|s| s.ts);
-    let mut total_kcal = 0.0;
-    for (i, s) in ordered.iter().enumerate() {
-        let bpm = s.bpm as f64;
-        let dur = match ordered.get(i + 1) {
-            Some(next) => {
-                let gap = (next.ts - s.ts) as f64;
-                if gap > 0.0 { gap.min(DAY_GAP_CAP_S) } else { 1.0 }
+    let (total_kcal, secs) = bill(
+        &ordered(hr_samples), &coeffs, weight_kg, age, hrmax, resting_hr, resting_rate,
+        |ts| {
+            if confirmed_bouts.iter().any(|&(s, e)| ts >= s && ts <= e) {
+                (ACTIVITY_HRR_FRACTION, MERGE_GAP_S)
+            } else {
+                (TRUST_HRR_FRACTION, DAY_GAP_CAP_S)
             }
-            None => 1.0,
-        };
-        let rate = if bpm < active_threshold {
-            resting_rate
-        } else {
-            resting_rate.max(active_kcal_per_s(&coeffs, bpm, hrmax, weight_kg, age))
-        };
-        total_kcal += rate * dur;
-    }
-    total_kcal
+        },
+    );
+    let resting_kcal = resting_rate * secs;
+    DayCalories { total_kcal, resting_kcal, active_kcal: total_kcal - resting_kcal }
 }
 
 #[cfg(test)]
@@ -169,55 +201,83 @@ mod tests {
         (70.0, 170.0, 30.0, "nonbinary")
     }
 
+    /// The whole series as one confirmed bout, for the fixtures that stand in for a detected workout.
+    fn all_confirmed(hr: &[HrSample]) -> Vec<(i64, i64)> {
+        vec![(hr[0].ts, hr[hr.len() - 1].ts)]
+    }
+
     #[test]
     fn day_calories_empty_is_zero() {
-        assert_eq!(estimate_day_calories(&[], 70.0, 170.0, 30.0, "nonbinary", 190.0, 55.0), 0.0);
+        let d = estimate_day_calories(&[], &[], 70.0, 170.0, 30.0, "nonbinary", 190.0, 55.0);
+        assert_eq!((d.total_kcal, d.resting_kcal, d.active_kcal), (0.0, 0.0, 0.0));
     }
 
-    /// Both activity gates, for the (185 hrmax, 55 resting) profile every calorie test uses.
+    /// Both gates, for the (185 hrmax, 55 resting) profile every calorie test uses.
     fn gates() -> (f64, f64) {
         let reserve = 185.0 - 55.0;
-        (55.0 + ACTIVE_HRR_FRACTION * reserve, 55.0 + DAY_ACTIVE_HRR_FRACTION * reserve)
+        (55.0 + ACTIVITY_HRR_FRACTION * reserve, 55.0 + TRUST_HRR_FRACTION * reserve)
     }
 
-    /// The paths agree ONLY above both gates, where each bills the active rate over the same elapsed
-    /// seconds. Inside the band they must differ — see [bout_and_day_diverge_across_the_light_band].
+    /// Above BOTH gates the two paths agree whether or not a bout was confirmed, because the trust gate
+    /// is already cleared. The weaker of the two agreement claims; the band one below is the real gate.
     #[test]
-    fn day_calories_matches_bout_at_one_hz_above_both_activity_gates() {
+    fn day_calories_matches_bout_at_one_hz_above_both_gates() {
         let profile = (80.0, 180.0, 35.0, "male");
         let bpm = 130;
-        let (bout_gate, day_gate) = gates();
+        let (activity_gate, trust_gate) = gates();
         assert!(
-            (bpm as f64) >= bout_gate && (bpm as f64) >= day_gate,
-            "fixture {bpm} bpm must clear BOTH gates (bout {bout_gate}, day {day_gate}) or this \
-             test proves nothing about agreement"
+            (bpm as f64) >= activity_gate && (bpm as f64) >= trust_gate,
+            "fixture {bpm} bpm must clear BOTH gates (activity {activity_gate}, trust {trust_gate}) or \
+             this test proves nothing about agreement"
         );
         let hr = hr_day(bpm, 600);
-        let day = estimate_day_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let day = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
         let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        assert!((bout - day).abs() < 1e-9);
+        assert!((bout - day.total_kcal).abs() < 1e-9);
     }
 
-    /// The band the two gates open between them is light activity, most of an ordinary day. The bout
-    /// path bills Keytel there and the day path bills resting BMR, so they diverge by construction.
+    /// THE gate this module lacked. 94..=119 bpm is the band the two gates open between them, and the
+    /// workout detector qualifies a bout at 50 % of samples in zone 2+, so up to half a real bout's
+    /// seconds sit in it. Inside a confirmed bout the day path must bill exactly what the bout path does.
     #[test]
-    fn bout_and_day_diverge_across_the_light_band() {
+    fn bout_and_day_agree_across_the_light_band_inside_a_confirmed_bout() {
         let profile = (80.0, 180.0, 35.0, "male");
-        let (bout_gate, day_gate) = gates();
-        assert!(bout_gate < day_gate, "the band only exists while the bout gate is the lower one");
+        let (activity_gate, trust_gate) = gates();
+        assert!((activity_gate, trust_gate) == (94.0, 120.0), "band edges {activity_gate}..{trust_gate}");
 
-        let mut ratios = Vec::new();
-        for bpm in bout_gate.ceil() as i32..day_gate.ceil() as i32 {
+        let mut checked = 0;
+        for bpm in activity_gate.ceil() as i32..trust_gate.ceil() as i32 {
             let hr = hr_day(bpm, 3600);
-            let day = estimate_day_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            let day = estimate_day_calories(
+                &hr, &all_confirmed(&hr), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
             let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
             assert!(
-                bout > day * 1.5,
-                "{bpm} bpm is inside the band; bout {bout} must exceed day {day} substantially"
+                (bout - day.total_kcal).abs() < 1e-9,
+                "{bpm} bpm inside a confirmed bout: bout {bout} vs day {}", day.total_kcal
             );
-            ratios.push(bout / day);
+            // The whole band is Keytel, so none of it may read as a resting-only hour.
+            assert!(day.active_kcal > 0.0, "{bpm} bpm bills no active energy");
+            checked += 1;
         }
-        assert_eq!(ratios.len(), 26, "the band is 94..=119 bpm for this profile");
+        assert_eq!(checked, 26, "the band is 94..=119 bpm for this profile");
+    }
+
+    /// The band survives ONLY for seconds no bout confirmed, which is the leg no measurement settles.
+    /// Ratios recorded, not endorsed: a fixed 1.5x assertion passes identically at 1.5x and at 8.1x.
+    #[test]
+    fn an_unconfirmed_light_band_second_still_bills_bmr_only() {
+        let profile = (80.0, 180.0, 35.0, "male");
+        let (activity_gate, trust_gate) = gates();
+
+        let mut ratios = Vec::new();
+        for bpm in activity_gate.ceil() as i32..trust_gate.ceil() as i32 {
+            let hr = hr_day(bpm, 3600);
+            let day = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            assert!((day.active_kcal).abs() < 1e-6, "{bpm} bpm unconfirmed must bill BMR only");
+            ratios.push(bout / day.total_kcal);
+        }
+        assert_eq!(ratios.len(), 26);
 
         let lo = ratios.iter().copied().fold(f64::INFINITY, f64::min);
         let hi = ratios.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -227,18 +287,50 @@ mod tests {
         assert!((mean - 6.610427).abs() < 1e-5, "band-mean ratio {mean}");
     }
 
-    /// Outside the band the two paths must be identical; a regression that widened the band would
-    /// show up here rather than in a fixture that happens to sit clear of it.
+    /// Outside the band the two paths are identical with no bout confirmed; a regression that widened
+    /// the band shows up here rather than in a fixture that happens to sit clear of it.
     #[test]
     fn bout_and_day_agree_everywhere_outside_the_band() {
         let profile = (80.0, 180.0, 35.0, "male");
-        let (bout_gate, day_gate) = gates();
-        for bpm in (40..=200).filter(|b| (*b as f64) < bout_gate || (*b as f64) >= day_gate) {
+        let (activity_gate, trust_gate) = gates();
+        for bpm in (40..=200).filter(|b| (*b as f64) < activity_gate || (*b as f64) >= trust_gate) {
             let hr = hr_day(bpm, 600);
-            let day = estimate_day_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            let day = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
             let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-            assert!((bout - day).abs() < 1e-9, "{bpm} bpm is outside the band: bout {bout} day {day}");
+            assert!((bout - day.total_kcal).abs() < 1e-9, "{bpm} bpm outside the band: bout {bout} day {}", day.total_kcal);
         }
+    }
+
+    /// A confirmed span bills only the seconds INSIDE it at the activity gate. The seconds outside keep
+    /// the trust gate, so a bout cannot re-rate the rest of the day around it.
+    #[test]
+    fn a_confirmed_span_moves_only_the_seconds_inside_it() {
+        let profile = (80.0, 180.0, 35.0, "male");
+        // Two hours at 110 bpm (inside the band); only the second hour is a confirmed bout.
+        let hr = hr_day(110, 7200);
+        let none = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let half = estimate_day_calories(
+            &hr, &[(3600, 7199)], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let all = estimate_day_calories(
+            &hr, &all_confirmed(&hr), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+
+        assert!((none.active_kcal).abs() < 1e-6, "nothing confirmed, nothing active");
+        assert!((half.active_kcal - all.active_kcal / 2.0).abs() < 1e-6,
+            "half {} vs all {}", half.active_kcal, all.active_kcal);
+        // The resting floor is over the same credited seconds either way, so only the active half moved.
+        assert!((none.resting_kcal - all.resting_kcal).abs() < 1e-6);
+    }
+
+    /// The split the "Active Energy" label needs: a day that never clears a gate is ALL resting, so a
+    /// caller merging `total_kcal` with a phone's active-only series is comparing two different things.
+    #[test]
+    fn a_sedentary_day_is_all_resting_and_no_active_energy() {
+        let profile = (80.0, 180.0, 35.0, "male");
+        let d = estimate_day_calories(
+            &hr_day(55, 86_400), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        assert!((d.total_kcal - 1825.25).abs() < 1.0, "total {}", d.total_kcal);
+        assert!((d.resting_kcal - d.total_kcal).abs() < 1e-6, "a still day is BMR end to end");
+        assert!(d.active_kcal.abs() < 1e-6, "active {}", d.active_kcal);
     }
 
     #[test]
@@ -270,14 +362,14 @@ mod tests {
         let profile = (80.0, 180.0, 35.0, "male");
         // One hour between two samples: credited at DAY_GAP_CAP_S, not the full 3600 s.
         let gapped = vec![HrSample { ts: 0, bpm: 130 }, HrSample { ts: 3600, bpm: 130 }];
-        let gap_day = estimate_day_calories(&gapped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let gap_day = estimate_day_calories(&gapped, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         // The identical rate held for exactly the cap + the tail second.
         let capped: Vec<HrSample> = (0..=DAY_GAP_CAP_S as i64).map(|i| HrSample { ts: i, bpm: 130 }).collect();
-        let capped_day = estimate_day_calories(&capped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let capped_day = estimate_day_calories(&capped, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         assert!((gap_day - capped_day).abs() < capped_day * 0.01, "gap {gap_day} vs capped {capped_day}");
         // Far below billing the whole hour.
         let full_hour = estimate_day_calories(
-            &hr_day(130, 3601), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            &hr_day(130, 3601), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         assert!(gap_day < full_hour * 0.2, "a wear gap must not read as an hour of effort");
     }
 
@@ -287,16 +379,16 @@ mod tests {
         let profile = (80.0, 180.0, 35.0, "male");
         let dense: Vec<HrSample> = (0..3600).map(|i| HrSample { ts: i, bpm: 70 }).collect();
         let sparse: Vec<HrSample> = (0..3600).step_by(60).map(|i| HrSample { ts: i, bpm: 70 }).collect();
-        let d = estimate_day_calories(&dense, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        let s = estimate_day_calories(&sparse, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let d = estimate_day_calories(&dense, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
+        let s = estimate_day_calories(&sparse, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         assert!((s - d).abs() < d * 0.05, "sparse {s} should track dense {d}");
     }
 
     #[test]
     fn resting_day_is_lower_than_active_day() {
         let profile = default_profile();
-        let resting = estimate_day_calories(&hr_day(60, 3600), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        let active = estimate_day_calories(&hr_day(150, 3600), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let resting = estimate_day_calories(&hr_day(60, 3600), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
+        let active = estimate_day_calories(&hr_day(150, 3600), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         assert!(resting > 0.0);
         assert!(active > resting);
     }
@@ -305,7 +397,7 @@ mod tests {
     fn sedentary_full_day_approximates_bmr() {
         let profile = (80.0, 180.0, 35.0, "male");
         let sedentary = hr_day(55, 86_400);
-        let total = estimate_day_calories(&sedentary, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let total = estimate_day_calories(&sedentary, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         assert!((total - 1825.25).abs() < 1.0);
     }
 
@@ -340,7 +432,7 @@ mod tests {
             light_day.iter().all(|s| (s.bpm as f64) < day_gate),
             "every sample must stay under the {day_gate} bpm day gate or this is not a BMR-only day"
         );
-        let total = estimate_day_calories(&light_day, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let total = estimate_day_calories(&light_day, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
         assert!((total - 1825.25).abs() < 1.0);
         assert!(total < 4768.0 - 2000.0);
     }
@@ -366,7 +458,8 @@ mod tests {
         let over = active_day.iter().filter(|s| (s.bpm as f64) >= day_gate).count();
         assert_eq!(over, 3600, "exactly one hour must clear the {day_gate} bpm day gate");
 
-        let total = estimate_day_calories(&active_day, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let day = estimate_day_calories(&active_day, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let total = day.total_kcal;
         assert!((total - 2487.16).abs() < 1.0, "active day total {total}");
         assert!(total < 4768.0 - 2000.0);
 
@@ -374,6 +467,9 @@ mod tests {
         // as active energy.
         let bmr_day = resting_kcal_per_s(&MALE, profile.0, profile.1, profile.2) * 86_400.0;
         assert!((total - bmr_day - 661.91).abs() < 1.0, "active energy {}", total - bmr_day);
+        // The same number the split reports, so the label "active energy" has one source.
+        assert!((day.active_kcal - 661.91).abs() < 1.0, "split active {}", day.active_kcal);
+        assert!((day.resting_kcal - bmr_day).abs() < 1e-6, "split resting {}", day.resting_kcal);
 
         // Rebuilt from the two public rates: fails if the over-gate hour stops routing to Keytel.
         let rebuilt = resting_kcal_per_s(&MALE, profile.0, profile.1, profile.2) * 82_800.0

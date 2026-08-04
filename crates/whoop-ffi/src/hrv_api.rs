@@ -260,23 +260,30 @@ pub fn resp_rate_from_rr(beats: Vec<RrBeat>, start: i64, end: i64) -> Option<f64
     respiratory_rate::resp_rate_from_rr(&b, start, end)
 }
 
-/// Deep-sleep-windowed session avgHrv (ms): per-5min-bucket RMSSD like [hrv_windowed_avg], keeping only
-/// buckets whose center falls inside a deep-sleep (SWS/N3) span. Takes the full segment list; filters for
-/// `SleepStage::Deep` internally. `None` when no deep bucket yields a value.
+/// THE nightly HRV value (ms) a readiness word is computed from: per-5min-bucket gap-aware RMSSD over
+/// deep-sleep (SWS/N3) buckets only, from reports the strap's optical front end did not flag. Takes the
+/// full segment list and filters for `SleepStage::Deep` internally. `None` when no deep bucket yields one.
 #[uniffi::export]
-pub fn hrv_windowed_avg_deep(
+pub fn hrv_nightly(
     start: u32,
     end: u32,
-    runs: Vec<RrRun>,
+    reports: Vec<RrReport>,
     segments: Vec<SleepSegment>,
 ) -> Option<f64> {
-    let beats: Vec<(u32, u16)> = runs.iter().flat_map(|r| r.rr.iter().map(|b| (r.unix, *b))).collect();
+    let r: Vec<physio_algo::hrv::RrReport> = reports
+        .into_iter()
+        .map(|x| physio_algo::hrv::RrReport {
+            unix: x.unix,
+            rr: x.rr,
+            optical_signal_poor: x.optical_signal_poor,
+        })
+        .collect();
     let deep_spans: Vec<(u32, u32)> = segments
         .iter()
         .filter(|s| matches!(s.stage, SleepStage::Deep))
         .map(|s| (s.start as u32, s.end as u32))
         .collect();
-    HrvReadiness::windowed_avg_hrv_deep(start, end, &beats, &deep_spans)
+    HrvReadiness::nightly_hrv(start, end, &r, &deep_spans)
 }
 
 // ── Rest (sleep performance composite) ─────────────────────────────────────

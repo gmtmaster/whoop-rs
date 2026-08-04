@@ -76,6 +76,23 @@ pub fn percentile_pct(sorted_values: &[f64], pct: f64) -> f64 {
     crate::stats::percentile(sorted_values, pct / 100.0)
 }
 
+/// Last-resort HRmax (bpm) when the chain has nothing: no caller value, no observed peak, no age. The
+/// one fallback in the tree, so no call site holds a second and no two paths gate a person differently.
+pub const FALLBACK_HRMAX: f64 = 220.0;
+
+/// The one HRmax any displayed number is scored against: caller → observed peak → Tanaka(age) →
+/// [`FALLBACK_HRMAX`], with the source that won ("caller"/"observed"/"tanaka"/"fallback"). Callers that
+/// must distinguish "no HRmax at all" read [`estimate_hrmax`] instead, which reports `unknown`.
+pub fn resolve_hrmax(caller: Option<f64>, hr_history: &[f64], age: Option<f64>) -> (f64, &'static str) {
+    if let Some(m) = caller {
+        return (m, "caller");
+    }
+    match estimate_hrmax(hr_history, age) {
+        (_, "unknown") => (FALLBACK_HRMAX, "fallback"),
+        resolved => resolved,
+    }
+}
+
 /// Personalized HRmax from a trailing HR series → (bpm, source ∈ observed/tanaka/unknown).
 pub fn estimate_hrmax(hr_history: &[f64], age: Option<f64>) -> (f64, &'static str) {
     let tanaka = age.map(tanaka_hrmax);
@@ -494,6 +511,21 @@ mod tests {
         assert_eq!(src, "tanaka");
         assert!((bpm - tanaka_hrmax(40.0)).abs() < 1e-9, "got {bpm}");
         assert_eq!(estimate_hrmax(&[], None), (0.0, "unknown"));
+    }
+
+    /// One chain, one fallback: whatever a caller knows, [`resolve_hrmax`] answers with a number and a
+    /// source, so no call site needs a literal of its own. Two paths holding 190 and 220 for the same
+    /// person put their activity gates 41 bpm apart and billed the same second two ways.
+    #[test]
+    fn resolve_hrmax_always_answers_so_no_caller_needs_its_own_fallback() {
+        assert_eq!(resolve_hrmax(Some(184.0), &[], None), (184.0, "caller"));
+        assert_eq!(resolve_hrmax(Some(184.0), &vec![200.0; HRMAX_MIN_SAMPLES], Some(35.0)).1, "caller");
+        assert_eq!(resolve_hrmax(None, &[], Some(40.0)), (tanaka_hrmax(40.0), "tanaka"));
+        assert_eq!(resolve_hrmax(None, &vec![200.0; HRMAX_MIN_SAMPLES], None), (200.0, "observed"));
+        // Nothing known at all still resolves, and to the ONE constant.
+        assert_eq!(resolve_hrmax(None, &[], None), (FALLBACK_HRMAX, "fallback"));
+        assert!((FALLBACK_HRMAX - 220.0).abs() < 1e-9, "shipped last-resort HRmax");
+        assert!(estimate_hrmax(&[], None).0 == 0.0, "the chain under it still reports 'no HRmax'");
     }
 
     /// `low` bpm for all but the last `peak_n` of `n` samples, which sit at `peak`.

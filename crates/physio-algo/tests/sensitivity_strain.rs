@@ -665,7 +665,7 @@ const CAL_HRMAX: f64 = 185.0;
 const CAL_REST: f64 = 55.0;
 
 fn cal_day(hr: &[HrSample]) -> f64 {
-    calories::estimate_day_calories(hr, CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX, CAL_REST)
+    calories::estimate_day_calories(hr, &[], CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX, CAL_REST).total_kcal
 }
 
 fn cal_sedentary() -> Vec<HrSample> {
@@ -752,7 +752,7 @@ fn calories_day_table(sedentary: &[HrSample], light: &[HrSample]) -> Table {
         cal_day(&d)
     });
     cal_arm(&mut t, "param: sex male -> female (selects the whole coeff set)", Kind::Param, sedentary, light, |h| {
-        calories::estimate_day_calories(h, CAL_W, CAL_H, CAL_AGE, "female", CAL_HRMAX, CAL_REST)
+        calories::estimate_day_calories(h, &[], CAL_W, CAL_H, CAL_AGE, "female", CAL_HRMAX, CAL_REST).total_kcal
     });
     cal_arm(&mut t, "param: MALE.resting_alpha +10% (via reconstruction)", Kind::Param, sedentary, light, |_| {
         calories::resting_kcal_per_s(&male_with(|c| c.resting_alpha *= 1.1), CAL_W, CAL_H, CAL_AGE) * 86_400.0
@@ -772,8 +772,8 @@ fn calories_day_table(sedentary: &[HrSample], light: &[HrSample]) -> Table {
     cal_arm(&mut t, "param: MALE.workout_hr +10% (unreachable: no sample clears the day gate)", Kind::Param, sedentary, light, |_| {
         calories::resting_kcal_per_s(&male_with(|c| c.workout_hr *= 1.1), CAL_W, CAL_H, CAL_AGE) * 86_400.0
     });
-    cal_arm(&mut t, "param: DAY_ACTIVE_HRR_FRACTION +10% (unreachable: the gate moves further away)", Kind::Param, sedentary, light, |h| {
-        calories::estimate_day_calories(h, CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX * 1.1, CAL_REST)
+    cal_arm(&mut t, "param: TRUST_HRR_FRACTION +10% (unreachable: the gate moves further away)", Kind::Param, sedentary, light, |h| {
+        calories::estimate_day_calories(h, &[], CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX * 1.1, CAL_REST).total_kcal
     });
     cal_arm(&mut t, "param: DAY_GAP_CAP_S 300 -> 330 (unreachable: fixture has no gap > 1 s)", Kind::Param, sedentary, light, cal_day);
     t
@@ -819,10 +819,10 @@ fn calories_active_day_table(active: &[HrSample]) -> Table {
         cal_day(&m)
     });
     cal_active_arm(&mut t, "param: sex male -> female (selects the whole coeff set)", Kind::Param, active, |h| {
-        calories::estimate_day_calories(h, CAL_W, CAL_H, CAL_AGE, "female", CAL_HRMAX, CAL_REST)
+        calories::estimate_day_calories(h, &[], CAL_W, CAL_H, CAL_AGE, "female", CAL_HRMAX, CAL_REST).total_kcal
     });
-    cal_active_arm(&mut t, "param: DAY_ACTIVE_HRR_FRACTION 0.50 -> 0.55 (gate 120 -> 126.5)", Kind::Param, active, |h| {
-        calories::estimate_day_calories(h, CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX, 68.0)
+    cal_active_arm(&mut t, "param: TRUST_HRR_FRACTION 0.50 -> 0.55 (gate 120 -> 126.5)", Kind::Param, active, |h| {
+        calories::estimate_day_calories(h, &[], CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX, 68.0).total_kcal
     });
     cal_active_arm(&mut t, "param: MALE.workout_hr +10% (via reconstruction)", Kind::Param, active, |_| {
         cal_active_rebuilt(&male_with(|c| c.workout_hr *= 1.1))
@@ -877,10 +877,10 @@ fn calories_bout_table() -> Table {
         cal_day(&d)
     });
     cal_bout_arm(&mut t, "param: sex male -> female (moves BOTH sides)", Kind::Param, |h| {
-        calories::estimate_day_calories(h, CAL_W, CAL_H, CAL_AGE, "female", CAL_HRMAX, CAL_REST)
+        calories::estimate_day_calories(h, &[], CAL_W, CAL_H, CAL_AGE, "female", CAL_HRMAX, CAL_REST).total_kcal
     });
     cal_bout_arm(&mut t, "param: hrmax +10% (moves BOTH sides)", Kind::Param, |h| {
-        calories::estimate_day_calories(h, CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX * 1.1, CAL_REST)
+        calories::estimate_day_calories(h, &[], CAL_W, CAL_H, CAL_AGE, CAL_SEX, CAL_HRMAX * 1.1, CAL_REST).total_kcal
     });
     t
 }

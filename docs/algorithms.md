@@ -126,7 +126,7 @@ targeting the habitual midsleep (circular mean over >= 14 days, else 03:30 local
 across the 30-220 bpm lag band, pick the fundamental, report bpm + confidence. Fills only seconds the strap
 banked no HR for; never overrides a stored HR.
 
-## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_clean_*`, `hrv_analyze_raw`, `hrv_windowed_*`, `hrv_rolling_rmssd`, `hrv_rr_coverage`, `hrv_readiness`
+## 3. HRV / RMSSD / readiness  ·  FFI `hrv_rmssd*`, `hrv_sdnn`, `hrv_range_filter`, `hrv_clean_*`, `hrv_analyze_raw`, `hrv_windowed_*`, `hrv_rolling_rmssd`, `hrv_rr_coverage`, `hrv_nightly`, `hrv_readiness`
 
 `hrv.rs`, the `HrvReadiness` type. Every HRV statistic on the strap path is here. One second copy survives
 app-side: the Breathe screen's live readout calls Kotlin's own `Hrv.rmssd`, the unfiltered form
@@ -152,7 +152,10 @@ analyze_raw      = clean -> {rmssd, sdnn, mean_nn, pnn50, n_input, n_clean}; 20-
                    rejected-fraction gate (0.35). Flat: no report grouping, so no seam break
 windowed_buckets = per-5-min tumbling bucket: clean-beat count + gap-aware RMSSD
 windowed_avg_hrv = mean of those bucket RMSSDs over the session (the stored avgHrv)
-windowed_avg_deep= same, buckets whose centre lands in a deep (N3) span only. The DISPLAYED nightly HRV
+nightly_hrv      = same, buckets whose centre lands in a deep (N3) span only, AND over reports the strap
+                   did not flag optical_signal_poor on. The DISPLAYED nightly HRV, and the only producer
+                   of it: window and trust filter both live in one function so no caller can build a
+                   second version. `nightly_rmssd` is this per UTC day, from decoded history
 rolling_rmssd    = trailing-window rmssd_plain per surviving beat, optional emit stride (the day chart)
 rr_coverage      = sum(rr) / elapsed ms. Over ~1.0 is impossible: beats double-counted or reports overlap
 duplicate_beat_count  = rows repeating an earlier (ts, rr) EXACTLY. Byte-identical re-inserts only
@@ -266,7 +269,27 @@ percent is produced on 4.0 only; on 5/MG the app stores nightly raw red/IR ADC m
 ## 14. Calories  ·  FFI `calories_estimate_day`, `calories_estimate_bout`
 
 `calories.rs`. Per-second Keytel 2005 active energy above a HRR gate, revised Harris-Benedict BMR below it,
-sex-specific coefficients. Day path gates at 50% HRR, bout path at 30%. Approximate, not calorimetry.
+sex-specific coefficients. Approximate, not calorimetry.
+
+The two gates are two different questions, not one constant forked in two:
+
+| gate | value | question | applies to |
+|---|---|---|---|
+| `ACTIVITY_HRR_FRACTION` | 0.30 | is this second work? | seconds inside a bout `workout_detect` confirmed motion over |
+| `TRUST_HRR_FRACTION` | 0.50 | how high must an HR run before an unconfirmed second is believed to be work? | every other second |
+
+`calories_estimate_day` takes the confirmed bouts, so a detected workout's seconds are billed by the same
+Keytel the bout tile shows — they used to be billed BMR, up to 8.1x lower across 94-119 bpm, on the same
+screen as the bout number. What an unconfirmed elevated second should cost is NOT settled: `0.30 HRR` is the
+light/moderate boundary but presupposes exercise, and an ungated day feed also carries caffeine, stress,
+posture and PPG artifact. **`TRUST_HRR_FRACTION` 0.50 has no derivation** — it marks no boundary and was
+chosen to move a total; arbitrating it needs motion-labelled whole-day ground truth the tree does not hold.
+
+`calories_estimate_day` returns `total_kcal` / `resting_kcal` / `active_kcal`. Only `active_kcal` is
+comparable to a phone's "active energy"; `total_kcal` is whole-day TDEE and includes BMR.
+
+HRmax for both paths resolves through `strain::resolve_hrmax` (caller → observed peak → Tanaka → the single
+`FALLBACK_HRMAX` 220), so no call site can hold its own fallback and gate the same person two ways.
 
 ## 15. Workout detection  ·  FFI `workout_detect`
 

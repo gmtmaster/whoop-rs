@@ -376,7 +376,7 @@ pub fn detect(
                 height_cm,
                 age.unwrap_or(30.0),
                 profile_sex,
-                eff_max_hr.unwrap_or(220.0),
+                eff_max_hr.unwrap_or(strain::FALLBACK_HRMAX),
                 rest_hr,
             )
         });

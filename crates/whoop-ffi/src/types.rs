@@ -243,6 +243,15 @@ pub struct RrRun {
     pub rr: Vec<u16>,
 }
 
+/// One record's R-R plus the strap's `opticalSignalPoor` for that record. What [`crate::hrv_nightly`]
+/// takes, so the trust filter travels with the beats instead of being a step a caller can omit.
+#[derive(uniffi::Record)]
+pub struct RrReport {
+    pub unix: u32,
+    pub rr: Vec<u16>,
+    pub optical_signal_poor: Option<bool>,
+}
+
 #[derive(uniffi::Enum)]
 pub enum ReadinessTier {
     Primed,

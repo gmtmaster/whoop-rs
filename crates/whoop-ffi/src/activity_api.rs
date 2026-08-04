@@ -124,22 +124,49 @@ pub fn steps_counter(samples: Vec<SleepStepSample>) -> Option<u64> {
 
 // ── Calories (Keytel + Harris-Benedict) ────────────────────────────────────
 
-/// Whole-day energy estimate (kcal) from HR samples. Each sample = one second.
+/// One motion-confirmed span from [workout_detect]: `[start, end]` unix seconds, both inclusive.
+#[derive(uniffi::Record)]
+pub struct ConfirmedBout {
+    pub start: i64,
+    pub end: i64,
+}
+
+/// A day's energy split. `total_kcal` is the whole-day estimate, `resting_kcal` the Harris-Benedict
+/// floor inside it, `active_kcal` the excess over lying still. Only `active_kcal` is comparable to a
+/// phone's "active energy"; merging `total_kcal` into that series compares TDEE against active-only.
+#[derive(uniffi::Record)]
+pub struct DayCaloriesInfo {
+    pub total_kcal: f64,
+    pub resting_kcal: f64,
+    pub active_kcal: f64,
+}
+
+/// Whole-day energy (kcal) from HR samples, split into its resting and active halves. Seconds inside a
+/// `confirmed_bouts` span are billed exactly as [calories_estimate_bout] bills them; the rest face the
+/// higher unconfirmed-HR gate. `hrmax` absent → resolved from the day's own peak, then age.
+#[allow(clippy::too_many_arguments)]
 #[uniffi::export]
 pub fn calories_estimate_day(
     hr: Vec<HrTick>,
+    confirmed_bouts: Vec<ConfirmedBout>,
     weight_kg: f64,
     height_cm: f64,
     age: f64,
     sex: String,
-    hrmax: f64,
+    hrmax: Option<f64>,
     resting_hr: f64,
-) -> f64 {
+) -> DayCaloriesInfo {
     let samples = to_hr(hr);
-    calories::estimate_day_calories(&samples, weight_kg, height_cm, age, &sex, hrmax, resting_hr)
+    let spans: Vec<(i64, i64)> = confirmed_bouts.into_iter().map(|b| (b.start, b.end)).collect();
+    let max_hr = resolved_hrmax(hrmax, &samples, age);
+    let d = calories::estimate_day_calories(
+        &samples, &spans, weight_kg, height_cm, age, &sex, max_hr, resting_hr);
+    DayCaloriesInfo { total_kcal: d.total_kcal, resting_kcal: d.resting_kcal, active_kcal: d.active_kcal }
 }
 
-/// Bout energy estimate (kcal, kJ) from HR samples. Each sample weighted by elapsed time to next.
+/// Bout energy (kcal, kJ) from a motion-confirmed span's HR samples, each weighted by elapsed time to
+/// the next. `hrmax` absent → resolved from the bout's own peak, then age.
+#[allow(clippy::too_many_arguments)]
 #[uniffi::export]
 pub fn calories_estimate_bout(
     hr: Vec<HrTick>,
@@ -147,12 +174,20 @@ pub fn calories_estimate_bout(
     height_cm: f64,
     age: f64,
     sex: String,
-    hrmax: f64,
+    hrmax: Option<f64>,
     resting_hr: f64,
 ) -> Vec<f64> {
     let samples = to_hr(hr);
-    let (kcal, kj) = calories::estimate_bout_calories(&samples, weight_kg, height_cm, age, &sex, hrmax, resting_hr);
+    let max_hr = resolved_hrmax(hrmax, &samples, age);
+    let (kcal, kj) = calories::estimate_bout_calories(
+        &samples, weight_kg, height_cm, age, &sex, max_hr, resting_hr);
     vec![kcal, kj]
+}
+
+/// The one HRmax both calorie paths gate on, so a caller cannot supply a different fallback to each.
+fn resolved_hrmax(caller: Option<f64>, samples: &[physio_algo::HrSample], age: f64) -> f64 {
+    let bpms: Vec<f64> = samples.iter().map(|s| s.bpm as f64).collect();
+    strain::resolve_hrmax(caller, &bpms, (age > 0.0).then_some(age)).0
 }
 
 // ── Workout detection ──────────────────────────────────────────────────────

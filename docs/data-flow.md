@@ -137,7 +137,7 @@ every algorithm above takes plain values.
 | `hrv_sdnn` | Standard deviation of NN intervals (ms), sample std (ddof=1). `None` for <2 values. |
 | `hrv_analyze_raw` | Clean-and-analyze a raw R-R series in one call (the app's full spot/nightly HRV analysis path). |
 | `hrv_freq_domain` | Frequency-domain HRV over a time-ordered R-R series (ms) via the Lomb-Scargle periodogram. |
-| `hrv_windowed_avg_deep` | Deep-sleep-windowed session avgHrv (ms): per-5min-bucket RMSSD like [hrv_windowed_avg], keeping only buckets whose center falls inside a deep-sleep (SWS/N3) span. Takes the full segment list; filters for `SleepStage::Deep` internally. `None` when no deep bucket yields a value. |
+| `hrv_nightly` | THE nightly HRV value (ms) a readiness word is computed from: per-5min-bucket gap-aware RMSSD over deep-sleep (SWS/N3) buckets only, from reports the strap's optical front end did not flag. Takes the full segment list and filters for `SleepStage::Deep` internally. `None` when no deep bucket yields one. |
 
 ### Sleep
 
@@ -194,8 +194,8 @@ every algorithm above takes plain values.
 |---|---|
 | `imu_features` | Accel/gyro energy, jerk and gait-band cadence over IMU samples at `sample_rate_hz`. |
 | `steps_counter` | Raw wrap-aware motion-tick total from step counter samples. None with fewer than 2 samples or no forward movement. The caller applies its stepTicksPerStep calibration. |
-| `calories_estimate_day` | Whole-day energy estimate (kcal) from HR samples. Each sample = one second. |
-| `calories_estimate_bout` | Bout energy estimate (kcal, kJ) from HR samples. Each sample weighted by elapsed time to next. |
+| `calories_estimate_day` | Whole-day energy (kcal) from HR samples, split into its resting and active halves. Seconds inside a `confirmed_bouts` span are billed exactly as `calories_estimate_bout` bills them; the rest face the higher unconfirmed-HR gate. `hrmax` absent -> resolved from the day's own peak, then age. |
+| `calories_estimate_bout` | Bout energy (kcal, kJ) from a motion-confirmed span's HR samples, each weighted by elapsed time to the next. `hrmax` absent -> resolved from the bout's own peak, then age. |
 | `activity_series` | Per-record motion-intensity series from a gravity stream — the shared motion spine the workout, nap and sedentary readings all measure against. |
 | `smoothed_intensity` | Trailing rolling mean of the motion intensities over `window_s` — the smoothed spine the stillness and sedentary gates threshold against. |
 

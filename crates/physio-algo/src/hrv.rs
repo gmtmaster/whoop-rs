@@ -97,6 +97,16 @@ pub fn rr_trusted(optical_signal_poor: Option<bool>) -> bool {
     optical_signal_poor != Some(true)
 }
 
+/// One record's R-R beats carrying the optical-quality flag that decides whether they count. The input
+/// [`HrvReadiness::nightly_hrv`] takes, so the [`rr_trusted`] filter cannot be skipped by handing it
+/// bare beats — which is how one caller of the nightly quantity came to apply no filter at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RrReport {
+    pub unix: u32,
+    pub rr: Vec<u16>,
+    pub optical_signal_poor: Option<bool>,
+}
+
 /// Stage-by-stage survivor counts for one R-R series: input, after the range filter, after Malik ectopic.
 pub fn clean_counts(rr_ms: &[u16]) -> HrvCleanCounts {
     let ranged = HrvReadiness::range_filter(rr_ms);
@@ -232,8 +242,9 @@ impl HrvReadiness {
         Self::windowed_avg_hrv_inner(start, end, beats, |_| true)
     }
 
-    /// Deep-sleep-windowed session avgHrv (ms): per-bucket RMSSD like [windowed_avg_hrv], keeping only
-    /// buckets whose center falls inside a `deep_spans` span. `None` when no deep bucket yields a value.
+    /// The windowing primitive under [`Self::nightly_hrv`]: per-bucket RMSSD like [windowed_avg_hrv],
+    /// keeping only buckets whose center falls inside a `deep_spans` span. Bare beats carry no quality
+    /// flag, so this applies NO trust filter — a displayed nightly value comes from `nightly_hrv`.
     pub fn windowed_avg_hrv_deep(start: u32, end: u32, beats: &[(u32, u16)], deep_spans: &[(u32, u32)]) -> Option<f64> {
         // Boxing so the closure outlives this call while the inner function borrows the spans.
         let spans: Vec<(u64, u64)> = deep_spans.iter().map(|&(s, e)| (s as u64, e as u64)).collect();
@@ -293,23 +304,46 @@ impl HrvReadiness {
         (n > 0).then(|| sum / n as f64)
     }
 
-    /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
-    /// Groups records into UTC days, then applies `rmssd_gap_aware` per day. A sleep that straddles UTC
-    /// midnight is split across the two days. Records [`rr_trusted`] rejects contribute no beats.
+    /// THE nightly HRV value (ms) behind every readiness word: the mean of per-bucket gap-aware RMSSD
+    /// over deep-sleep buckets only, from records [`rr_trusted`] accepts. The window and the filter both
+    /// live here, so no caller can produce a second version of this one number.
+    pub fn nightly_hrv(
+        start: u32,
+        end: u32,
+        reports: &[RrReport],
+        deep_spans: &[(u32, u32)],
+    ) -> Option<f64> {
+        let mut trusted: Vec<&RrReport> =
+            reports.iter().filter(|r| rr_trusted(r.optical_signal_poor)).collect();
+        trusted.sort_by_key(|r| r.unix);
+        let beats: Vec<(u32, u16)> =
+            trusted.iter().flat_map(|r| r.rr.iter().map(|&v| (r.unix, v))).collect();
+        Self::windowed_avg_hrv_deep(start, end, &beats, deep_spans)
+    }
+
+    /// Per-UTC-day series of [`Self::nightly_hrv`] from history records, oldest → newest, for
+    /// `evaluate`. A sleep that straddles UTC midnight is split across the two days.
     ///
-    /// Emits one entry PER DAY THAT HAS TRUSTED BEATS, so a day with none is absent rather than `None`:
-    /// the returned vector carries no record of where the gaps were. Only `whoopctl` builds a series
-    /// this way; the Android app passes `evaluate` its own per-row series, which applies no
-    /// [`rr_trusted`] filter at all, so the two producers of this one quantity disagree on any day the
-    /// strap flagged its optical front-end.
-    pub fn nightly_rmssd(history: &[HistoryRecord]) -> Vec<Option<f64>> {
-        let mut by_day: std::collections::BTreeMap<u32, Vec<(u32, Vec<u16>)>> = std::collections::BTreeMap::new();
+    /// Emits one entry per day that carries R-R; a day whose beats are all untrusted or all outside
+    /// `deep_spans` yields `None`, and `evaluate` drops it along with the real gaps.
+    pub fn nightly_rmssd(history: &[HistoryRecord], deep_spans: &[(u32, u32)]) -> Vec<Option<f64>> {
+        let mut by_day: std::collections::BTreeMap<u32, Vec<RrReport>> = std::collections::BTreeMap::new();
         for h in history {
-            if !h.rr_intervals.is_empty() && rr_trusted(h.optical_signal_poor) {
-                by_day.entry(h.unix / SECS_PER_DAY).or_default().push((h.unix, h.rr_intervals.clone()));
+            if !h.rr_intervals.is_empty() {
+                by_day.entry(h.unix / SECS_PER_DAY).or_default().push(RrReport {
+                    unix: h.unix,
+                    rr: h.rr_intervals.clone(),
+                    optical_signal_poor: h.optical_signal_poor,
+                });
             }
         }
-        by_day.values().map(|beats| Self::rmssd_gap_aware(beats)).collect()
+        by_day
+            .into_iter()
+            .map(|(day, reports)| {
+                let start = day * SECS_PER_DAY;
+                Self::nightly_hrv(start, start + SECS_PER_DAY, &reports, deep_spans)
+            })
+            .collect()
     }
 
     /// Readiness over a nightly RMSSD series (ms), oldest → newest. `None` result = calibrating.
@@ -650,14 +684,49 @@ mod tests {
         );
     }
 
+    /// A deep span over every fixture second, so a filter fixture is not silently also a window fixture.
+    fn all_deep() -> Vec<(u32, u32)> {
+        vec![(0, 3 * SECS_PER_DAY)]
+    }
+
     #[test]
     fn nightly_rmssd_produces_one_gap_aware_value_per_day() {
         let rec = |unix: u32, rr: Vec<u16>| HistoryRecord { version: 18, unix, rr_intervals: rr, ..Default::default() };
         // day 0: two contiguous records; day 1: one record with two beats.
         let hist = vec![rec(0, vec![600, 610]), rec(1, vec![605, 615]), rec(SECS_PER_DAY, vec![700, 720])];
-        let series = HrvReadiness::nightly_rmssd(&hist);
+        let series = HrvReadiness::nightly_rmssd(&hist, &all_deep());
         assert_eq!(series.len(), 2);
         assert!(series.iter().all(|v| v.is_some()));
+    }
+
+    /// The window half of the one nightly quantity: beats outside every deep span do not reach it. A
+    /// producer that pooled the whole day would return the same number with the span moved away.
+    #[test]
+    fn nightly_hrv_reads_only_the_deep_window() {
+        let rep = |unix: u32, rr: Vec<u16>| RrReport { unix, rr, optical_signal_poor: None };
+        // Two 300 s buckets, each one report: 800/810 in the first, 700/900 in the second.
+        let reports = vec![rep(10, vec![800, 810]), rep(310, vec![700, 900])];
+        let first = HrvReadiness::nightly_hrv(0, 600, &reports, &[(0, 300)]).expect("bucket 1 is deep");
+        let second = HrvReadiness::nightly_hrv(0, 600, &reports, &[(300, 600)]).expect("bucket 2 is deep");
+        let both = HrvReadiness::nightly_hrv(0, 600, &reports, &[(0, 600)]).expect("both buckets are deep");
+        assert!((first - 10.0).abs() < 1e-9, "first {first}");
+        assert!((second - 200.0).abs() < 1e-9, "second {second}");
+        assert!((both - 105.0).abs() < 1e-9, "the mean of the two buckets, {both}");
+        assert_eq!(HrvReadiness::nightly_hrv(0, 600, &reports, &[]), None, "no deep window, no value");
+    }
+
+    /// The filter half, on the same fixture: a report the strap flagged contributes nothing, whichever
+    /// window it sits in. Both halves must hold or the two producers of this number can disagree again.
+    #[test]
+    fn nightly_hrv_drops_a_flagged_report_inside_the_deep_window() {
+        let rep = |unix: u32, rr: Vec<u16>, poor: bool| RrReport {
+            unix, rr, optical_signal_poor: Some(poor),
+        };
+        let clean = vec![rep(10, vec![800, 810], false), rep(310, vec![700, 900], false)];
+        let flagged = vec![rep(10, vec![800, 810], false), rep(310, vec![700, 900], true)];
+        let deep = [(0u32, 600u32)];
+        assert!((HrvReadiness::nightly_hrv(0, 600, &clean, &deep).unwrap() - 105.0).abs() < 1e-9);
+        assert!((HrvReadiness::nightly_hrv(0, 600, &flagged, &deep).unwrap() - 10.0).abs() < 1e-9);
     }
 
     #[test]
@@ -680,14 +749,21 @@ mod tests {
         let steady: Vec<HistoryRecord> = (0u32..20).map(|t| rec(t, vec![800, 810], false)).collect();
         let mut noisy = steady.clone();
         noisy.push(rec(20, vec![850, 760], true));
-        assert_eq!(HrvReadiness::nightly_rmssd(&noisy), HrvReadiness::nightly_rmssd(&steady));
+        let deep = all_deep();
+        assert_eq!(
+            HrvReadiness::nightly_rmssd(&noisy, &deep),
+            HrvReadiness::nightly_rmssd(&steady, &deep)
+        );
         // The same record unflagged does reach the day, so the gate is what excluded it.
         let mut unflagged = steady.clone();
         unflagged.push(rec(20, vec![850, 760], false));
-        assert_ne!(HrvReadiness::nightly_rmssd(&unflagged), HrvReadiness::nightly_rmssd(&steady));
-        // A day of nothing but flagged records yields no value rather than a value built from them.
+        assert_ne!(
+            HrvReadiness::nightly_rmssd(&unflagged, &deep),
+            HrvReadiness::nightly_rmssd(&steady, &deep)
+        );
+        // A day of nothing but flagged records yields no value rather than one built from them.
         let all_poor: Vec<HistoryRecord> = (0u32..20).map(|t| rec(t, vec![800, 810], true)).collect();
-        assert_eq!(HrvReadiness::nightly_rmssd(&all_poor), Vec::<Option<f64>>::new());
+        assert_eq!(HrvReadiness::nightly_rmssd(&all_poor, &deep), vec![None]);
     }
 
     /// A stream shaped like the strap's: one report a second, each carrying more beat-time than a second,

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use physio_algo::{HrWatch, HrWatchState, HrvReadiness, Spo2};
+use physio_algo::{sleep, HrWatch, HrWatchState, HrvReadiness, Spo2};
 use whoop_protocol::{records, Family, Frame, HistoryRecord, PacketType, Record};
 
 use crate::cli::Cli;
@@ -141,6 +141,37 @@ fn history_of(records: &[Record]) -> Vec<HistoryRecord> {
     }).collect()
 }
 
+/// The deep-sleep spans of a decode: stage every night the detector finds, keep the Deep segments.
+/// The window the nightly HRV quantity is measured in, so this CLI reads the same number the app does.
+/// No timezone or wrist-off stream is available here, so detection runs against UTC.
+fn deep_spans(history: &[HistoryRecord]) -> Vec<(u32, u32)> {
+    let mut s = sleep::SleepStreams::default();
+    for h in history {
+        let ts = h.unix as i64;
+        if let Some(bpm) = h.heart_rate {
+            s.hr.push(sleep::HrSample { ts, bpm: bpm as u16 });
+        }
+        if !h.rr_intervals.is_empty() {
+            s.rr.push(sleep::RrRun { ts, intervals: h.rr_intervals.clone() });
+        }
+        if let Some([x, y, z]) = h.gravity {
+            s.accel.push(sleep::AccelSample { ts, x: x as f64, y: y as f64, z: z as f64 });
+        }
+        if let Some(counter) = h.steps {
+            s.steps.push(sleep::StepSample { ts, counter, activity_class: h.activity_class });
+        }
+        if let Some(state) = h.sleep_state {
+            s.band_sleep_state.push((ts, state as i32));
+        }
+    }
+    sleep::analyze(&s)
+        .into_iter()
+        .flat_map(|n| n.segments)
+        .filter(|g| g.stage == sleep::SleepStage::Deep)
+        .map(|g| (g.start as u32, g.end as u32))
+        .collect()
+}
+
 /// Print the wellness HR-watch line for a decode (opt-in; filters history first).
 pub(crate) fn hr_watch(records: &[Record]) {
     hr_watch_line(&history_of(records));
@@ -167,7 +198,7 @@ pub(crate) fn report_metrics(records: &[Record], fam: Family, hr_watch: bool) {
         print_spo2_5(&history);
     }
 
-    let nightly = HrvReadiness::nightly_rmssd(&history);
+    let nightly = HrvReadiness::nightly_rmssd(&history, &deep_spans(&history));
     let nights = nightly.iter().filter(|n| n.is_some()).count();
     match HrvReadiness::evaluate(&nightly) {
         Some(r) => println!(
