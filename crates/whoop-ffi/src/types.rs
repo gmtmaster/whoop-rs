@@ -358,6 +358,23 @@ pub(crate) fn to_sleep_segments(segs: Vec<sleep::StageSegment>) -> Vec<SleepSegm
         .collect()
 }
 
+impl From<SleepStage> for sleep::SleepStage {
+    fn from(s: SleepStage) -> Self {
+        match s {
+            SleepStage::Wake => sleep::SleepStage::Wake,
+            SleepStage::Light => sleep::SleepStage::Light,
+            SleepStage::Deep => sleep::SleepStage::Deep,
+            SleepStage::Rem => sleep::SleepStage::Rem,
+        }
+    }
+}
+
+pub(crate) fn to_stage_segments(segs: Vec<SleepSegment>) -> Vec<sleep::StageSegment> {
+    segs.into_iter()
+        .map(|s| sleep::StageSegment { start: s.start, end: s.end, stage: s.stage.into() })
+        .collect()
+}
+
 /// One step-counter sample: wrap-aware u16 `counter` + optional activity class (1=walk, 2=run) at `ts`.
 #[derive(uniffi::Record, Clone)]
 pub struct SleepStepSample {

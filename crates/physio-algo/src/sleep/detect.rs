@@ -513,8 +513,9 @@ pub(super) fn off_wrist_fraction(p: Period, hr: &[HrSample], wrist_off: &[(i64, 
     covered as f64 / dur as f64
 }
 
-/// Sleep efficiency in `[0, 1]`: asleep / in-bed, asleep = in-bed − wake.
-pub(super) fn efficiency(start: i64, end: i64, stages: &[StageSegment]) -> f64 {
+/// Sleep efficiency in `[0, 1]`: asleep / in-bed, asleep = in-bed − wake. In-bed is the `[start, end]`
+/// SPAN, so a stage gap counts as asleep; `stages` must lie inside the span.
+pub fn efficiency(start: i64, end: i64, stages: &[StageSegment]) -> f64 {
     let in_bed = (end - start) as f64;
     if in_bed <= 0.0 {
         return 0.0;
@@ -771,6 +772,25 @@ mod tests {
         ];
         assert!((efficiency(0, 150, &stages) - 100.0 / 150.0).abs() < 1e-12);
         assert_eq!(efficiency(0, 0, &stages), 0.0);
+    }
+
+    // A gap no segment covers is IN BED and asleep, because the denominator is the span. Summing the
+    // segments instead would read 50/70; the span reads 80/100, and the two only agree when they tile.
+    #[test]
+    fn efficiency_counts_an_uncovered_gap_as_asleep() {
+        let stages = vec![
+            StageSegment { start: 0, end: 50, stage: SleepStage::Light },
+            StageSegment { start: 80, end: 100, stage: SleepStage::Wake },
+        ];
+        assert!((efficiency(0, 100, &stages) - 0.80).abs() < 1e-12);
+        assert!((efficiency(0, 100, &stages) - 50.0 / 70.0).abs() > 0.08);
+    }
+
+    // Wake past the corrected wake time is not clipped away, so an edit must reclip before asking.
+    #[test]
+    fn efficiency_reads_wake_outside_the_span_too() {
+        let stages = vec![StageSegment { start: 100, end: 200, stage: SleepStage::Wake }];
+        assert_eq!(efficiency(0, 100, &stages), 0.0);
     }
 
     #[test]

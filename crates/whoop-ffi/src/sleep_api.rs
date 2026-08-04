@@ -139,6 +139,18 @@ pub fn stage_sleep_refined(input: SleepInput, steps: Vec<SleepStepSample>) -> Ve
     to_sleep_segments(sleep::stage_refined(&input.into(), &steps))
 }
 
+/// Sleep efficiency in `[0, 1]` over the in-bed window `[start, end]`: asleep / in-bed, asleep =
+/// in-bed − wake. `stages` are that window's OWN segments, so reclip an edited window first. `None`
+/// when the window is empty or nothing is asleep, so "not staged" never reads as a real zero.
+#[uniffi::export]
+pub fn sleep_efficiency(start: i64, end: i64, stages: Vec<SleepSegment>) -> Option<f64> {
+    if end <= start || stages.is_empty() {
+        return None;
+    }
+    let e = sleep::efficiency(start, end, &to_stage_segments(stages));
+    (e > 0.0).then_some(e)
+}
+
 /// Tri-state nap verdict.
 #[derive(uniffi::Enum)]
 pub enum NapVerdictInfo {
@@ -276,4 +288,49 @@ pub fn sleep_regularity_index(
 #[uniffi::export]
 pub fn personal_sleep_need_hours(recent_asleep_hours: Vec<f64>) -> f64 {
     rest::personal_sleep_need_hours(&recent_asleep_hours)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seg(start: i64, end: i64, stage: SleepStage) -> SleepSegment {
+        SleepSegment { start, end, stage }
+    }
+
+    #[test]
+    fn efficiency_is_the_span_denominator_not_the_segment_sum() {
+        // A 30 s hole no segment covers: span reads 80/100, summing segments would read 50/70.
+        let stages = vec![seg(0, 50, SleepStage::Light), seg(80, 100, SleepStage::Wake)];
+        let e = sleep_efficiency(0, 100, stages).unwrap();
+        assert!((e - 0.80).abs() < 1e-12);
+        assert!((e - 50.0 / 70.0).abs() > 0.08);
+    }
+
+    #[test]
+    fn efficiency_follows_the_edited_window() {
+        // The same night trimmed to its asleep half: reclipped stages over the new bounds read 1.0.
+        let full = vec![seg(0, 3600, SleepStage::Light), seg(3600, 7200, SleepStage::Wake)];
+        assert!((sleep_efficiency(0, 7200, full).unwrap() - 0.5).abs() < 1e-12);
+        let trimmed = vec![seg(0, 3600, SleepStage::Light)];
+        assert_eq!(sleep_efficiency(0, 3600, trimmed), Some(1.0));
+    }
+
+    #[test]
+    fn no_window_no_stages_and_no_asleep_time_are_all_none() {
+        assert_eq!(sleep_efficiency(100, 100, vec![seg(0, 100, SleepStage::Light)]), None);
+        assert_eq!(sleep_efficiency(0, 100, vec![]), None);
+        assert_eq!(sleep_efficiency(0, 100, vec![seg(0, 100, SleepStage::Wake)]), None);
+    }
+
+    #[test]
+    fn every_asleep_stage_counts_and_only_wake_subtracts() {
+        let stages = vec![
+            seg(0, 25, SleepStage::Light),
+            seg(25, 50, SleepStage::Deep),
+            seg(50, 75, SleepStage::Rem),
+            seg(75, 100, SleepStage::Wake),
+        ];
+        assert_eq!(sleep_efficiency(0, 100, stages), Some(0.75));
+    }
 }
