@@ -1,6 +1,10 @@
-//! The per-driver breakdown behind one Charge score: each present term's marginal point swing and how
-//! it reads against the personal baseline. Built from the same terms, weights and logistic as
+//! The per-driver breakdown behind one Charge score: each present term's point swing and how it reads
+//! against the personal baseline. Built from the same terms, weights and logistic as
 //! [`crate::recovery::recovery`], so a row can never describe a term the score did not use.
+//!
+//! The swing is an exact Shapley share, not a leave-one-out marginal: the score is a logistic, so once
+//! one driver alone saturates it every other leave-one-out swing collapses to 0 however far off
+//! baseline that driver sits.
 
 use crate::recovery::{
     score_of, z_score, RecoveryInput, RECOVERY_INDEX_SCALE_BPM_PER_HR, SKIN_TEMP_DEV_SCALE,
@@ -35,8 +39,8 @@ pub enum DriverVerdict {
     LimitingLow,
 }
 
-/// One driver row: the signal, its marginal swing in whole Charge points, and its direction.
-/// `delta_points` is NaN when the driver's own value is, so a caller decides rather than displays it.
+/// One driver row: the signal, its share of the Charge swing in whole points, and its direction.
+/// `delta_points` is NaN when ANY driver's value is, so a caller decides rather than displays it.
 #[derive(Clone, Copy, Debug)]
 pub struct DriverRow {
     pub kind: DriverKind,
@@ -72,6 +76,44 @@ fn round_half_up(x: f64) -> f64 {
     }
 }
 
+/// Exact Shapley shares of the Charge swing, one per term, in the order `terms` holds them: each
+/// driver's marginal swing averaged over every order the drivers could be added in. The shares sum to
+/// `score(all terms) − score(no terms)`. [`ROW_ORDER`] caps n at 7, so all 2^n coalitions are walked.
+fn shapley_points(terms: &[Term], total_weight: f64) -> Vec<f64> {
+    let n = terms.len();
+    // v(S) for every coalition, indexed by a bitmask over `terms`. A driver outside S sits at its own
+    // baseline (z = 0) with its weight still in the denominator.
+    let value: Vec<f64> = (0..(1usize << n))
+        .map(|mask| {
+            let z: f64 = terms
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask >> i & 1 == 1)
+                .map(|(_, t)| t.z * t.w)
+                .sum();
+            score_of(z / total_weight)
+        })
+        .collect();
+    // |S|! (n − |S| − 1)! / n! — the fraction of orderings that add this driver straight after S.
+    let mut factorial = [1.0f64; ROW_ORDER.len() + 1];
+    for i in 1..=n {
+        factorial[i] = factorial[i - 1] * i as f64;
+    }
+    (0..n)
+        .map(|i| {
+            let bit = 1usize << i;
+            (0..(1usize << n))
+                .filter(|mask| mask & bit == 0)
+                .map(|mask| {
+                    let size = mask.count_ones() as usize;
+                    factorial[size] * factorial[n - size - 1] / factorial[n]
+                        * (value[mask | bit] - value[mask])
+                })
+                .sum()
+        })
+        .collect()
+}
+
 /// A z already oriented so higher is better: positive supports recovery, negative limits it.
 fn direction(z: f64) -> DriverVerdict {
     if z > 0.0 {
@@ -97,7 +139,8 @@ fn skin_temp_verdict(dev: f64) -> DriverVerdict {
 
 /// The ordered driver rows behind [`crate::recovery::recovery`] for the same input: biggest mover
 /// first, ties in emission order. Empty exactly where the score itself returns `None`, and a term
-/// whose input is missing yields no row rather than a fabricated zero-contribution one.
+/// whose input is missing yields no row rather than a fabricated zero-contribution one. A term that
+/// IS present and sits exactly on its baseline reads 0 points, which is the only honest zero here.
 pub fn driver_rows(input: &RecoveryInput) -> Vec<DriverRow> {
     if !input.hrv_baseline_usable {
         return Vec::new();
@@ -145,19 +188,7 @@ pub fn driver_rows(input: &RecoveryInput) -> Vec<DriverRow> {
     if terms.is_empty() || total_weight <= 0.0 {
         return Vec::new();
     }
-    let actual = score_of(terms.iter().map(|t| t.z * t.w).sum::<f64>() / total_weight);
-
-    // Marginal swing of one term: the score minus the score with that ONE term neutralised to z = 0
-    // (the signal sitting at its own baseline), its weight still occupying the denominator.
-    let delta = |idx: usize| -> f64 {
-        let neutral = terms
-            .iter()
-            .enumerate()
-            .map(|(i, t)| if i == idx { 0.0 } else { t.z * t.w })
-            .sum::<f64>()
-            / total_weight;
-        round_half_up(actual - score_of(neutral))
-    };
+    let points = shapley_points(&terms, total_weight);
 
     let mut rows: Vec<DriverRow> = Vec::new();
     for kind in ROW_ORDER {
@@ -166,7 +197,7 @@ pub fn driver_rows(input: &RecoveryInput) -> Vec<DriverRow> {
             DriverKind::SkinTemp => skin_temp_verdict(input.skin_temp_dev.unwrap_or(0.0)),
             _ => direction(terms[idx].z),
         };
-        rows.push(DriverRow { kind, delta_points: delta(idx), verdict });
+        rows.push(DriverRow { kind, delta_points: round_half_up(points[idx]), verdict });
     }
     rows.sort_by(|a, b| {
         b.delta_points
@@ -223,15 +254,69 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (DriverKind::Hrv, 23.0),
-                (DriverKind::RestingHr, 4.0),
+                (DriverKind::Hrv, 26.0),
+                (DriverKind::RestingHr, 6.0),
+                (DriverKind::ActivityBalance, -3.0),
+                (DriverKind::RecoveryIndex, 2.0),
                 (DriverKind::Sleep, 1.0),
-                (DriverKind::RecoveryIndex, 1.0),
-                (DriverKind::ActivityBalance, -1.0),
-                (DriverKind::Respiratory, 0.0),
+                (DriverKind::Respiratory, 1.0),
                 (DriverKind::SkinTemp, 0.0),
             ]
         );
+    }
+
+    /// The night a leave-one-out marginal got wrong: HRV alone saturates the logistic, so it scored
+    /// +20 and the other four drivers each read exactly 0 — including a resting heart rate 16 bpm
+    /// below its own baseline. Every present driver here is off baseline, so none may read 0.
+    #[test]
+    fn a_saturated_score_still_attributes_every_off_baseline_driver() {
+        let input = RecoveryInput {
+            hrv: 150.0,
+            rhr: 42.0,
+            resp: Some(19.0),
+            hrv_baseline: Some(baseline(70.0, 8.0)),
+            rhr_baseline: Some(baseline(58.0, 4.0)),
+            resp_baseline: Some(baseline(14.6, 1.2)),
+            sleep_perf: Some(0.95),
+            skin_temp_dev: Some(1.4),
+            hrv_baseline_usable: true,
+            ..Default::default()
+        };
+        let rows = driver_rows(&input);
+        let got: Vec<(DriverKind, f64)> = rows.iter().map(|r| (r.kind, r.delta_points)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (DriverKind::Hrv, 31.0),
+                (DriverKind::RestingHr, 13.0),
+                (DriverKind::Respiratory, -3.0),
+                (DriverKind::Sleep, 2.0),
+                (DriverKind::SkinTemp, -1.0),
+            ]
+        );
+        // The score itself is pinned, which is what broke the old attribution.
+        let score = crate::recovery::recovery(&input).expect("a usable baseline scores");
+        assert!(score > 99.9, "score {score} is not saturated, so this is the wrong fixture");
+        // Not one present driver is off its baseline and silent.
+        for r in &rows {
+            assert_ne!(r.verdict, DriverVerdict::Neutral, "{:?} read neutral", r.kind);
+            assert_ne!(r.delta_points, 0.0, "{:?} moved a saturated score by nothing", r.kind);
+        }
+    }
+
+    /// The shares decompose the whole swing, so they sum to the score's distance from an all-baseline
+    /// night, to within the half point per row that rounding costs.
+    #[test]
+    fn the_rows_sum_to_the_distance_from_an_all_baseline_night() {
+        for input in [full_night(), RecoveryInput { sleep_perf: None, ..full_night() }] {
+            let rows = driver_rows(&input);
+            let swing = crate::recovery::recovery(&input).expect("scores") - score_of(0.0);
+            let summed: f64 = rows.iter().map(|r| r.delta_points).sum();
+            assert!(
+                (summed - swing).abs() <= rows.len() as f64 / 2.0,
+                "rows summed to {summed}, swing is {swing}"
+            );
+        }
     }
 
     #[test]

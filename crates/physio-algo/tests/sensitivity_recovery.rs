@@ -130,22 +130,26 @@ const GATE_BANKED_PROBES: [(f64, usize); 10] = [
     (0.0, 0),
     (80.0, 1),
 ];
-/// recovery_drivers.rs:223-234 — the ordered full-night row vector.
+/// The ordered full-night row vector. RE-DERIVED 2026-08-04 when the per-driver swing became an exact
+/// Shapley share instead of a leave-one-out marginal; the old vector was
+/// `[(Hrv, 23), (RestingHr, 4), (Sleep, 1), (RecoveryIndex, 1), (ActivityBalance, -1), (Respiratory, 0),
+/// (SkinTemp, 0)]`. Every value below was computed by an independent implementation, not read back
+/// out of the code it gates.
 const GATE_FULL_NIGHT_ROWS: [(DriverKind, f64); 7] = [
-    (DriverKind::Hrv, 23.0),
-    (DriverKind::RestingHr, 4.0),
+    (DriverKind::Hrv, 26.0),
+    (DriverKind::RestingHr, 6.0),
+    (DriverKind::ActivityBalance, -3.0),
+    (DriverKind::RecoveryIndex, 2.0),
     (DriverKind::Sleep, 1.0),
-    (DriverKind::RecoveryIndex, 1.0),
-    (DriverKind::ActivityBalance, -1.0),
-    (DriverKind::Respiratory, 0.0),
+    (DriverKind::Respiratory, 1.0),
     (DriverKind::SkinTemp, 0.0),
 ];
-/// recovery_drivers.rs:245 — `assert_eq!(hrv.delta_points, 32.0);`
+/// recovery_drivers.rs:347 — `assert_eq!(hrv.delta_points, 32.0);`
 const GATE_HRV_DELTA_NO_RHR: f64 = 32.0;
-/// recovery_drivers.rs:279-280 — `assert_eq!(hrv_delta(5000.0), 42.0);` / `(-5000.0), -58.0`.
+/// recovery_drivers.rs:433-434 — `assert_eq!(hrv_delta(5000.0), 42.0);` / `(-5000.0), -58.0`.
 const GATE_HRV_DELTA_SAT_HIGH: f64 = 42.0;
 const GATE_HRV_DELTA_SAT_LOW: f64 = -58.0;
-/// recovery_drivers.rs:289 — `assert_eq!(zero_spread[0].delta_points, 42.0);`
+/// recovery_drivers.rs:443 — `assert_eq!(zero_spread[0].delta_points, 42.0);`
 const GATE_ZERO_SPREAD_TOP_DELTA: f64 = 42.0;
 /// baselines.rs:293-294 — `assert_eq!(s.baseline, 30.0);` / `n_valid == 1`.
 const GATE_COLD_START_BASELINE: f64 = 30.0;
@@ -423,7 +427,7 @@ fn score_with(p: &ScoreParams, i: &RecoveryInput) -> Option<f64> {
     Some(score_of_with(p, terms.iter().map(|t| t.1 * t.2).sum::<f64>() / total))
 }
 
-// ─── replica of the driver breakdown (recovery_drivers.rs:66-178) ──────────────────────────────
+// ─── replica of the driver breakdown (recovery_drivers.rs:78-209) ──────────────────────────────
 
 const ROW_ORDER: [DriverKind; 7] = [
     DriverKind::Hrv,
@@ -479,6 +483,23 @@ fn driver_rows_with(
     }
     let round = |x: f64| if k.trunc_round { x.trunc() } else { round_half_up(x) };
     let actual = score_of_with(p, terms.iter().map(|t| t.1 * t.2).sum::<f64>() / total);
+    // Exact Shapley shares, the replica of recovery_drivers::shapley_points.
+    let n = terms.len();
+    let value: Vec<f64> = (0..(1usize << n))
+        .map(|mask| {
+            let z: f64 = terms
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask >> i & 1 == 1)
+                .map(|(_, t)| t.1 * t.2)
+                .sum();
+            score_of_with(p, z / total)
+        })
+        .collect();
+    let mut factorial = [1.0f64; 8];
+    for i in 1..=n {
+        factorial[i] = factorial[i - 1] * i as f64;
+    }
     let delta = |idx: usize| -> f64 {
         if k.zero_deltas {
             return 0.0;
@@ -486,13 +507,16 @@ fn driver_rows_with(
         if k.uniform_delta {
             return round(actual - score_of_with(p, 0.0));
         }
-        let neutral = terms
-            .iter()
-            .enumerate()
-            .map(|(n, t)| if n == idx { 0.0 } else { t.1 * t.2 })
-            .sum::<f64>()
-            / total;
-        round(actual - score_of_with(p, neutral))
+        let bit = 1usize << idx;
+        let share: f64 = (0..(1usize << n))
+            .filter(|mask| mask & bit == 0)
+            .map(|mask| {
+                let size = mask.count_ones() as usize;
+                factorial[size] * factorial[n - size - 1] / factorial[n]
+                    * (value[mask | bit] - value[mask])
+            })
+            .sum();
+        round(share)
     };
     let mut rows: Vec<(DriverKind, f64, DriverVerdict)> = Vec::new();
     for kind in ROW_ORDER {
@@ -551,7 +575,7 @@ fn neutral_input(p: &ScoreParams) -> RecoveryInput {
     }
 }
 
-/// recovery_drivers.rs:190-205 — every term present.
+/// recovery_drivers.rs:221-236 — every term present.
 fn full_night() -> RecoveryInput {
     RecoveryInput {
         hrv: 62.0,
@@ -569,7 +593,7 @@ fn full_night() -> RecoveryInput {
     }
 }
 
-/// recovery_drivers.rs:207-217 — the two-term input the saturation and verdict probes mutate.
+/// recovery_drivers.rs:238-248 — the two-term input the saturation and verdict probes mutate.
 fn two_term(mutate: impl FnOnce(&mut RecoveryInput)) -> RecoveryInput {
     let mut i = RecoveryInput {
         hrv: 50.0,
@@ -1140,9 +1164,9 @@ fn metric_driver_rows() -> Score {
     }
 
     let mut t = Table::new(
-        "Recovery driver rows (per-driver marginal point swing)",
-        "recovery_drivers.rs:223-234 full-night vector + :245 = 32.0 + :279-280 = 42.0/-58.0 + :289 = 42.0 \
-         + :267-271 skin-temp verdicts",
+        "Recovery driver rows (per-driver Shapley share of the swing)",
+        "recovery_drivers.rs:251-266 full-night vector + :347 = 32.0 + :433-434 = 42.0/-58.0 + :443 = 42.0 \
+         + skin-temp verdicts",
         "hrv pts",
     );
     let sp = ScoreParams::shipped();
@@ -2573,9 +2597,9 @@ const FLOORS: &[(&str, &str, f64)] = &[
     ("Recovery band (red / yellow / green)", "both thresholds shifted +1.0 point", 0.9),
     ("Charge state (5-way floors)", "constant state, always Moderate", 3.6),
     ("Charge state (5-way floors)", "Low and Primed labels swapped", 1.8),
-    ("Recovery driver rows (per-driver marginal point swing)", "every row reports 0 points", 10.3),
-    ("Recovery driver rows (per-driver marginal point swing)", "every row reports the whole composite swing", 4.5),
-    ("Recovery driver rows (per-driver marginal point swing)", "W_HRV and W_RHR swapped (0.55 <-> 0.20)", 6.75),
+    ("Recovery driver rows (per-driver Shapley share of the swing)", "every row reports 0 points", 10.3),
+    ("Recovery driver rows (per-driver Shapley share of the swing)", "every row reports the whole composite swing", 4.5),
+    ("Recovery driver rows (per-driver Shapley share of the swing)", "W_HRV and W_RHR swapped (0.55 <-> 0.20)", 6.75),
     ("Recovery Index (overnight HR-decline slope, bpm/hour)", "constant scorer, every night 0.0 bpm/h", 1.8),
     ("Recovery Index (overnight HR-decline slope, bpm/hour)", "input flattened to its own mean bpm", 1.8),
     ("Recovery Index (overnight HR-decline slope, bpm/hour)", "slope sign flipped", 3.6),
@@ -2605,8 +2629,8 @@ const NO_FLOOR: &[(&str, &str, &str)] = &[
     ("Recovery / Charge score (0-100 logistic composite)", "HRV term dropped entirely", "measured delta is exactly zero: this mutation does not move the number"),
     ("Recovery / Charge score (0-100 logistic composite)", "every driver weighted equally", "measured delta is exactly zero: this mutation does not move the number"),
     ("Charge state (5-way floors)", "every floor shifted +1.0 point", "measured delta is exactly zero: this mutation does not move the number"),
-    ("Recovery driver rows (per-driver marginal point swing)", "sort reversed, smallest mover first", "measured delta is exactly zero: this mutation does not move the number"),
-    ("Recovery driver rows (per-driver marginal point swing)", "round-half-up replaced by truncation", "measured delta is exactly zero: this mutation does not move the number"),
+    ("Recovery driver rows (per-driver Shapley share of the swing)", "sort reversed, smallest mover first", "measured delta is exactly zero: this mutation does not move the number"),
+    ("Recovery driver rows (per-driver Shapley share of the swing)", "round-half-up replaced by truncation", "measured delta is exactly zero: this mutation does not move the number"),
     ("Personal baselines (winsorized EWMA centre + abs-dev spread)", "history folded newest first", "measured delta is exactly zero: this mutation does not move the number"),
     ("Personal baselines (winsorized EWMA centre + abs-dev spread)", "winsorisation off (WINSOR_K = 1e9)", "measured delta is exactly zero: this mutation does not move the number"),
     ("Illness-watch baseline z-series", "window taken from the FUTURE of the scored day", "the arm yields no number, so it has no distance from the baseline"),
