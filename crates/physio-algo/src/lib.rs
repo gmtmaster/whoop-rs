@@ -24,6 +24,7 @@ pub mod hydration;
 pub mod imu_features;
 pub mod nap;
 pub mod ppg;
+pub mod ramps;
 pub mod recovery;
 pub mod recovery_drivers;
 pub mod respiratory_rate;

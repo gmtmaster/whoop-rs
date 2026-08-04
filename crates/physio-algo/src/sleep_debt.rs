@@ -4,6 +4,8 @@
 pub const DEFAULT_WINDOW_NIGHTS: usize = 14;
 const DEFAULT_NEED_HOURS: f64 = 8.0;
 pub const ON_TARGET_BAND_MIN: f64 = 30.0;
+/// Deficit (minutes) at which a debt stops reading as a night or two behind and reads as a backlog.
+pub const HEAVY_DEBT_MIN: f64 = 180.0;
 
 /// One night's contribution to the ledger.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,6 +29,31 @@ impl DebtLedger {
     }
     pub fn is_on_target(&self) -> bool {
         self.balance_min.abs() < ON_TARGET_BAND_MIN
+    }
+}
+
+/// How far behind the ledger's balance reads. The word and colour for each band are the caller's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebtSeverity {
+    /// A surplus, or a debt inside [`ON_TARGET_BAND_MIN`].
+    OnTarget,
+    /// A debt of at least [`ON_TARGET_BAND_MIN`] but under [`HEAVY_DEBT_MIN`].
+    Moderate,
+    /// A debt at or over [`HEAVY_DEBT_MIN`].
+    Heavy,
+}
+
+/// Severity band of a SIGNED balance (minutes; negative = debt). Sign decides first, so only a
+/// deficit is measured against the two cut points; a balance that is not a number is not a debt.
+pub fn severity(balance_min: f64) -> DebtSeverity {
+    let is_debt = balance_min < 0.0;
+    let magnitude = balance_min.abs();
+    if !is_debt || magnitude < ON_TARGET_BAND_MIN {
+        DebtSeverity::OnTarget
+    } else if magnitude < HEAVY_DEBT_MIN {
+        DebtSeverity::Moderate
+    } else {
+        DebtSeverity::Heavy
     }
 }
 
@@ -217,5 +244,25 @@ mod tests {
         assert!(!ledger(&[s("d1", 450.0)], Some(8.0), None).is_on_target(), "the band is exclusive at 30");
         assert!(!ledger(&[s("d1", 510.0)], Some(8.0), None).is_on_target());
         assert!(ledger(&[], None, None).is_on_target(), "an empty ledger is level, not off target");
+    }
+
+    /// The exact band the Android balance row coloured by before the two cut points moved here.
+    #[test]
+    fn severity_reads_sign_first_then_the_two_cut_points() {
+        assert_eq!(severity(0.0), DebtSeverity::OnTarget);
+        assert_eq!(severity(-29.9), DebtSeverity::OnTarget, "inside the on-target deadband");
+        assert_eq!(severity(-30.0), DebtSeverity::Moderate, "the deadband is exclusive at 30");
+        assert_eq!(severity(-179.9), DebtSeverity::Moderate);
+        assert_eq!(severity(-180.0), DebtSeverity::Heavy, "the heavy cut is inclusive at 180");
+        assert_eq!(severity(-600.0), DebtSeverity::Heavy);
+    }
+
+    /// A surplus never reads as a debt, however large — the sign is checked before the magnitude.
+    #[test]
+    fn any_surplus_reads_on_target() {
+        for surplus in [1.0, 29.0, 180.0, 5_000.0] {
+            assert_eq!(severity(surplus), DebtSeverity::OnTarget, "surplus of {surplus} min");
+        }
+        assert_eq!(severity(f64::NAN), DebtSeverity::OnTarget, "a non-number is not a debt");
     }
 }

@@ -145,6 +145,43 @@ pub fn pearson(xs: &[f64], ys: &[f64]) -> Option<f64> {
     Some(sxy / (sxx * syy).sqrt())
 }
 
+/// Fewest overlapping pairs a correlation may be shown from; two points fit any line exactly.
+pub const CORRELATION_MIN_PAIRS: usize = 3;
+
+/// `|r|` floors for [`correlation_strength`], each inclusive: an `|r|` on a floor is the band above.
+pub const CORRELATION_WEAK_FLOOR: f64 = 0.1;
+pub const CORRELATION_MODERATE_FLOOR: f64 = 0.3;
+pub const CORRELATION_STRONG_FLOOR: f64 = 0.5;
+pub const CORRELATION_VERY_STRONG_FLOOR: f64 = 0.7;
+
+/// How strong a correlation reads. Each surface words these its own way; none owns the cut points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CorrelationStrength {
+    Negligible,
+    Weak,
+    Moderate,
+    Strong,
+    VeryStrong,
+}
+
+/// Strength band of a Pearson `r`, cut by the `CORRELATION_*_FLOOR` constants on `|r|`, so −0.62 and
+/// +0.62 read equally strong. Direction is the caller's to word. Feed it a finite `r`: one that is
+/// not a number falls past every floor into the top band.
+pub fn correlation_strength(r: f64) -> CorrelationStrength {
+    let m = r.abs();
+    if m < CORRELATION_WEAK_FLOOR {
+        CorrelationStrength::Negligible
+    } else if m < CORRELATION_MODERATE_FLOOR {
+        CorrelationStrength::Weak
+    } else if m < CORRELATION_STRONG_FLOOR {
+        CorrelationStrength::Moderate
+    } else if m < CORRELATION_VERY_STRONG_FLOOR {
+        CorrelationStrength::Strong
+    } else {
+        CorrelationStrength::VeryStrong
+    }
+}
+
 /// A per-strap linear calibration `reference ≈ scale·field + offset`, with the `r` that says how far to
 /// trust it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -476,5 +513,36 @@ mod tests {
         assert!((half_change(&[1.0, 2.0, 3.0, 4.0]).unwrap() - 2.0).abs() < 1e-12);
         // 5 points: first half is [1,2], second [3,4,5] → 4.0 − 1.5.
         assert!((half_change(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap() - 2.5).abs() < 1e-12);
+    }
+
+    /// The exact band the Compare, Mind and Insights sentences read before the ladder moved here.
+    /// Every floor is inclusive: an `|r|` sitting on it belongs to the band above.
+    #[test]
+    fn correlation_bands_are_cut_at_the_declared_floors() {
+        assert_eq!(correlation_strength(0.0), CorrelationStrength::Negligible);
+        assert_eq!(correlation_strength(0.099), CorrelationStrength::Negligible);
+        assert_eq!(correlation_strength(0.1), CorrelationStrength::Weak);
+        assert_eq!(correlation_strength(0.299), CorrelationStrength::Weak);
+        assert_eq!(correlation_strength(0.3), CorrelationStrength::Moderate);
+        assert_eq!(correlation_strength(0.499), CorrelationStrength::Moderate);
+        assert_eq!(correlation_strength(0.5), CorrelationStrength::Strong);
+        assert_eq!(correlation_strength(0.699), CorrelationStrength::Strong);
+        assert_eq!(correlation_strength(0.7), CorrelationStrength::VeryStrong);
+        assert_eq!(correlation_strength(1.0), CorrelationStrength::VeryStrong);
+    }
+
+    /// Direction is the caller's to word, so the band reads off the magnitude alone.
+    #[test]
+    fn a_negative_r_bands_as_its_mirror() {
+        for r in [0.05, 0.2, 0.4, 0.6, 0.9] {
+            assert_eq!(correlation_strength(-r), correlation_strength(r), "|r| = {r}");
+        }
+    }
+
+    /// Two points fit any line exactly, so the display gate sits above them.
+    #[test]
+    fn the_display_gate_is_three_pairs() {
+        assert_eq!(CORRELATION_MIN_PAIRS, 3);
+        assert!(pearson(&[1.0, 2.0], &[2.0, 4.0]).is_some(), "pearson itself still answers for two");
     }
 }

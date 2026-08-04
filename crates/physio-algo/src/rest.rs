@@ -62,6 +62,32 @@ pub fn personal_sleep_need_hours(recent_asleep_hours: &[f64]) -> f64 {
     (sum / n as f64).max(MIN_SLEEP_NEED_HOURS)
 }
 
+/// How many equal tiers a Rest driver's 0-100 is read in; the word and swatch per tier are the caller's.
+pub const DRIVER_TIERS: u32 = 3;
+
+/// Which tier a driver's 0-100 `percent` falls in, counting from 0. Evenly split, top tier closed at
+/// 100; anything above the scale, below it, or not a number clamps into range.
+pub fn driver_tier(percent: f64) -> u32 {
+    let raw = (percent / 100.0 * DRIVER_TIERS as f64) as i64;
+    raw.clamp(0, DRIVER_TIERS as i64 - 1) as u32
+}
+
+/// The tier a driver LIGHTS: its own [`driver_tier`], mirrored end-for-end when `higher_is_better` is
+/// false because that driver's 0 is the good end. Only which tier lights moves, never the value.
+pub fn driver_tier_lit(percent: f64, higher_is_better: bool) -> u32 {
+    let tier = driver_tier(percent);
+    if higher_is_better {
+        tier
+    } else {
+        DRIVER_TIERS - 1 - tier
+    }
+}
+
+/// Where a tier sits on a 0..1 ramp — bottom at 0, top at 1 — so the tier swatches sample one scale.
+pub fn driver_tier_position(tier: u32) -> f64 {
+    tier.min(DRIVER_TIERS - 1) as f64 / (DRIVER_TIERS - 1) as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +203,48 @@ mod tests {
         let with_neutral = rest(8.0 * 3600.0, 0.90, 7200.0, 7200.0, Some(8.0), Some(0.5));
         let with_default = rest(8.0 * 3600.0, 0.90, 7200.0, 7200.0, Some(8.0), None);
         assert!((with_neutral.unwrap() - with_default.unwrap()).abs() < 0.01);
+    }
+
+    /// The exact tier the Android strip drew before the rule moved here, so the port is provably
+    /// behaviour-preserving rather than merely plausible.
+    #[test]
+    fn driver_tiers_split_the_range_in_thirds() {
+        assert_eq!(driver_tier(0.0), 0);
+        assert_eq!(driver_tier(33.0), 0);
+        assert_eq!(driver_tier(34.0), 1);
+        assert_eq!(driver_tier(66.0), 1);
+        assert_eq!(driver_tier(67.0), 2);
+        assert_eq!(driver_tier(100.0), 2);
+        assert_eq!(driver_tier(140.0), 2, "above the scale still reads as the top tier");
+    }
+
+    /// A percent that is negative or not a number reads as the bottom tier, never as a panic or a
+    /// tier the swatch list cannot index.
+    #[test]
+    fn driver_tier_floors_a_value_off_the_scale() {
+        assert_eq!(driver_tier(-10.0), 0);
+        assert_eq!(driver_tier(f64::NAN), 0);
+        assert_eq!(driver_tier(f64::NEG_INFINITY), 0);
+        assert_eq!(driver_tier(f64::INFINITY), DRIVER_TIERS - 1);
+    }
+
+    /// A driver whose 0 is the good end lights the mirrored tier; the tier index itself is unmoved.
+    #[test]
+    fn a_lower_is_better_driver_lights_the_mirrored_tier() {
+        assert_eq!(driver_tier_lit(10.0, true), 0);
+        assert_eq!(driver_tier_lit(10.0, false), 2);
+        assert_eq!(driver_tier_lit(50.0, true), 1);
+        assert_eq!(driver_tier_lit(50.0, false), 1);
+        assert_eq!(driver_tier_lit(95.0, true), 2);
+        assert_eq!(driver_tier_lit(95.0, false), 0);
+    }
+
+    /// The three tiers spread across the whole ramp, so the legend reads as one scale end to end.
+    #[test]
+    fn tier_positions_span_the_ramp() {
+        assert_eq!(driver_tier_position(0), 0.0);
+        assert_eq!(driver_tier_position(1), 0.5);
+        assert_eq!(driver_tier_position(2), 1.0);
+        assert_eq!(driver_tier_position(99), 1.0, "a tier past the top clamps rather than overshoots");
     }
 }

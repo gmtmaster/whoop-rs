@@ -45,6 +45,8 @@ mod cfg_api;
 pub use cfg_api::*;
 mod illness_api;
 pub use illness_api::*;
+mod bands_api;
+pub use bands_api::*;
 
 #[cfg(test)]
 mod tests {
