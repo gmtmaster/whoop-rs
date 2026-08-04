@@ -19,6 +19,24 @@ pub const BANISTER_B_WOMEN: f64 = 1.67;
 /// one minute is assumed.
 pub const LONE_SAMPLE_SECONDS: f64 = 60.0;
 
+/// The other 0–N Day Strain axis an Effort score is read on, when the reader asks for it.
+pub const WHOOP_DAY_STRAIN_MAX: f64 = 21.0;
+
+/// Day Strain → Effort, the multiplier an import boundary applies so imported history lands on the
+/// same axis as a computed Effort.
+pub const WHOOP_DAY_STRAIN_TO_EFFORT: f64 = MAX_STRAIN / WHOOP_DAY_STRAIN_MAX;
+
+/// Effort → Day Strain, for a display that asks for the other axis. Multiplying by this is NOT the
+/// same operation as dividing by [`WHOOP_DAY_STRAIN_TO_EFFORT`]; only the division inverts an import
+/// exactly, so an export boundary divides.
+pub const EFFORT_TO_WHOOP_DAY_STRAIN: f64 = WHOOP_DAY_STRAIN_MAX / MAX_STRAIN;
+
+/// An Effort score on the axis the reader chose: Day Strain when `whoop_axis`, else the native
+/// 0–[`MAX_STRAIN`] value unchanged.
+pub fn effort_on_axis(value: f64, whoop_axis: bool) -> f64 {
+    if whoop_axis { value * EFFORT_TO_WHOOP_DAY_STRAIN } else { value }
+}
+
 /// Edwards cut-offs as (%HRR threshold, weight), highest-first.
 const EDWARDS_ZONES: [(f64, i64); 5] = [(90.0, 5), (80.0, 4), (70.0, 3), (60.0, 2), (50.0, 1)];
 
@@ -553,5 +571,28 @@ mod tests {
         let shuffled_d = fit_strain_denominator(&shuffled).unwrap();
         assert!((shuffled_d - 32_297.586_246).abs() < 1e-3, "shuffled fit {shuffled_d}");
         assert!(shuffled_d > STRAIN_DENOMINATOR * 4.0);
+    }
+
+    /// The two axis ratios, pinned to the bits the frontend produced before it read them here.
+    #[test]
+    fn day_strain_axis_ratios_are_exact() {
+        assert_eq!(EFFORT_TO_WHOOP_DAY_STRAIN, 0.21);
+        assert_eq!(WHOOP_DAY_STRAIN_TO_EFFORT, 4.761904761904762);
+        assert_eq!(WHOOP_DAY_STRAIN_TO_EFFORT * EFFORT_TO_WHOOP_DAY_STRAIN, 1.0);
+        assert_eq!(1.0 / WHOOP_DAY_STRAIN_TO_EFFORT, EFFORT_TO_WHOOP_DAY_STRAIN);
+        assert_eq!(MAX_STRAIN * EFFORT_TO_WHOOP_DAY_STRAIN, WHOOP_DAY_STRAIN_MAX);
+    }
+
+    /// Multiplying by the ratio and dividing by its inverse are different operations; only the
+    /// division inverts an import exactly, so this pins which one `effort_on_axis` performs.
+    #[test]
+    fn effort_on_axis_multiplies_and_leaves_the_native_scale_alone() {
+        assert_eq!(effort_on_axis(76.193, true), 16.000_529_999_999_998);
+        assert_ne!(76.193 * EFFORT_TO_WHOOP_DAY_STRAIN, 76.193 / WHOOP_DAY_STRAIN_TO_EFFORT);
+        assert_eq!(effort_on_axis(50.0, true), 10.5);
+        assert_eq!(effort_on_axis(12.3, true), 2.583);
+        assert_eq!(effort_on_axis(0.0, true), 0.0);
+        assert_eq!(effort_on_axis(76.193, false), 76.193);
+        assert_eq!(effort_on_axis(100.0, false), 100.0);
     }
 }

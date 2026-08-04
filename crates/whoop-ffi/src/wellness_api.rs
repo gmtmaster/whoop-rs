@@ -435,3 +435,23 @@ pub fn series_trendline(
 pub fn series_half_change(values: Vec<f64>) -> Option<f64> {
     physio_algo::stats::half_change(&values)
 }
+
+// ── Hydration ──────────────────────────────────────────────────────────────
+
+/// The sex baseline (ml) behind the daily fluid goal. Anything but male/female is neutral.
+#[uniffi::export]
+pub fn hydration_baseline_for_sex(sex: String) -> i32 {
+    hydration::baseline_for_sex(&sex)
+}
+
+/// The extra fluid (ml) today's Effort adds, clamped to the bump ceiling. `None` Effort adds none.
+#[uniffi::export]
+pub fn hydration_effort_bump_ml(effort: Option<f64>) -> i32 {
+    hydration::effort_bump_ml(effort)
+}
+
+/// The displayed daily fluid goal (ml): sex baseline + Effort bump, on the rounding grid.
+#[uniffi::export]
+pub fn hydration_daily_goal_ml(sex: String, effort: Option<f64>) -> i32 {
+    hydration::daily_goal_ml(&sex, effort)
+}

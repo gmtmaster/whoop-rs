@@ -8,10 +8,11 @@ uniffi::setup_scaffolding!();
 pub(crate) use std::sync::{Arc, Mutex};
 
 pub(crate) use physio_algo::{
-    baselines, biological_age, calories, circadian, hr_recovery, hr_zones, imu_features, nap, ppg as ppg_hr,
+    baselines, biological_age, calories, circadian, hr_recovery, hr_zones, hydration, imu_features, nap,
+    ppg as ppg_hr,
     recovery, recovery_drivers, respiratory_rate, rest,
     resting_hr,
-    sleep, sleep_debt, sleep_regularity, steps, strain, stress, stress_onset, vitality, vo2max,
+    sleep, sleep_debt, sleep_regularity, steps, strain, stress, stress_onset, vital_bands, vitality, vo2max,
     workout,
     HrvReadiness, Spo2,
 };

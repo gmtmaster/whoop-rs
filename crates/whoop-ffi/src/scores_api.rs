@@ -225,6 +225,13 @@ pub fn strain_default_denominator() -> f64 {
     strain::STRAIN_DENOMINATOR
 }
 
+/// A stored Effort on the axis the reader chose: Day Strain when `whoop_axis`, else the native
+/// 0–100 value unchanged. The stored number never moves; only what is shown converts.
+#[uniffi::export]
+pub fn effort_on_axis(value: f64, whoop_axis: bool) -> f64 {
+    strain::effort_on_axis(value, whoop_axis)
+}
+
 /// Baevsky Stress Index histogram terms behind an SI.
 #[derive(uniffi::Record)]
 pub struct StressComponentsInfo {

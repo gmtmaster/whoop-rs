@@ -79,13 +79,17 @@ pub fn rest_cfg() -> RestCfgInfo {
     }
 }
 
-/// Effort (strain) scale, log-map denominator and the two coverage gates.
+/// Effort (strain) scale, log-map denominator, the two coverage gates, and the Day Strain axis a
+/// display or an import boundary converts to.
 #[derive(uniffi::Record)]
 pub struct StrainCfgInfo {
     pub min_readings: u32,
     pub min_span_seconds: i64,
     pub max_strain: f64,
     pub denominator: f64,
+    pub whoop_day_strain_max: f64,
+    pub whoop_day_strain_to_effort: f64,
+    pub effort_to_whoop_day_strain: f64,
 }
 
 /// The Effort tuning behind `strain_score`.
@@ -96,6 +100,31 @@ pub fn strain_cfg() -> StrainCfgInfo {
         min_span_seconds: strain::MIN_SPAN_SECONDS,
         max_strain: strain::MAX_STRAIN,
         denominator: strain::STRAIN_DENOMINATOR,
+        whoop_day_strain_max: strain::WHOOP_DAY_STRAIN_MAX,
+        whoop_day_strain_to_effort: strain::WHOOP_DAY_STRAIN_TO_EFFORT,
+        effort_to_whoop_day_strain: strain::EFFORT_TO_WHOOP_DAY_STRAIN,
+    }
+}
+
+/// Sex baselines, the Effort bump ceiling and the rounding grid behind `hydration_daily_goal_ml`.
+#[derive(uniffi::Record)]
+pub struct HydrationCfgInfo {
+    pub baseline_male_ml: i32,
+    pub baseline_female_ml: i32,
+    pub baseline_other_ml: i32,
+    pub max_effort_bump_ml: i32,
+    pub round_to_ml: i32,
+}
+
+/// The daily fluid-goal tuning.
+#[uniffi::export]
+pub fn hydration_cfg() -> HydrationCfgInfo {
+    HydrationCfgInfo {
+        baseline_male_ml: hydration::BASELINE_MALE_ML,
+        baseline_female_ml: hydration::BASELINE_FEMALE_ML,
+        baseline_other_ml: hydration::BASELINE_OTHER_ML,
+        max_effort_bump_ml: hydration::MAX_EFFORT_BUMP_ML,
+        round_to_ml: hydration::ROUND_TO_ML,
     }
 }
 

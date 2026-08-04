@@ -46,7 +46,7 @@ caller. What the app still computes itself is tracked in the noop-tan `ALGORITHM
 | 3 | HRV / RMSSD / readiness | `hrv.rs` | FFI | 31 |
 | 4 | Resting HR | `resting_hr.rs` | FFI | ✓ |
 | 5 | Respiratory rate (RSA) | `respiratory_rate.rs` | FFI | ✓ |
-| 6 | Effort / Strain | `strain.rs` | FFI | 14 |
+| 6 | Effort / Strain | `strain.rs` | FFI | 19 |
 | 7 | Charge / Recovery | `recovery.rs` | FFI | 20 |
 | 8 | Personal baselines (EWMA) | `baselines.rs` | FFI | 17 |
 | 9 | HR zones | `hr_zones.rs` | FFI | 15 |
@@ -69,6 +69,8 @@ caller. What the app still computes itself is tracked in the noop-tan `ALGORITHM
 | 25 | Vitality / Body Age | `vitality.rs` | FFI | 9 |
 | 26 | Sleep Regularity Index | `sleep_regularity.rs` | FFI | 7 |
 | 27 | Circadian phase + Rhythm Age | `circadian.rs`, `biological_age.rs` | FFI | ✓ |
+| 28 | Daily hydration goal | `hydration.rs` | FFI | 8 |
+| 29 | Vital banding (personal vs typical) | `vital_bands.rs` | FFI | 13 |
 | — | Shared stats | `stats.rs` | internal | ✓ |
 
 There is no `crates/whoop-metrics`. It was renamed to `physio-algo`, the shim that briefly stood in its
@@ -198,7 +200,7 @@ align with v18 @73/@74 = `sleep_state_raw` and the tri-mode sleep-only SpO2/stat
 frames carry the same literal `01 0c 02 0c` block there. Do not re-investigate it as a respiration
 channel; the name is the only thing respiratory about it.
 
-## 6. Effort / Strain  ·  FFI `strain_score`, `strain_default_denominator`
+## 6. Effort / Strain  ·  FFI `strain_score`, `strain_default_denominator`, `effort_on_axis`
 
 `strain.rs`.
 ```
@@ -208,6 +210,11 @@ TRIMP per sample: zone_weight x its own inter-sample gap (dropout capped 20 min)
 Effort = 100 x ln(TRIMP + 1) / ln(7201)                                   (Edwards 1993 / Banister 1991)
 ```
 Denominator 7201 maps a 24 h top-zone day (5 x 1440 = 7200) to exactly 100.
+
+A reader may ask for the other 0-21 Day Strain axis instead: `effort_on_axis` multiplies by 21/100, and an
+import multiplies the other way by 100/21. Multiplying by one ratio is not the same operation as dividing
+by the other, and only the division inverts an import exactly, so an export boundary divides. The stored
+value never moves; only the displayed one converts.
 
 ## 7. Charge / Recovery  ·  FFI `recovery_score`, `recovery_band`, `recovery_index_slope`, `recovery_banked_nights`
 
@@ -346,6 +353,20 @@ floor. Range + Malik-ectopic cleaned first. Approximate, non-clinical.
 eligibility gate (>= 20 rows, median inter-sample gap <= 90 s), the longest sustained-still run (reusing
 `workout::activity_series` + `smoothed_intensity`), a `[min,max]`-minute length gate, and an HR-settled gate
 (mean HR <= resting + margin when resting is known). Only PROPOSES a review card, never auto-writes sleep.
+
+## 28. Daily hydration goal  ·  FFI `hydration_daily_goal_ml`, `hydration_cfg`
+
+`hydration.rs`. `round50(sexBaseline + clamp(round(effort / 100 * 700), 0, 700))`, sex baselines 3700 /
+2700 / 3200 ml, both roundings half-up. Derived from the body profile and the day's Effort only, never from
+what was logged. Which quantities a quick-log tap adds is the frontend's, not this.
+
+## 29. Vital banding  ·  FFI `vital_band`, `vital_typical_range`
+
+`vital_bands.rs`. In range means `|z| <= 2` against the wearer's own baseline once its status is Trusted,
+and inside the typical-adult window (resp 12-20, SpO2 95-100, RHR 40-60, HRV 40-120, skin abs 33-36, skin
+dev +/-0.6) before that and again once it goes stale. A `MetricCfg`'s physiological bounds are an outer
+guard only, never the in-range band. A skin-temp reading >= 20 degC is absolute, below it a deviation, and
+a history is filtered to one kind before folding. Wellness bands, never clinical cut points.
 
 ## Internal helpers
 
