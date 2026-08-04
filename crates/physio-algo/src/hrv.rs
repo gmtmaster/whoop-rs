@@ -296,6 +296,12 @@ impl HrvReadiness {
     /// Per-calendar-day gap-aware RMSSD series (ms) from history records, oldest → newest, for `evaluate`.
     /// Groups records into UTC days, then applies `rmssd_gap_aware` per day. A sleep that straddles UTC
     /// midnight is split across the two days. Records [`rr_trusted`] rejects contribute no beats.
+    ///
+    /// Emits one entry PER DAY THAT HAS TRUSTED BEATS, so a day with none is absent rather than `None`:
+    /// the returned vector carries no record of where the gaps were. Only `whoopctl` builds a series
+    /// this way; the Android app passes `evaluate` its own per-row series, which applies no
+    /// [`rr_trusted`] filter at all, so the two producers of this one quantity disagree on any day the
+    /// strap flagged its optical front-end.
     pub fn nightly_rmssd(history: &[HistoryRecord]) -> Vec<Option<f64>> {
         let mut by_day: std::collections::BTreeMap<u32, Vec<(u32, Vec<u16>)>> = std::collections::BTreeMap::new();
         for h in history {
@@ -306,8 +312,16 @@ impl HrvReadiness {
         by_day.values().map(|beats| Self::rmssd_gap_aware(beats)).collect()
     }
 
-    /// Readiness over a nightly RMSSD series (ms), oldest → newest; `None` slots = missing nights.
-    /// Implausible nights (outside 5..250 ms) are dropped. `None` result = calibrating.
+    /// Readiness over a nightly RMSSD series (ms), oldest → newest. `None` result = calibrating.
+    ///
+    /// A `None` slot is a missing night, and it is DROPPED, not held: the windows below count
+    /// readings, not calendar days, so `baseline7` is the last 7 nights that produced a value and
+    /// after a fortnight off-wrist it spans a month. Implausible nights (outside 5..250 ms) leave the
+    /// same way. `cv_slope` then fits over index, which treats those unevenly spaced nights as evenly
+    /// spaced. Pinned by `evaluate_compresses_gaps_it_does_not_honour_them`.
+    ///
+    /// Callers cannot correct for this by padding: the padding is what gets removed. Changing it moves
+    /// a displayed readiness tier, so it lands as instrumentation beside the incumbent, not as a fix.
     pub fn evaluate(nightly_rmssd_ms: &[Option<f64>]) -> Option<HrvReadinessResult> {
         let valid: Vec<f64> = nightly_rmssd_ms
             .iter()
@@ -601,6 +615,39 @@ mod tests {
         let run: &[u16] = &[600, 610, 1500, 610, 600];
         let v = HrvReadiness::rmssd_runs([run]).unwrap();
         assert!(v < 20.0, "artifact beat-to-beat jumps should be excluded, got {v}");
+    }
+
+    /// The gap contract, pinned so it cannot be assumed away: `evaluate` counts READINGS, not calendar
+    /// days. A caller that pads its missing nights with `None` gets exactly the same answer as one that
+    /// omits them, because the padding is stripped before any window is taken. Both differ from the
+    /// unbroken run only in which nights the last 7 actually are.
+    #[test]
+    fn evaluate_compresses_gaps_it_does_not_honour_them() {
+        let nights: Vec<Option<f64>> = (0..14).map(|i| Some(50.0 + i as f64)).collect();
+
+        // Same 14 readings, but the middle four nights were never worn.
+        let mut padded = nights.clone();
+        for slot in padded.iter_mut().skip(5).take(4) {
+            *slot = None;
+        }
+        let omitted: Vec<Option<f64>> = padded.iter().copied().flatten().map(Some).collect();
+        assert_eq!(padded.len(), 14);
+        assert_eq!(omitted.len(), 10);
+
+        let a = HrvReadiness::evaluate(&padded).expect("10 valid nights clears MIN_NIGHTS");
+        let b = HrvReadiness::evaluate(&omitted).expect("same 10 readings");
+        assert_eq!(a.baseline7_ms, b.baseline7_ms, "a None slot carries no information into evaluate");
+        assert_eq!(a.normal_low_ms, b.normal_low_ms);
+        assert_eq!(a.normal_high_ms, b.normal_high_ms);
+        assert_eq!(a.overreaching_watch, b.overreaching_watch);
+
+        // And the 7-night baseline really is the last 7 SURVIVING readings: dropping four mid-series
+        // nights pulls older values into the window, so it does not match the unbroken fortnight.
+        let unbroken = HrvReadiness::evaluate(&nights).expect("14 valid nights");
+        assert_ne!(
+            unbroken.baseline7_ms, a.baseline7_ms,
+            "if these matched, the window would be counting days rather than readings"
+        );
     }
 
     #[test]
