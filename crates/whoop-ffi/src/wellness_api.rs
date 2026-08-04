@@ -336,6 +336,19 @@ pub fn series_mean(values: Vec<f64>) -> f64 {
     physio_algo::stats::mean(&values)
 }
 
+/// Smallest value in a series. `0.0` when empty, NaN when any value is NaN — the low end of a chart's
+/// own y-axis, sharing an owner with the [`series_mean`] printed between the two extremes.
+#[uniffi::export]
+pub fn series_min(values: Vec<f64>) -> f64 {
+    physio_algo::stats::min(&values)
+}
+
+/// Largest value in a series. `0.0` when empty, NaN when any value is NaN. See [`series_min`].
+#[uniffi::export]
+pub fn series_max(values: Vec<f64>) -> f64 {
+    physio_algo::stats::max(&values)
+}
+
 /// Sample standard deviation (n − 1) of a series. `0.0` under two points.
 #[uniffi::export]
 pub fn series_sample_sd(values: Vec<f64>) -> f64 {

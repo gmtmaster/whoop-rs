@@ -1,5 +1,5 @@
-//! Small pure statistics shared by the metrics: mean, sample/population SD, OLS slope, median, median
-//! sample gap, percentile, and the robust pulsatile amplitude (p95 − p5).
+//! Small pure statistics shared by the metrics: mean, the series extremes, sample/population SD, OLS
+//! slope, median, median sample gap, percentile, and the robust pulsatile amplitude (p95 − p5).
 
 /// Arithmetic mean; `0.0` for an empty slice.
 pub fn mean(xs: &[f64]) -> f64 {
@@ -7,6 +7,38 @@ pub fn mean(xs: &[f64]) -> f64 {
         return 0.0;
     }
     xs.iter().sum::<f64>() / xs.len() as f64
+}
+
+/// Smallest value in a series; `0.0` when empty, NaN when any element is NaN. The low end of a chart's
+/// own axis, sharing an owner with the [`mean`] drawn between the two extremes. Unlike the internal
+/// `fold(f64::INFINITY, f64::min)`, it neither skips a NaN nor returns `±∞` for an empty series.
+pub fn min(xs: &[f64]) -> f64 {
+    extreme(xs, false)
+}
+
+/// Largest value in a series; `0.0` when empty, NaN when any element is NaN. See [`min`].
+pub fn max(xs: &[f64]) -> f64 {
+    extreme(xs, true)
+}
+
+/// Shared body of [`min`] and [`max`]: NaN propagates instead of being skipped, and a ±0.0 tie resolves
+/// by sign — the two rules a platform `Math.max`/`Math.min` fold follows.
+fn extreme(xs: &[f64], want_max: bool) -> f64 {
+    let Some((&first, rest)) = xs.split_first() else {
+        return 0.0;
+    };
+    rest.iter().fold(first, |a, &b| {
+        if a.is_nan() || b.is_nan() {
+            f64::NAN
+        } else if a == b {
+            // Only ±0.0 compare equal while differing: max prefers +0.0, min prefers -0.0.
+            if a.is_sign_negative() == want_max { b } else { a }
+        } else if (b > a) == want_max {
+            b
+        } else {
+            a
+        }
+    })
 }
 
 /// Sample standard deviation (n − 1); `0.0` for fewer than two points.
@@ -385,6 +417,46 @@ mod tests {
         assert!((slope - 2.0).abs() < 1e-12 && (intercept - 3.0).abs() < 1e-12);
         assert!((slope - least_squares_slope(&ys)).abs() < 1e-12);
         assert_eq!(least_squares_line(&[42.0]), (0.0, 42.0)); // < 2 points → (0, mean)
+    }
+
+    /// The parity oracle for the ported chart axes: the labels the app's own `max()`/`min()` printed
+    /// beside this module's `mean` before the extremes moved here. One series of 5-minute HR bucket
+    /// means (a day's heart-rate rail) and one of daily trend points.
+    #[test]
+    fn min_max_reproduce_the_axis_labels_the_app_printed() {
+        let bpm = [72.4, 58.2, 61.0, 143.8, 99.5, 58.2, 84.1];
+        assert_eq!(min(&bpm), 58.2);
+        assert_eq!(max(&bpm), 143.8);
+        // The row is max / mean / min, and all three now come from this module.
+        assert!((mean(&bpm) - 82.457_142_857_142_86).abs() < 1e-12);
+
+        let recovery = [64.0, 71.0, 48.0, 88.0, 55.0];
+        assert_eq!(min(&recovery), 48.0);
+        assert_eq!(max(&recovery), 88.0);
+        assert_eq!(mean(&recovery), 65.2);
+    }
+
+    #[test]
+    fn min_max_are_empty_safe_and_nan_propagating() {
+        // Empty is 0.0 like every other reduction here, never a panic and never ±∞ on an axis.
+        assert_eq!(min(&[]), 0.0);
+        assert_eq!(max(&[]), 0.0);
+        assert_eq!(min(&[42.0]), 42.0);
+        assert_eq!(max(&[42.0]), 42.0);
+        // NaN propagates rather than being skipped, so an axis cannot read healthier than its mean:
+        // `mean` already returns NaN for the same series.
+        assert!(min(&[1.0, f64::NAN, 3.0]).is_nan());
+        assert!(max(&[1.0, f64::NAN, 3.0]).is_nan());
+        assert!(max(&[f64::NAN]).is_nan());
+    }
+
+    /// A ±0.0 tie resolves by sign, the one input where a plain comparison answers differently.
+    #[test]
+    fn min_max_resolve_a_zero_tie_the_way_the_app_does() {
+        assert!(max(&[-0.0, 0.0]).is_sign_positive());
+        assert!(max(&[0.0, -0.0]).is_sign_positive());
+        assert!(min(&[-0.0, 0.0]).is_sign_negative());
+        assert!(min(&[0.0, -0.0]).is_sign_negative());
     }
 
     #[test]
