@@ -20,7 +20,7 @@ pub(crate) use whoop_protocol::deframe::DeframerMap;
 pub(crate) use whoop_protocol::hello::GEN5_CLIENT_HELLO;
 pub(crate) use whoop_protocol::{
     advertising, alarm, clock, command, config, console, framing, haptic, live, records, response, Channel,
-    Family, Offload, OffloadStep, PacketType, Record,
+    Family, Offload, OffloadStep, PacketType, Record, Variant,
 };
 
 mod types;
@@ -47,6 +47,8 @@ mod illness_api;
 pub use illness_api::*;
 mod bands_api;
 pub use bands_api::*;
+mod device_api;
+pub use device_api::*;
 
 #[cfg(test)]
 mod tests {
