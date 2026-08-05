@@ -24,7 +24,7 @@ There is no `whoop-metrics` crate — it became `physio-algo`. Full graph: `docs
 ```bash
 cd whoop-rs
 cargo build
-cargo test                 # 425 tests, 4 #[ignore]d
+cargo test                 # 903 tests, 50 #[ignore]d  (measured 2026-08-05; re-derive, never carry forward)
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
 ```
@@ -54,7 +54,7 @@ patch once it does.
   run, fold them into usable overall docs in `docs/`** (update `docs/architecture.md`, don't leave a pile
   of handoff files). One authoritative `architecture.md`, not N floating dev docs. Provenance +
   per-crate clean-state confirm live in `dev-docs/{external-sources,crates}.md`.
-- **Verify by READING the `cargo test` / `cargo build` output** (425 passed, 0 warnings, 0 clippy), never
+- **Verify by READING the `cargo test` / `cargo build` output** (903 passed, 0 warnings, 0 clippy), never
   a piped exit code. That invariant must hold after every change.
 - **Gated writes only.** `command::FORBIDDEN`/`DESTRUCTIVE` refuse firmware-load/trim/DFU/config-write
   on the blind path; legitimate ones (reboot, R22) have dedicated intentional methods a UI opt-in gates.
