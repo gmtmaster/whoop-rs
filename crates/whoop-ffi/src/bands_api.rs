@@ -1,5 +1,6 @@
-//! Bands and tiers behind a displayed word, swatch or ramp position. A frontend reads the band here
-//! and then chooses the colour and the wording for it, instead of declaring its own cut points.
+//! Bands, tiers and split percentages behind a displayed word, swatch or ramp position. A frontend
+//! reads the reading here and then chooses the colour and the wording for it, instead of declaring
+//! its own cut points or rounding a share on its own.
 
 use crate::*;
 
@@ -118,4 +119,11 @@ pub fn ramp_position_fraction(fraction: f64) -> f64 {
 #[uniffi::export]
 pub fn ramp_position_correlation(r: f64) -> f64 {
     physio_algo::ramps::correlation_position(r)
+}
+
+/// A split as whole percentages summing to exactly 100, so shares rounded one at a time can no
+/// longer read 99 or 101 side by side. `None` when nothing was measured.
+#[uniffi::export]
+pub fn whole_percentages(parts: Vec<f64>) -> Option<Vec<u32>> {
+    physio_algo::apportion::whole_percentages(&parts)
 }
