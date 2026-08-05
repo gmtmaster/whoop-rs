@@ -189,6 +189,9 @@ pub enum Response {
     Version { resp_cmd: u8, result: Option<u8>, fw: Vec<u32> },
     ExtendedBattery { resp_cmd: u8, result: Option<u8>, millivolts: u16, remaining_mah: u16, current_ma: i16 },
     BatteryPack { resp_cmd: u8, result: Option<u8>, serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
+    /// The strap answered GET_BATTERY_PACK_INFO with no pack attached — the app clears its pack row on
+    /// this, where a missing reply must leave it alone.
+    NoBatteryPack { resp_cmd: u8, result: Option<u8> },
     Other { resp_cmd: u8, result: Option<u8> },
 }
 

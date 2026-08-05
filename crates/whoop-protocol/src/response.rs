@@ -21,6 +21,9 @@ pub enum CommandResponse {
     /// 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO). `millivolts` is the pack voltage; `pack_id` is a
     /// per-pack 32-bit id distinct from `serial`.
     BatteryPack { serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
+    /// The same reply with every pack field zero: the strap answered and reports no pack attached. A
+    /// separate fact from no reply at all, which produces no `CommandResponse`.
+    NoBatteryPack,
     Other { cmd: u8, result: Option<ResultCode> },
 }
 
@@ -145,14 +148,15 @@ fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
         }),
         command::GET_DATA_RANGE => Some(CommandResponse::DataRange { oldest: u32_at(p, 3)?, newest: u32_at(p, 7)? }),
         // Pack fuel gauge: pack-id u32@4, mV u16@8, ASCII serial @10 (NUL-terminated), SOC u16@26 (raw/10).
-        // The `?` is closure-scoped so a short/unsupported reply degrades to Other, not a lost response.
+        // All four zero = the strap answered with no pack. The `?` is closure-scoped so a short/unsupported
+        // reply degrades to Other, not a lost response.
         command::GET_BATTERY_PACK_INFO => (|| {
-            Some(CommandResponse::BatteryPack {
-                pack_id: u32_at(p, 4)?,
-                millivolts: u16_at(p, 8)?,
-                serial: ascii_z(p, 10),
-                soc_pct: u16_at(p, 26)? as f64 / 10.0,
-            })
+            let (pack_id, millivolts, soc_raw) = (u32_at(p, 4)?, u16_at(p, 8)?, u16_at(p, 26)?);
+            let serial = ascii_z(p, 10);
+            if pack_id == 0 && millivolts == 0 && soc_raw == 0 && serial.is_empty() {
+                return Some(CommandResponse::NoBatteryPack);
+            }
+            Some(CommandResponse::BatteryPack { pack_id, millivolts, serial, soc_pct: f64::from(soc_raw) / 10.0 })
         })()
         .or_else(|| Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) })),
         _ => Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) }),
@@ -308,6 +312,32 @@ mod tests {
                 millivolts: 3700,
                 pack_id: 0x1122_3344,
             })
+        );
+    }
+
+    /// Two real 5/MG replies from one strap, pack attached then physically removed. Both CRC-valid and
+    /// SUCCESS; the removed one zeroes every pack field, which is the only thing separating them.
+    #[test]
+    fn gen5_battery_pack_tells_a_present_pack_from_an_absent_one() {
+        let decode_wire = |s: &str| decode(&framing::decode(Family::Gen5, &hex(s)).unwrap()).unwrap();
+        assert_eq!(
+            decode_wire(
+                "aa01280001002de1245c9704010101f7381d2e3161574242354150303132363339\
+                 35000000e5020c01000000be577aee"
+            ),
+            CommandResponse::BatteryPack {
+                serial: "WBB5AP0126395".into(),
+                soc_pct: 74.1,
+                millivolts: 24881,
+                pack_id: 0x2e1d_38f7,
+            }
+        );
+        assert_eq!(
+            decode_wire(
+                "aa01280001002de1240797040101000000000000000000000000000000000000\
+                 000000000000000000000000cf8e5340"
+            ),
+            CommandResponse::NoBatteryPack
         );
     }
 
