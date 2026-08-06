@@ -95,6 +95,110 @@ pub fn identity_from_event(f: &Frame) -> Option<PackIdentity> {
     (!id.is_empty()).then_some(id)
 }
 
+/// The strap's `BATTERY_PACK_INFO` event body: the pack block, unprompted, in the same fields the
+/// pack command answers with. The three bytes after the charge are NOT decoded — two values have
+/// been seen and neither is explained, so naming them would be a guess.
+const INFO_BODY: usize = ADDR_LEN + SERIAL_LEN + 2;
+
+/// The pack block a `BATTERY_PACK_INFO` event carries, or `None` when the strap zeroed it — which is
+/// the strap saying there is no pack, exactly as the zeroed command reply does.
+fn identity_from_info_event(body: &[u8]) -> Option<PackIdentity> {
+    if body.len() < INFO_BODY {
+        return None;
+    }
+    let serial_end = ADDR_LEN + SERIAL_LEN;
+    let addr = &body[..ADDR_LEN];
+    let serial = ascii_z(&body[ADDR_LEN..serial_end]);
+    let soc = u16_at(body, serial_end).filter(|&s| s <= SOC_DECI_MAX);
+    if addr.iter().all(|&b| b == 0) && serial.is_none() && soc.unwrap_or(0) == 0 {
+        return None;
+    }
+    Some(PackIdentity {
+        serial,
+        bt_addr: Some(to_hex(addr)),
+        soc_deci_pct: soc,
+        ..Default::default()
+    })
+}
+
+/// What one frame said about the pack. `Detached` covers both the strap's own removal signal and a
+/// pack block it zeroed: each is the strap stating there is no pack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PackSignal {
+    Attached,
+    Detached,
+    /// The frame carried values, already merged into the reader's identity.
+    Identity,
+    /// A pack event named from the pack's own vocabulary but not decoded here, with its raw body so
+    /// a capture can pin the layout.
+    Undecoded { name: &'static str, body: String },
+}
+
+/// The pack's own event vocabulary, carried in the `cmd` byte of a type-54 frame. Only the two the
+/// codec decodes are absent here; the rest are named so an arriving one is identifiable in a log.
+fn pack_event_name(cmd: u8) -> Option<&'static str> {
+    Some(match cmd {
+        1 => "ERROR",
+        3 => "USB_CONNECTED",
+        4 => "USB_DISCONNECTED",
+        5 => "CHARGING_ON",
+        6 => "CHARGING_OFF",
+        7 => "BLE_CONNECTED",
+        8 => "BLE_DISCONNECTED",
+        9 => "DOUBLE_TAP",
+        10 => "STRAP_DETECTED",
+        11 => "STRAP_REMOVED",
+        12 => "TRIM_ALL_DATA_START",
+        13 => "TRIM_ALL_DATA_END",
+        14 => "BOOT_REPORT",
+        15 => "SHIPMODE_SET",
+        16 => "SHIPMODE_CLEAR",
+        17 => "EXTENDED_FG_INFO",
+        18 => "BPK_BATTERY_HEALTH",
+        19 => "WPT_HEALTH",
+        21 => "REBOOT_REASON",
+        22 => "MODULE_FAILURE_REASON",
+        23 => "WPT_RESET",
+        50 => "PUFF_LOG_PACKET",
+        _ => return None,
+    })
+}
+
+/// Read one frame for anything it says about the pack, merging any values into `id`. Presence is a
+/// fact the strap states outright, so it is reported whether or not a value moved.
+///
+/// The two channels have SEPARATE vocabularies and must never be folded together: 21/22 are the
+/// strap's attach/detach on type 48, while on type 54 the same numbers are the pack's own
+/// `REBOOT_REASON` and `MODULE_FAILURE_REASON`.
+pub fn read_frame(f: &Frame, id: &mut PackIdentity) -> Option<PackSignal> {
+    if !f.crc_ok {
+        return None;
+    }
+    let mut merge = |got: PackIdentity| {
+        id.absorb(&got);
+        PackSignal::Identity
+    };
+    match f.packet() {
+        PacketType::Event => match f.cmd() {
+            crate::event::BATTERY_PACK_CONNECTED => Some(PackSignal::Attached),
+            crate::event::BATTERY_PACK_REMOVED => Some(PackSignal::Detached),
+            crate::event::BATTERY_PACK_INFO => Some(
+                identity_from_info_event(f.payload().get(EVENT_HEADER..)?)
+                    .map_or(PackSignal::Detached, &mut merge),
+            ),
+            _ => None,
+        },
+        PacketType::PuffinEventsFromStrap => Some(match identity_from_event(f) {
+            Some(got) => merge(got),
+            None => PackSignal::Undecoded {
+                name: pack_event_name(f.cmd())?,
+                body: to_hex(f.payload().get(EVENT_HEADER..).unwrap_or(&[])),
+            },
+        }),
+        _ => None,
+    }
+}
+
 /// A NUL-terminated printable-ASCII field, or `None` when it is empty or holds a non-printable byte.
 fn ascii_z(b: &[u8]) -> Option<String> {
     let text = &b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())];
@@ -369,6 +473,82 @@ mod tests {
             assert!(identity_from_event(&f).is_none(), "a {cut}-byte inner produced an identity");
         }
         assert!(identity_from_event(&unpadded_gen5(inner)).is_some());
+    }
+
+    /// Real frames from two straps: the strap's own attach/detach, and its unprompted pack block in
+    /// both the filled and the zeroed form.
+    const ATTACHED: &str = "aa0110000100208130e41500cfd7576a140e0000d3b899e3";
+    const DETACHED: &str = "aa011000010020813018160047d8576a701d00008065c557";
+    const INFO_PRESENT: &str = "aa012c0001002cd130e56d00cfd7576aae271c0001ccb7a6dc16095742423541\
+                               50303131333635350000004903010c00ba269563";
+    const INFO_ZEROED: &str = "aa012c0001002cd1308c6d00208d526af5681c00010000000000000000000000\
+                               00000000000000000000000000010e005b84085f";
+    /// The one real `WPT_HEALTH` frame we hold. Its body is not decoded — one sample cannot pin a
+    /// layout — so it must surface named and raw rather than as an invented value.
+    const WPT_HEALTH: &str = "aa0118000102a320366713007d94526a7a340800010042010100000037d1d87e";
+
+    fn read(hex: &str) -> (Option<PackSignal>, PackIdentity) {
+        let mut id = PackIdentity::default();
+        let sig = read_frame(&frame(hex), &mut id);
+        (sig, id)
+    }
+
+    #[test]
+    fn the_strap_states_presence_outright() {
+        assert_eq!(read(ATTACHED).0, Some(PackSignal::Attached));
+        assert_eq!(read(DETACHED).0, Some(PackSignal::Detached));
+    }
+
+    /// A zeroed pack block is the strap saying there is no pack, exactly as the zeroed command reply
+    /// is — never a pack with an empty serial at 0%.
+    #[test]
+    fn the_unprompted_pack_block_carries_values_or_states_absence() {
+        let (sig, id) = read(INFO_PRESENT);
+        assert_eq!(sig, Some(PackSignal::Identity));
+        assert_eq!(id.serial.as_deref(), Some("WBB5AP0113655"));
+        assert_eq!(id.bt_addr.as_deref(), Some("ccb7a6dc1609"));
+        assert_eq!(id.soc_deci_pct, Some(841));
+
+        let (sig, id) = read(INFO_ZEROED);
+        assert_eq!(sig, Some(PackSignal::Detached));
+        assert!(id.is_empty(), "a zeroed block filled an identity");
+    }
+
+    /// The two channels reuse the same numbers for different things. On type 54, 21 and 22 are the
+    /// pack's own reboot/failure reports and must never read as the strap's attach and detach.
+    #[test]
+    fn the_two_event_vocabularies_are_never_folded_together() {
+        for (cmd, name) in [(21u8, "REBOOT_REASON"), (22, "MODULE_FAILURE_REASON")] {
+            let wire = framing::encode(
+                Family::Gen5,
+                PacketType::PuffinEventsFromStrap.to_u8(),
+                0,
+                cmd,
+                &[0u8; 16],
+            );
+            let sig = read_frame(&framing::decode(Family::Gen5, &wire).unwrap(), &mut PackIdentity::default());
+            assert_eq!(sig, Some(PackSignal::Undecoded { name, body: "00000000000000".into() }));
+        }
+    }
+
+    /// Named from the pack's own vocabulary, body kept raw. Nothing decodes it: one frame cannot
+    /// pin a layout, and inventing one would be worse than reporting the bytes.
+    #[test]
+    fn an_undecoded_pack_event_surfaces_named_with_its_raw_body() {
+        let (sig, id) = read(WPT_HEALTH);
+        assert_eq!(
+            sig,
+            Some(PackSignal::Undecoded { name: "WPT_HEALTH", body: "00420101000000".into() })
+        );
+        assert!(id.is_empty());
+    }
+
+    #[test]
+    fn a_frame_with_nothing_to_say_about_the_pack_says_nothing() {
+        let hr = framing::encode(Family::Gen5, PacketType::RealtimeData.to_u8(), 0, 0, &[0u8; 8]);
+        assert!(read_frame(&framing::decode(Family::Gen5, &hr).unwrap(), &mut PackIdentity::default()).is_none());
+        let wrist = framing::encode(Family::Gen5, PacketType::Event.to_u8(), 0, crate::event::WRIST_ON, &[0u8; 12]);
+        assert!(read_frame(&framing::decode(Family::Gen5, &wrist).unwrap(), &mut PackIdentity::default()).is_none());
     }
 
     #[test]

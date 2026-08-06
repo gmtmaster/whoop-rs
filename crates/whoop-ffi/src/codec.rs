@@ -168,8 +168,8 @@ impl WhoopCodec {
             C::ExtendedBattery { millivolts, remaining_mah, current_ma } => {
                 Response::ExtendedBattery { resp_cmd, result, millivolts, remaining_mah, current_ma }
             }
-            C::BatteryPack { serial, soc_pct, millivolts, pack_id } => {
-                Response::BatteryPack { resp_cmd, result, serial, soc_pct, millivolts, pack_id }
+            C::BatteryPack { serial, soc_pct, bt_addr } => {
+                Response::BatteryPack { resp_cmd, result, serial, soc_pct, bt_addr }
             }
             C::NoBatteryPack => Response::NoBatteryPack { resp_cmd, result },
             C::Other { .. } => Response::Other { resp_cmd, result },

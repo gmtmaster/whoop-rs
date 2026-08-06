@@ -48,9 +48,14 @@ pub const WRIST_ON: u8 = 9;
 pub const WRIST_OFF: u8 = 10;
 pub const DOUBLE_TAP: u8 = 14;
 pub const TEMPERATURE_LEVEL: u8 = 17;
+/// The strap's own attach/detach signals for a battery pack — the presence facts, ahead of any poll.
+pub const BATTERY_PACK_CONNECTED: u8 = 21;
+pub const BATTERY_PACK_REMOVED: u8 = 22;
 pub const BLE_BONDED: u8 = 23;
 pub const BLE_REALTIME_HR_ON: u8 = 33;
 pub const BLE_REALTIME_HR_OFF: u8 = 34;
 pub const STRAP_DRIVEN_ALARM_EXECUTED: u8 = 57;
 pub const APP_DRIVEN_ALARM_EXECUTED: u8 = 58;
 pub const HAPTICS_FIRED: u8 = 60;
+/// The pack block, unprompted — the same fields the pack command answers with.
+pub const BATTERY_PACK_INFO: u8 = 109;

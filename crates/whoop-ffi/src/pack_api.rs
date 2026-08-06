@@ -1,13 +1,13 @@
-//! The battery pack's identity, accumulated across the two channels the strap volunteers it on. The
-//! reader is stateful because the console arrives in chunks that split a line mid-value; the app
-//! feeds it and reads back only complete values.
+//! The battery pack, accumulated across the channels the strap volunteers it on. The reader is
+//! stateful because the console arrives in chunks that split a line mid-value; the app feeds it and
+//! reads back only complete values, plus the presence the strap states outright.
 
 use crate::*;
 use whoop_protocol::pack::{self, ConsoleScan, PackIdentity};
 
 /// What the strap knows about the attached pack. Every field is independently absent until a source
 /// carried a complete one.
-#[derive(uniffi::Record, Clone, PartialEq)]
+#[derive(uniffi::Record, Clone, Debug, PartialEq)]
 pub struct PackInfo {
     pub firmware: Option<String>,
     pub serial: Option<String>,
@@ -34,9 +34,22 @@ impl From<&PackIdentity> for PackInfo {
     }
 }
 
-/// Accumulates the pack's identity for one link: feed every CONSOLE_LOGS text and every frame, and
-/// it reports the moment a complete new value arrived. Interior-mutable for the `&self` methods
-/// uniffi objects require.
+/// What one frame said about the pack. `Detached` is the strap stating there is no pack — its own
+/// removal signal, or a pack block it zeroed.
+#[derive(uniffi::Enum, Clone, Debug, PartialEq)]
+pub enum PackSignal {
+    Attached,
+    Detached,
+    /// The frame carried values, already merged. `changed` is true when this one moved something,
+    /// so a caller can log a change without logging the once-a-second charge report.
+    Identity { info: PackInfo, changed: bool },
+    /// A pack event named from the pack's own vocabulary but not decoded, with its raw body so a
+    /// capture can pin the layout.
+    Undecoded { name: String, body: String },
+}
+
+/// Accumulates the pack for one link: feed every CONSOLE_LOGS text and every frame. Interior-mutable
+/// for the `&self` methods uniffi objects require.
 #[derive(uniffi::Object)]
 pub struct PackReader {
     inner: Mutex<Inner>,
@@ -68,13 +81,24 @@ impl PackReader {
         inner.id.absorb(&scanned).then(|| PackInfo::from(&inner.id))
     }
 
-    /// Feed one complete frame. Only a pack event carries anything; every other frame, and any frame
-    /// that failed its checksum, returns nothing.
-    pub fn push_frame(&self, gen: Gen, bytes: Vec<u8>) -> Option<PackInfo> {
+    /// Feed one complete frame. Returns what it said about the pack, or nothing when it said
+    /// nothing — including any frame that failed its checksum.
+    pub fn push_frame(&self, gen: Gen, bytes: Vec<u8>) -> Option<PackSignal> {
         let f = framing::decode(gen.into(), &bytes).ok()?;
-        let got = pack::identity_from_event(&f)?;
         let mut inner = self.lock();
-        inner.id.absorb(&got).then(|| PackInfo::from(&inner.id))
+        let before = inner.id.clone();
+        let signal = pack::read_frame(&f, &mut inner.id)?;
+        Some(match signal {
+            pack::PackSignal::Attached => PackSignal::Attached,
+            pack::PackSignal::Detached => PackSignal::Detached,
+            pack::PackSignal::Identity => PackSignal::Identity {
+                changed: inner.id != before,
+                info: PackInfo::from(&inner.id),
+            },
+            pack::PackSignal::Undecoded { name, body } => {
+                PackSignal::Undecoded { name: name.to_string(), body }
+            }
+        })
     }
 
     /// Everything read so far on this link, or nothing if no complete value has arrived.
@@ -96,9 +120,13 @@ mod tests {
 
     const HW_INFO_FRAME: &str = "aa0130000102aa8036961400433f746ab83e2000010c5742423541503031323633393500\
                                  0000f7381d2e31610d031e050001dd020e2eb457";
+    const ATTACHED: &str = "aa0110000100208130e41500cfd7576a140e0000d3b899e3";
+    const DETACHED: &str = "aa011000010020813018160047d8576a701d00008065c557";
+    const INFO_ZEROED: &str = "aa012c0001002cd1308c6d00208d526af5681c00010000000000000000000000\
+                              00000000000000000000000000010e005b84085f";
 
-    fn frame() -> Vec<u8> {
-        whoop_protocol::bytes::from_hex(&HW_INFO_FRAME.replace([' ', '\n'], "")).unwrap()
+    fn bytes(hex: &str) -> Vec<u8> {
+        whoop_protocol::bytes::from_hex(&hex.replace([' ', '\n'], "")).unwrap()
     }
 
     #[test]
@@ -114,15 +142,33 @@ mod tests {
     #[test]
     fn the_event_fills_what_the_console_cannot_and_the_charge_is_a_percent() {
         let r = PackReader::new();
-        let got = r.push_frame(Gen::Gen5, frame()).unwrap();
-        assert_eq!(got.serial.as_deref(), Some("WBB5AP0126395"));
-        assert_eq!(got.firmware.as_deref(), Some("3.30.5.0"));
-        assert_eq!(got.soc_pct, Some(73.3));
-        assert!(r.push_frame(Gen::Gen5, frame()).is_none(), "an unchanged event reported a change");
+        let PackSignal::Identity { info, changed } = r.push_frame(Gen::Gen5, bytes(HW_INFO_FRAME)).unwrap()
+        else {
+            panic!("the hardware-information event did not read as an identity")
+        };
+        assert!(changed);
+        assert_eq!(info.serial.as_deref(), Some("WBB5AP0126395"));
+        assert_eq!(info.firmware.as_deref(), Some("3.30.5.0"));
+        assert_eq!(info.soc_pct, Some(73.3));
+
+        let PackSignal::Identity { changed, .. } = r.push_frame(Gen::Gen5, bytes(HW_INFO_FRAME)).unwrap()
+        else {
+            panic!("a repeat event stopped reading as an identity")
+        };
+        assert!(!changed, "an unchanged event reported a change");
     }
 
     #[test]
-    fn a_frame_that_is_not_a_pack_event_is_ignored() {
+    fn presence_is_reported_from_the_straps_own_signals() {
+        let r = PackReader::new();
+        assert_eq!(r.push_frame(Gen::Gen5, bytes(ATTACHED)), Some(PackSignal::Attached));
+        assert_eq!(r.push_frame(Gen::Gen5, bytes(DETACHED)), Some(PackSignal::Detached));
+        assert_eq!(r.push_frame(Gen::Gen5, bytes(INFO_ZEROED)), Some(PackSignal::Detached));
+        assert!(r.info().is_none(), "a presence signal invented an identity");
+    }
+
+    #[test]
+    fn a_frame_that_is_not_about_the_pack_is_ignored() {
         let r = PackReader::new();
         assert!(r.push_frame(Gen::Gen5, GEN5_CLIENT_HELLO.to_vec()).is_none());
         assert!(r.push_frame(Gen::Gen5, vec![0xAA, 0x01]).is_none());

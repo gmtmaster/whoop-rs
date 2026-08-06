@@ -93,8 +93,8 @@ async fn main() -> Result<()> {
             for resp in client.battery_pack().await? {
                 match resp {
                     CommandResponse::NoBatteryPack => println!("no battery pack attached"),
-                    CommandResponse::BatteryPack { serial, soc_pct, millivolts, pack_id } => {
-                        println!("pack {serial}  soc={soc_pct:.1}%  mv={millivolts}  id={pack_id:#010x}");
+                    CommandResponse::BatteryPack { serial, soc_pct, bt_addr } => {
+                        println!("pack {serial}  soc={soc_pct:.1}%  addr={bt_addr}");
                     }
                     other => println!("{other:?}"),
                 }

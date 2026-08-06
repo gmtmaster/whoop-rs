@@ -2,7 +2,7 @@
 //! battery vs GEN5 direct percent; GEN5-only hello name/firmware), so it dispatches on family here.
 //! Offsets are payload-relative (payload = inner[3..]).
 
-use crate::bytes::{i16_at, u16_at, u32_at, u8_at};
+use crate::bytes::{i16_at, to_hex, u16_at, u32_at, u8_at};
 use crate::command;
 use crate::event::ResultCode;
 use crate::family::Family;
@@ -18,9 +18,9 @@ pub enum CommandResponse {
     /// 4.0 strap fuel gauge (GET_EXTENDED_BATTERY_INFO). Voltage, remaining capacity (remaining/full = the
     /// SOC), and the signed instantaneous current.
     ExtendedBattery { millivolts: u16, remaining_mah: u16, current_ma: i16 },
-    /// 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO). `millivolts` is the pack voltage; `pack_id` is a
-    /// per-pack 32-bit id distinct from `serial`.
-    BatteryPack { serial: String, soc_pct: f64, millivolts: u16, pack_id: u32 },
+    /// 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO). `bt_addr` is the pack's 6-byte Bluetooth
+    /// address, the same field the NFC pack events carry contiguously.
+    BatteryPack { serial: String, soc_pct: f64, bt_addr: String },
     /// The same reply with every pack field zero: the strap answered and reports no pack attached. A
     /// separate fact from no reply at all, which produces no `CommandResponse`.
     NoBatteryPack,
@@ -147,16 +147,21 @@ fn decode_gen5(cmd: u8, p: &[u8]) -> Option<CommandResponse> {
             }),
         }),
         command::GET_DATA_RANGE => Some(CommandResponse::DataRange { oldest: u32_at(p, 3)?, newest: u32_at(p, 7)? }),
-        // Pack fuel gauge: pack-id u32@4, mV u16@8, ASCII serial @10 (NUL-terminated), SOC u16@26 (raw/10).
-        // All four zero = the strap answered with no pack. The `?` is closure-scoped so a short/unsupported
-        // reply degrades to Other, not a lost response.
+        // Pack fuel gauge: BT address 6 bytes @4, ASCII serial @10 (NUL-terminated), SOC u16@26 (raw/10).
+        // All three empty = the strap answered with no pack. The `?` is closure-scoped so a short/
+        // unsupported reply degrades to Other, not a lost response.
         command::GET_BATTERY_PACK_INFO => (|| {
-            let (pack_id, millivolts, soc_raw) = (u32_at(p, 4)?, u16_at(p, 8)?, u16_at(p, 26)?);
+            let addr = p.get(4..10)?;
+            let soc_raw = u16_at(p, 26)?;
             let serial = ascii_z(p, 10);
-            if pack_id == 0 && millivolts == 0 && soc_raw == 0 && serial.is_empty() {
+            if addr.iter().all(|&b| b == 0) && soc_raw == 0 && serial.is_empty() {
                 return Some(CommandResponse::NoBatteryPack);
             }
-            Some(CommandResponse::BatteryPack { pack_id, millivolts, serial, soc_pct: f64::from(soc_raw) / 10.0 })
+            Some(CommandResponse::BatteryPack {
+                bt_addr: to_hex(addr),
+                serial,
+                soc_pct: f64::from(soc_raw) / 10.0,
+            })
         })()
         .or_else(|| Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) })),
         _ => Some(CommandResponse::Other { cmd, result: u8_at(p, 1).map(ResultCode::from_u8) }),
@@ -296,10 +301,9 @@ mod tests {
     }
 
     #[test]
-    fn gen5_battery_pack_decodes_serial_soc_mv_id() {
+    fn gen5_battery_pack_decodes_serial_soc_and_address() {
         let mut p = vec![0u8; 40];
-        p[4..8].copy_from_slice(&0x1122_3344u32.to_le_bytes()); // pack-id
-        p[8..10].copy_from_slice(&3700u16.to_le_bytes()); // mV
+        p[4..10].copy_from_slice(&[0xf7, 0x38, 0x1d, 0x2e, 0x31, 0x61]); // BT address
         p[10..23].copy_from_slice(b"WBBTEST123456"); // serial, NUL at p[23]
         p[26..28].copy_from_slice(&875u16.to_le_bytes()); // SOC 87.5%
         let wire = framing::encode(Family::Gen5, 36, 0, command::GET_BATTERY_PACK_INFO, &p);
@@ -309,8 +313,7 @@ mod tests {
             Some(CommandResponse::BatteryPack {
                 serial: "WBBTEST123456".into(),
                 soc_pct: 87.5,
-                millivolts: 3700,
-                pack_id: 0x1122_3344,
+                bt_addr: "f7381d2e3161".into(),
             })
         );
     }
@@ -328,8 +331,7 @@ mod tests {
             CommandResponse::BatteryPack {
                 serial: "WBB5AP0126395".into(),
                 soc_pct: 74.1,
-                millivolts: 24881,
-                pack_id: 0x2e1d_38f7,
+                bt_addr: "f7381d2e3161".into(),
             }
         );
         assert_eq!(
@@ -339,6 +341,22 @@ mod tests {
             ),
             CommandResponse::NoBatteryPack
         );
+    }
+
+    /// Bytes 4..10 are ONE field. Read as a `u32` id plus a `u16` voltage they produce numbers that
+    /// look like data — 24881, 2640, 2326 — and no cell sits at any of them. Each is a split of the
+    /// address the same reply carries, and the pack's own events carry it whole.
+    #[test]
+    fn the_pack_reply_carries_an_address_not_an_id_and_a_voltage() {
+        for (addr, split_id, split_mv) in [
+            ("f7381d2e3161", 773_667_063u32, 24_881u16),
+            ("e0e7e205500a", 98_756_576, 2_640),
+            ("ccb7a6dc1609", 3_701_913_548, 2_326),
+        ] {
+            let b = crate::bytes::from_hex(addr).unwrap();
+            assert_eq!(u32::from_le_bytes([b[0], b[1], b[2], b[3]]), split_id);
+            assert_eq!(u16::from_le_bytes([b[4], b[5]]), split_mv);
+        }
     }
 
     #[test]
