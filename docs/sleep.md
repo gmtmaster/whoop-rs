@@ -3,7 +3,7 @@
 The whole WHOOP sleep pipeline lives here: detect the in-bed spans of a night, stage each into a
 per-30 s-epoch hypnogram, refine wake, and derive the day's main night. Pure and deterministic — no BLE,
 no IO, no async. The app (`noop-tan`) is a thin frontend: `analyzeSleep` is the whole-night door, and the
-app calls **13 further `sleep_api` exports** around it (single-span restage, the main-night family,
+app calls **15 further `sleep_api` exports** around it (single-span restage, the main-night family,
 debt/regularity/need, naps); see `noop-tan/android/SLEEP-BORDER.md` for what stays app-side.
 
 ## One entry: `analyze`
@@ -59,7 +59,8 @@ HR-confirm median, span-cap, morning-stillness, motion-corroborated wake, the re
 selection reasons, habitual learning). `golden_tests.rs` pins the V2 hypnogram frozen-golden.
 `tests/dataset_parity.rs` (`--ignored`) asserts the DREAMT, AAUWSS and sleep-accel kappas and prints a
 sheet naming every fixture set with what its truth column IS, so no set sits unscored and unnamed.
-**323 `physio-algo` tests + 23 `whoop-ffi` tests, 0 clippy.**
+**678 `physio-algo` tests + 27 `whoop-ffi` tests, 0 clippy** (measured 2026-08-06; re-derive, never
+carry forward)**.**
 
 ## App-side border: complete
 

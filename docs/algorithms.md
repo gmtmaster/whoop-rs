@@ -9,9 +9,10 @@ Every entry point takes plain values (R-R runs, PPG samples, accel, per-epoch fi
 `HistoryRecord` slice, never a wire frame and never BLE. Absent signal returns `None`, never a fabricated
 number. Outputs are wellness estimates, never medical.
 
-`physio-algo` carries **323 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
-workspace runs **447**. **Four** sleep-dataset tests read external fixtures and are `#[ignore]`d by
-default - three assert a cohort kappa, the fourth prints the whole-corpus sheet. Run
+`physio-algo` carries **678 unit tests** (golden vectors, parity fixtures, synthetic sweeps); the
+workspace runs **911** (measured 2026-08-06 at HEAD; re-derive, never carry forward).
+**Five** sleep-dataset tests read external fixtures and are `#[ignore]`d by default - three assert a
+cohort kappa, the fourth prints the whole-corpus sheet and the fifth the stream census. Run
 `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
 `tools/docs-vs-code.py` re-derives every count on this page from the source and fails on drift.
 
@@ -32,8 +33,8 @@ Each algorithm below is tagged with how it reaches the app:
 - **Rust-only** — implemented here, not on the FFI surface. No app caller.
 - **internal** — a shared helper other algorithms depend on, not a metric.
 
-There is no **unwired** tag because there is nothing unwired: all 80 exported functions have a Kotlin
-caller. What the app still computes itself is tracked in the noop-tan `ALGORITHMS.md`.
+There is no **unwired** tag because there is nothing unwired: all 125 exported functions have a Kotlin
+caller (measured 2026-08-06; re-derive, never carry forward). What the app still computes itself is tracked in the noop-tan `ALGORITHMS.md`.
 
 ---
 
@@ -406,7 +407,7 @@ function in the crate is reached by no other crate** — `resting_hr::floor_mean
 byte-for-byte twin of a Kotlin log line that ships, so the Rust half is a parity control with no
 caller rather than an algorithm going unused. `HrWatch` is off the FFI too but is not orphaned:
 `whoopctl --hr-watch` prints it. That is the border in ONE
-direction. In the other, **17 Kotlin engines still carry maths of their own**, listed in
+direction. In the other, **20 Kotlin files still carry maths of their own**, listed in
 `noop-wt-tan/docs/ALGORITHMS.md` and re-derived against the code by
 `dev-notes/noop-tan/audit_kotlin_algorithms.py`. What differs below is how strongly each is verified.
 

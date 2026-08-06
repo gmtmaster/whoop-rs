@@ -42,14 +42,27 @@ WHOOP = ROOT.parent
 KOTLIN = WHOOP / "noop-wt-tan" / "android" / "app" / "src" / "main" / "java"
 FIXTURES = WHOOP / "sleep-benchmark" / "fixtures_multi_clean2"
 
+# Small counts a document spells out rather than digits. Comparison is case-insensitive, so the word in
+# the prose is pinned as the word, not silently accepted because a digit happened to match.
+SPELLED = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight"}
+
 
 def rs_files(rel: str) -> list[Path]:
     return sorted((ROOT / rel).rglob("*.rs"))
 
 
-def ignored_gates() -> int:
-    """`#[ignore]`d tests across the workspace."""
-    return sum(len(re.findall(r"#\[ignore", p.read_text(encoding="utf-8"))) for p in rs_files("crates"))
+def dataset_gate_attrs() -> int:
+    """`#[ignore]` ATTRIBUTES on the sleep-dataset parity gates, which is the population the sentence
+    in `algorithms.md` describes.
+
+    This replaced a workspace-wide scan for the literal string `#[ignore` that answered 62 while the
+    document said four. Three different populations were in play and none of them was the sentence's:
+    the scan counted every crate's ecg and sensitivity harnesses as well, and counted the string where
+    it appears inside a comment (`dataset_parity.rs` mentions it twice in prose). A gate whose
+    population is wider than the claim can only ever be red.
+    """
+    t = (ROOT / "crates" / "physio-algo" / "tests" / "dataset_parity.rs").read_text(encoding="utf-8")
+    return len(re.findall(r"^\s*#\[ignore", t, re.M))
 
 
 def ffi_exports() -> list[str]:
@@ -288,10 +301,15 @@ def family_branches() -> int:
     in one place. `HeaderSpec` carries the frame HEADER shape only, so opcodes, the GEN5 event
     residual and the GEN5-only record versions each branch at their own site — and unlike a `match`
     on the closed enum, an `if ==` would compile silently against a third generation.
+
+    NON-TEST is enforced by PATH, not only by `#[cfg(test)]`. An integration test under `crates/*/tests/`
+    carries no `#[cfg(test)]` marker, so the whole file counted and three branches in
+    `sensitivity_decode.rs` were billed to the shipped code. That was the entire difference between the
+    11 this used to return and the 8 the document correctly stated.
     """
     n = 0
     for p in rs_files("crates"):
-        if p.stem in {"framing", "family"}:
+        if p.stem in {"framing", "family"} or {"tests", "examples", "benches"} & set(p.parts):
             continue
         t = p.read_text(encoding="utf-8")
         cut = t.find("#[cfg(test)]")
@@ -306,6 +324,10 @@ def kotlin_backlog_rows() -> int | None:
     a contradiction between two shipped documents that neither gate could see: both stop at this
     repo. The table itself is re-derived against the Kotlin by `audit_kotlin_algorithms.py`, so
     pinning the sentence to the table is the missing edge, not a second count of the same thing.
+
+    The slice stops at the NEXT `## ` heading, not at the re-derived footer far below it. Ending at the
+    footer swept in every table between, so the five Rust exports tabled under the optical-quality
+    section were counted as Kotlin files still owning maths and the answer read 25 for a table of 20.
     """
     doc = WHOOP / "noop-wt-tan" / "docs" / "ALGORITHMS.md"
     if not doc.is_file():
@@ -313,7 +335,9 @@ def kotlin_backlog_rows() -> int | None:
     t = doc.read_text(encoding="utf-8")
     if "## Remaining" not in t or "**The counts above are re-derived**" not in t:
         return -1
-    section = t[t.index("## Remaining"): t.index("**The counts above are re-derived**")]
+    start = t.index("## Remaining")
+    nxt = t.find("\n## ", start + 1)
+    section = t[start: nxt if nxt > 0 else t.index("**The counts above are re-derived**")]
     return len(re.findall(r"^\| `([\w./]+)`", section, re.M))
 
 
@@ -333,11 +357,20 @@ def on_disk_sets() -> set[str]:
     return {p.name for p in FIXTURES.iterdir() if p.is_dir()} if FIXTURES.is_dir() else set()
 
 
-def cargo_passed(args: list[str]) -> int:
+def cargo_counts(args: list[str]) -> tuple[int, int]:
+    """(passed, ignored) as the run itself reports them.
+
+    IGNORED is read from the run rather than scanned for, because a static `#[ignore]` count is a third
+    number again: an attribute behind a `cfg` or on an item the harness never registers is in the source
+    and not in the summary line, and README's sentence quotes the summary line.
+    """
     r = subprocess.run(["cargo", "test", *args], cwd=ROOT, capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit(f"cargo test {' '.join(args)} failed:\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
-    return sum(int(m) for m in re.findall(r"^test result: ok\. (\d+) passed", r.stdout, re.M))
+    return (
+        sum(int(m) for m in re.findall(r"^test result: ok\. (\d+) passed", r.stdout, re.M)),
+        sum(int(m) for m in re.findall(r"passed; \d+ failed; (\d+) ignored", r.stdout)),
+    )
 
 
 def command_opcodes() -> int:
@@ -384,13 +417,17 @@ def physio_algo_orphans() -> list[str]:
     green build and a green suite while its last caller is gone. Comments are stripped first, so a KDoc
     mention is not a use; the count includes each declaration, so a name at its own declaration count is
     referenced by nothing.
+
+    FREE is column 0. Allowing leading whitespace swept in `impl` methods, and reported `Sweep::converged`
+    as an orphan — a public method used thirteen times by `tests/ecg_sweep.rs`, which is outside the
+    `src/` blob this scans by design. A method is not what the sentence claims, so it is not counted.
     """
     src = sorted((ROOT / "crates" / "physio-algo" / "src").rglob("*.rs"))
     def bare(p: Path) -> str:
         return "\n".join(line.split("//")[0] for line in p.read_text(encoding="utf-8").splitlines())
     declared: dict[str, int] = {}
     for p in src:
-        for m in re.finditer(r"^\s*pub fn (\w+)", bare(p), re.M):
+        for m in re.finditer(r"^pub fn (\w+)", bare(p), re.M):
             declared[m.group(1)] = declared.get(m.group(1), 0) + 1
     inside = "\n".join(bare(p) for p in src)
     outside = "\n".join(
@@ -432,6 +469,19 @@ def kotlin_tree_dirty() -> list[str]:
     return [ln[3:] for ln in r.stdout.splitlines()] if r.returncode == 0 else []
 
 
+def rust_tree_dirty() -> list[str]:
+    """Uncommitted Rust in THIS repo, which every count derived from `crates/` silently reads.
+
+    The Kotlin side has had this note since a stray import moved a published number. This repo had none,
+    and the same thing happened here: an unrelated `pack` module arriving mid-session as two untracked
+    files took the workspace suite from 911 to 926 and `whoop-ffi` from 27 to 30, with nothing in the
+    output to say the tree had grown a crate's worth of tests that no commit carries.
+    """
+    r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", "crates"],
+                       cwd=ROOT, capture_output=True, text=True)
+    return [ln[3:] for ln in r.stdout.splitlines()] if r.returncode == 0 else []
+
+
 def doc(name: str) -> str:
     """A shipped document by name. `docs/` first, then the repo root — README.md and AGENTS.md are
     shipped too, and were pinned by nothing until they had drifted a deleted crate and three counts."""
@@ -451,9 +501,12 @@ def main() -> int:
 
     # (document, what the claim is, regex with one capture, the derived truth)
     claims: list[tuple[str, str, str, object]] = [
-        ("algorithms.md", "ignored dataset gates", r"\*\*(\w+)\*\* sleep-dataset tests read external fixtures", "four"),
+        ("algorithms.md", "sleep-dataset gates", r"\*\*(\w+)\*\* sleep-dataset tests read external fixtures",
+         SPELLED.get(dataset_gate_attrs(), str(dataset_gate_attrs()))),
         ("algorithms.md", "FFI free-fn exports", r"all (\d+) exported functions have a Kotlin", len(exports)),
-        ("algorithms.md", "Kotlin still owning maths", r"\*\*(\d+) Kotlin engines still carry maths",
+        # "files", not "engines": the table's four decode leaks are not engines, and calling them that is
+        # how a 20-row table got quoted as 17.
+        ("algorithms.md", "Kotlin still owning maths", r"\*\*(\d+) Kotlin files still carry maths",
          kotlin_backlog_rows()),
         ("sleep.md", "physio-algo tests", r"\*\*(\d+) `physio-algo` tests", None),
         ("sleep.md", "whoop-ffi tests", r"`physio-algo` tests \+ (\d+) `whoop-ffi` tests", None),
@@ -471,32 +524,29 @@ def main() -> int:
          r"\*\*(\d+) further `sleep_api` exports\*\*", sleep_api_called_beyond_analyze()),
         ("data-flow.md", "surface-table rows", r"tables below carry \*\*(\d+)\*\* of them",
          len(surface_table_rows() & set(exports))),
-        ("data-flow.md", "exports in no shipped doc", r"\*\*(\d+) of the 80 appear in no shipped document\*\*",
-         len(exports_in_no_doc(exports))),
+        # Both halves of "N of the M" are captured: writing the shortfall while leaving a stale total
+        # beside it is the same drift one number later.
+        ("data-flow.md", "exports in no shipped doc", r"\*\*(\d+ of the \d+) appear in no shipped document\*\*",
+         f"{len(exports_in_no_doc(exports))} of the {len(exports)}"),
         ("architecture.md", "exports reached only via a dead wrapper",
          r"(\w+) of them\s+\(`spo2_rolling_reading`\) only through a Kotlin wrapper the app never calls",
          "one" if len(exports_via_dead_wrapper(exports)) == 1 else str(exports_via_dead_wrapper(exports))),
     ]
 
-    n_ignored = ignored_gates()
-    if n_ignored != 4:
-        # the word above is spelled out; keep the two in step rather than hard-coding a number twice
-        claims[0] = ("algorithms.md", "ignored dataset gates", r"\*\*(\w+)\*\* sleep-dataset tests read external fixtures", f"{n_ignored} (not four)")
-
     if not a.no_tests:
-        pa = cargo_passed(["-p", "physio-algo"])
-        ws = cargo_passed(["--workspace"])
+        pa, _ = cargo_counts(["-p", "physio-algo"])
+        ws, ws_ignored = cargo_counts(["--workspace"])
         claims += [
             ("algorithms.md", "physio-algo tests", r"carries \*\*(\d+) unit tests\*\*", pa),
             ("algorithms.md", "workspace tests", r"workspace runs \*\*(\d+)\*\*", ws),
             ("README.md", "workspace tests", r"`cargo test --workspace` \((\d+) passed", ws),
-            ("README.md", "ignored dataset gates", r"passed, (\d+) `#\[ignore\]`d dataset gates", n_ignored),
+            ("README.md", "ignored in that run", r"passed, (\d+) `#\[ignore\]`d\)", ws_ignored),
         ]
         for i, c in enumerate(claims):
             if c[0] == "sleep.md" and c[1] == "physio-algo tests":
                 claims[i] = (*c[:3], pa)
             if c[0] == "sleep.md" and c[1] == "whoop-ffi tests":
-                claims[i] = (*c[:3], cargo_passed(["-p", "whoop-ffi"]))
+                claims[i] = (*c[:3], cargo_counts(["-p", "whoop-ffi"])[0])
 
     bad = 0
     checked = 0
@@ -697,6 +747,12 @@ def main() -> int:
     if dirty:
         print(f"\n  NOTE   noop-wt-tan has {len(dirty)} uncommitted Kotlin file(s); the four cross-repo claims\n"
               f"         above read the working tree, not the commit: {dirty}")
+
+    rust_dirty = rust_tree_dirty()
+    if rust_dirty:
+        print(f"\n  NOTE   whoop-rs has {len(rust_dirty)} uncommitted file(s) under crates/; every count derived\n"
+              f"         from the source — the two cargo runs included — reads the working tree, not the\n"
+              f"         commit: {rust_dirty}")
 
     print(f"\n{checked} claims checked | {bad} disagree with the source")
     return 1 if bad else 0
