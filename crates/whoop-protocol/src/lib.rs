@@ -22,6 +22,7 @@ pub mod haptic;
 pub mod hello;
 pub mod live;
 pub mod offload;
+pub mod pack;
 pub mod packet;
 pub mod records;
 pub mod response;

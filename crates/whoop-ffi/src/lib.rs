@@ -49,6 +49,8 @@ mod bands_api;
 pub use bands_api::*;
 mod device_api;
 pub use device_api::*;
+mod pack_api;
+pub use pack_api::*;
 
 #[cfg(test)]
 mod tests {
