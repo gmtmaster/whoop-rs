@@ -1,5 +1,12 @@
 //! Rest (sleep performance) composite, 0–100. Weighted sum of duration vs personal need, efficiency,
-//! restorative (deep+REM) share, and sleep/wake consistency. Pure; absent consistency defaults neutral.
+//! restorative (deep+REM) minutes against need, and sleep/wake consistency. Pure; absent consistency
+//! defaults neutral.
+//!
+//! The restorative term measures MINUTES against the need, not the share of whatever was slept. As a
+//! share it was duration-blind: a short night with ordinary architecture cleared the target and took
+//! full marks, so three of the four terms could sit near maximum on a night that was simply too short.
+//! Measured on 13 nights scored by both this composite and WHOOP's own: the share form ran +11.1 mean
+//! (high on 13 of 13), the minutes form +7.4. Still high — the remainder is not in this term.
 
 pub const W_DURATION: f64 = 0.50;
 pub const W_EFFICIENCY: f64 = 0.20;
@@ -28,11 +35,12 @@ pub fn rest(
 
     let duration_score = (asleep_hours / need_hours * 100.0).min(100.0);
     let efficiency_score = (efficiency * 100.0).clamp(0.0, 100.0);
-    let restorative_share = (deep_seconds + rem_seconds) / asleep_seconds;
+    // Minutes against the need, so a short night cannot clear the target on architecture alone.
+    let restorative_target_seconds = need_hours * 3600.0 * RESTORATIVE_TARGET_SHARE;
     let deep_adequacy = ((deep_seconds / asleep_seconds) / DEEP_SHARE_TARGET).clamp(0.0, 1.0);
     let deep_factor = DEEP_FLOOR_FACTOR + (1.0 - DEEP_FLOOR_FACTOR) * deep_adequacy;
     let restorative_score =
-        (restorative_share / RESTORATIVE_TARGET_SHARE * 100.0).min(100.0) * deep_factor;
+        ((deep_seconds + rem_seconds) / restorative_target_seconds * 100.0).min(100.0) * deep_factor;
     let consistency_score = ((consistency.unwrap_or(NEUTRAL_CONSISTENCY)) * 100.0).clamp(0.0, 100.0);
 
     let weighted = W_DURATION * duration_score
@@ -126,10 +134,11 @@ mod tests {
         }
     }
 
-    /// The need reaches the composite only through the duration term, so a one-hour change in need moves
-    /// Rest by `W_DURATION` times the duration score it shifts, and nothing else.
+    /// The need reaches the composite through TWO terms now: duration, and the restorative target it
+    /// scales. A change in need moves Rest by the sum of both, which is what makes a short night unable
+    /// to earn restorative credit it did not sleep for.
     #[test]
-    fn the_personal_need_enters_rest_at_the_duration_weight() {
+    fn the_personal_need_enters_rest_through_duration_and_restorative() {
         let night = |need: f64| {
             rest(8.0 * 3600.0, 0.95, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(need), Some(1.0)).unwrap()
         };
@@ -138,7 +147,12 @@ mod tests {
         assert!((at_need - 9.0).abs() < 1e-9 && (floored - MIN_SLEEP_NEED_HOURS).abs() < 1e-9);
         // 8 h against a 9 h need scores 88.888…; against 7.5 h it saturates at 100.
         let duration_delta = 100.0 - (8.0 / 9.0 * 100.0);
-        assert!((night(floored) - night(at_need) - W_DURATION * duration_delta).abs() < 0.01);
+        // 4.4 h of deep+REM clears a 7.5 h need's 3.75 h target but not a 9 h need's 4.5 h target.
+        let restorative_delta = 100.0 - (4.4 / 4.5 * 100.0);
+        let moved = W_DURATION * duration_delta + W_RESTORATIVE * restorative_delta;
+        assert!((night(floored) - night(at_need) - moved).abs() < 0.01);
+        // Duration alone no longer accounts for it: that is the change.
+        assert!((night(floored) - night(at_need) - W_DURATION * duration_delta).abs() > 0.1);
         assert!(night(floored) > night(at_need), "a lower need cannot score a night worse");
     }
 
@@ -148,9 +162,13 @@ mod tests {
     fn each_rest_weight_moves_the_composite_by_its_own_share() {
         let perfect = rest(8.0 * 3600.0, 0.95, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
         assert_eq!(99.0, perfect);
-        // Duration 100 -> 75: six hours against the same eight-hour need.
+        // Six hours against the same eight-hour need. Duration 100 -> 75, AND restorative 100 -> 82.5,
+        // because 3.3 h of deep+REM no longer clears the need's 4 h target. A short night loses on both,
+        // which is the whole point of scoring restorative in minutes rather than as a share.
         let short = rest(6.0 * 3600.0, 0.95, 0.30 * 6.0 * 3600.0, 0.25 * 6.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
-        assert!((perfect - short - W_DURATION * 25.0).abs() < 1e-9, "duration weight, got {short}");
+        let short_moved = W_DURATION * 25.0 + W_RESTORATIVE * (100.0 - 82.5);
+        assert!((perfect - short - short_moved).abs() < 1e-9, "short night, got {short}");
+        assert!(short < perfect - W_DURATION * 25.0, "a short night must lose more than duration alone");
         // Efficiency 95 -> 85.
         let leaky = rest(8.0 * 3600.0, 0.85, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
         assert!((perfect - leaky - W_EFFICIENCY * 10.0).abs() < 1e-9, "efficiency weight, got {leaky}");

@@ -43,6 +43,13 @@ pub const GET_HELLO: u8 = 145;
 pub const SET_CLOCK_MAVERICK: u8 = 146;
 pub const GET_CLOCK_GEN5: u8 = 147;
 
+/// Firmware transfer, GEN5/AMBIQ. Frames are built in `firmware`; all three stay refused below.
+pub const START_FIRMWARE_LOAD_NEW: u8 = 142;
+pub const LOAD_FIRMWARE_DATA_NEW: u8 = 143;
+pub const PROCESS_FIRMWARE_IMAGE_NEW: u8 = 144;
+/// Checks a received image. Shared by both generations.
+pub const VERIFY_FIRMWARE_IMAGE: u8 = 83;
+
 /// Firmware-load / trim / dfu / reboot / config-write / set-clock / adv-name / wrist-select. Never send
 /// via a blind explore path — the legitimate ones have dedicated, gated methods.
 pub const FORBIDDEN: &[u8] = &[
@@ -57,15 +64,21 @@ pub const FORBIDDEN: &[u8] = &[
     SET_CONFIG,
     RESET_FUEL_GAUGE, // 99 — clears the pack/strap fuel-gauge state
     SELECT_WRIST, // 123 — persistent device-config write
-    142,
-    143,
-    144,
+    START_FIRMWARE_LOAD_NEW,
+    LOAD_FIRMWARE_DATA_NEW,
+    PROCESS_FIRMWARE_IMAGE_NEW,
 ];
 
 /// Never built from a payload a caller supplies — the danger is in the words, not the opcode. The one
 /// door is a dedicated method that constructs its own fixed bytes and takes no argument: `undo_trim`
 /// in `whoop-client`, which sends FORCE_TRIM's pointer-reset payload (see `trim`).
-pub const DESTRUCTIVE: &[u8] = &[FORCE_TRIM, ENTER_BLE_DFU, 142, 143, 144];
+pub const DESTRUCTIVE: &[u8] = &[
+    FORCE_TRIM,
+    ENTER_BLE_DFU,
+    START_FIRMWARE_LOAD_NEW,
+    LOAD_FIRMWARE_DATA_NEW,
+    PROCESS_FIRMWARE_IMAGE_NEW,
+];
 
 pub fn is_forbidden(op: u8) -> bool {
     FORBIDDEN.contains(&op)
