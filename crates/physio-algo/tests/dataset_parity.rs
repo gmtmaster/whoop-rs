@@ -9,6 +9,10 @@
 //! `stream_census_and_required_streams` pins which streams each cohort actually carries, because the
 //! subject-count assert catches a missing DIRECTORY and never a missing or hollow STREAM inside one.
 //!
+//! `ours` is the only IN-COHORT reference the corpus holds and it marks the sleep PERIOD, not per-epoch
+//! sleep, so it cannot adjudicate wake within a night and no arm may be selected on it (`Truth::TwoClass`).
+//! DREAMT and AAUWSS are therefore the only four-class guard there is, out-of-cohort or not.
+//!
 //! `resp_weight` is the only V2 term that reads R-R, so a cohort whose `rr.csv` is empty scores V2
 //! WITHOUT its respiratory channel — cardiac and motion only. `sleep-accel` is exactly that cohort and
 //! its gate says so; the census asserts the split so a later graft cannot leave the name wrong.
@@ -336,6 +340,10 @@ enum Truth {
     FourClass,
     /// wake / asleep only. A four-class kappa is a CATEGORY ERROR here: the `1` that means ASLEEP would
     /// be scored against `light`. Such a set is named and left unscored rather than given a wrong number.
+    ///
+    /// `ours` is the only member and is weaker than "two-class" suggests: its `1` means "inside the
+    /// sleep period", not "not awake" — 42 runs of median 15,729 s over 29 nights, holding through
+    /// 82.5% of our wake bouts. Recall is valid, precision is not, and nothing may be selected on it.
     TwoClass,
     /// No labels at all.
     Unlabelled,
@@ -356,7 +364,7 @@ fn v2_all_datasets_report() {
         ("killa5", Truth::FourClass, "our own stagesJSON — CIRCULAR, consistency only"),
         ("strap", Truth::FourClass, "our own stagesJSON — CIRCULAR, consistency only"),
         ("whoop4", Truth::FourClass, "our own on-board stagesJSON — CIRCULAR, consistency only"),
-        ("ours", Truth::TwoClass, "the strap's own sleep_state — INDEPENDENT of us, but 0=wake/1=asleep"),
+        ("ours", Truth::TwoClass, "the strap's own sleep_state — INDEPENDENT of us, but a SLEEP-PERIOD marker: recall only, precision is not computable"),
         ("continuous", Truth::Unlabelled, "unlabelled — its band reference rides in band.csv, not truth.csv"),
         ("e9night", Truth::Unlabelled, "unlabelled — nothing"),
     ];

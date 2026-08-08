@@ -2,9 +2,9 @@
 //!
 //!   cargo run --release -p physio-algo --example bench_ours
 //!
-//! The band label is two-class (wake vs asleep), so it judges the wake fraction and nothing finer. That
-//! is the quantity the field regression reports turn on, and it is the one label here that noop did not
-//! produce itself. Nights without band coverage still contribute stage fractions, which need no label.
+//! The band label marks the sleep PERIOD, not per-epoch sleep, so it judges only whether we find the
+//! wake it is sure of — recall. It is the one label here noop did not produce itself, and the only
+//! statistic on it that means anything. Nights without band coverage still contribute stage fractions.
 //!
 //! `stage_v2` ONLY. `ours` gravity is held forward across dropouts, so the refinement's posture check
 //! reads artificially stable on this set and its wake fraction cannot be trusted here; the refined
@@ -80,7 +80,11 @@ fn main() {
 
     println!(
         "{:<19} {:>26} {:>10} {:>26} {:>9}",
-        "variant", "predicted % w/l/d/r", "1st REM", "on labelled: pred/band wake%", "rec/prec"
+        "variant", "predicted % w/l/d/r", "1st REM", "on labelled: pred/band wake%", "rec/prec*"
+    );
+    println!(
+        "   * the band marks the sleep PERIOD, so precision counts unadjudicated wake as false and rises\n   \
+         \x20 as a variant calls LESS wake. Recall is valid but one-sided. Selection is PSG-only."
     );
     for (name, p) in [
         ("shipped", &shipped),

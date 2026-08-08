@@ -169,9 +169,9 @@ pub fn pre_retune(base: &Params) -> Params {
     }
 }
 
-/// Two-class scoreboard against a wake/asleep reference. Read [`TwoClass::kappa`], never accuracy: these
-/// references call ~90% of their seconds asleep and a config that rarely says wake cannot be wrong about
-/// wake. Presentation stays with each harness, which prints different columns.
+/// Two-class scoreboard against a wake/asleep reference. Never accuracy: these references call ~90% of
+/// their seconds asleep. Against a period marker read [`TwoClass::recall`] only — `kappa` and
+/// `precision` both reward under-calling wake there. Presentation stays with each harness.
 #[derive(Default, Clone, Copy)]
 pub struct TwoClass {
     pub n: i64,
@@ -198,6 +198,9 @@ impl TwoClass {
     pub fn recall(&self) -> f64 {
         100.0 * self.hit as f64 / self.true_wake.max(1) as f64
     }
+    /// Valid only against a true hypnogram. Against [`BAND_ASLEEP`]'s period marker the denominator
+    /// counts unadjudicated epochs as false positives, so it RISES as a stager calls less wake —
+    /// shipped 19.9, `pre-retune` at a third the wake 25.3. Never select on it.
     pub fn precision(&self) -> f64 {
         100.0 * self.hit as f64 / self.pred_wake.max(1) as f64
     }
@@ -205,7 +208,8 @@ impl TwoClass {
         let (r, p) = (self.recall(), self.precision());
         if r + p <= 0.0 { 0.0 } else { 2.0 * r * p / (r + p) }
     }
-    /// Cohen's kappa over the 2x2 table, which is accuracy with the base rate divided out.
+    /// Cohen's kappa over the 2x2 table, which is accuracy with the base rate divided out. Carries
+    /// [`Self::precision`]'s defect against a period marker — reporting only, never selection.
     pub fn kappa(&self) -> f64 {
         let n = self.n.max(1) as f64;
         let (pw, tw) = (self.pred_wake as f64, self.true_wake as f64);
@@ -220,8 +224,9 @@ pub fn stage_at(segs: &[StageSegment], ts: i64) -> Option<SleepStage> {
     segs.iter().find(|g| g.start <= ts && ts < g.end).map(|g| g.stage)
 }
 
-/// The strap's `sleep_state` code for asleep. Every other code is non-asleep, which is the two-class
-/// fold every band-scored figure in the chain uses.
+/// The strap's `sleep_state` asleep code, and the `code != BAND_ASLEEP => awake` fold every band-scored
+/// figure uses. Code 2 marks the sleep PERIOD, not per-epoch sleep: 42 runs of median 15,729 s over 29
+/// nights, holding through 82.5% of our wake bouts. Awake is trustworthy, asleep is silent.
 pub const BAND_ASLEEP: i32 = 2;
 
 /// The label index of wake in a `Vec<usize>` epoch sequence — the same 0 [`stage_idx`] returns.

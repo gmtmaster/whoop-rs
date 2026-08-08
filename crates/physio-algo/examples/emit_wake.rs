@@ -472,10 +472,10 @@ fn psg_row(nights: &[PsgNight], preps: &[Prepared], r: &Recipe) -> (f64, f64, f6
     (kappa4(&cm), 100.0 * wake as f64 / all.max(1) as f64, 100.0 * truth_wake as f64 / all.max(1) as f64)
 }
 
-fn section_psg(cands: &[Recipe], shipped: &Params, ours: &[(String, f64)]) {
+fn section_psg(cands: &[Recipe], shipped: &Params, ours: &[(String, TwoClass)]) {
     println!("\n5  what each candidate costs on PSG truth — 4-class kappa, per cohort");
-    println!("   `ours` scores against another algorithm's two-class call; these are scored hypnograms. A");
-    println!("   candidate has to survive both, and the cohort is named on every number.");
+    println!("   SELECTION IS PSG-ONLY. `ours` is the band's SLEEP-PERIOD marker, not a hypnogram, and ranking");
+    println!("   on it rewards under-calling wake — so it appears below as context (recall, wake share) only.");
     let sets: Vec<(&str, Vec<PsgNight>, Vec<Prepared>)> = PSG
         .iter()
         .filter_map(|ds| {
@@ -497,7 +497,7 @@ fn section_psg(cands: &[Recipe], shipped: &Params, ours: &[(String, f64)]) {
         print!("{:>10}{:>8}{:>6}", "kappa4", "ours w%", "true");
     }
     println!();
-    let mut ledger: Vec<(String, f64, Vec<f64>)> = Vec::new();
+    let mut ledger: Vec<(String, TwoClass, Vec<f64>)> = Vec::new();
     for r in cands {
         print!("   {:<48}", r.label);
         let mut ks = Vec::new();
@@ -507,25 +507,26 @@ fn section_psg(cands: &[Recipe], shipped: &Params, ours: &[(String, f64)]) {
             ks.push(k);
         }
         println!();
-        let k2 = ours.iter().find(|(l, _)| *l == r.label).map(|(_, k)| *k).unwrap_or(f64::NAN);
-        ledger.push((r.label.clone(), k2, ks));
+        let tc = ours.iter().find(|(l, _)| *l == r.label).map(|(_, t)| *t).unwrap_or_default();
+        ledger.push((r.label.clone(), tc, ks));
     }
 
-    println!("\n   the ledger: every candidate as a DELTA against SHIPPED, band first then each cohort");
-    println!("   A candidate is only an improvement if no column is negative. Nothing below manages it.");
+    println!("\n   the ledger: every candidate as a DELTA against SHIPPED");
+    println!("   ACCEPT RULE: no PSG column negative. The band columns do not veto — a recall gain rides on");
+    println!("   the wake share beside it, so only a gain at a flat share is real.");
     let base = ledger.first().cloned();
-    let Some((_, base_k2, base_ks)) = base else { return };
-    print!("   {:<48}{:>12}", "candidate", "band d-k2");
+    let Some((_, base_tc, base_ks)) = base else { return };
+    print!("   {:<48}", "candidate");
     for (ds, _, _) in &sets {
         print!("{:>18}", format!("{ds} d-k4"));
     }
-    println!();
-    for (label, k2, ks) in ledger.iter().skip(1) {
-        print!("   {label:<48}{:>+12.3}", k2 - base_k2);
+    println!("{:>16}{:>14}", "band d-recall", "band d-wake%");
+    for (label, tc, ks) in ledger.iter().skip(1) {
+        print!("   {label:<48}");
         for (i, k) in ks.iter().enumerate() {
             print!("{:>+18.3}", k - base_ks[i]);
         }
-        println!();
+        println!("{:>+16.1}{:>+14.1}", tc.recall() - base_tc.recall(), tc.pred_pct() - base_tc.pred_pct());
     }
 }
 
@@ -640,7 +641,7 @@ fn main() {
     let cycle = section_cycle(&ns, &preps, &shipped);
     cands.extend(cycle.into_iter().filter(|r| r.label != "SHIPPED"));
     // The band score of every finalist, so the ledger can put it beside the PSG cost of the same row.
-    let ours: Vec<(String, f64)> =
-        cands.iter().map(|r| (r.label.clone(), ours_score(&ns, &preps, r).0.kappa())).collect();
+    let ours: Vec<(String, TwoClass)> =
+        cands.iter().map(|r| (r.label.clone(), ours_score(&ns, &preps, r).0)).collect();
     section_psg(&cands, &shipped, &ours);
 }

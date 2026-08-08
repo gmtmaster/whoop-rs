@@ -24,9 +24,15 @@ There is no `whoop-metrics` crate — it became `physio-algo`. Full graph: `docs
 ```bash
 cd whoop-rs
 cargo build
-cargo test                 # 911 tests, 50 #[ignore]d  (measured 2026-08-05; re-derive, never carry forward)
+cargo test                 # 1002 passed, 0 failed, 51 #[ignore]d  (2026-08-08; re-derive, never carry forward)
 cargo clippy --all-targets
 cargo run -p whoopctl -- scan
+
+# The sleep corpus. `cargo test` does NOT reach it — every cohort gate is #[ignore]d behind a
+# multi-GB tree outside the repo, so a green suite says nothing about staging. Run it whenever
+# anything under sleep/ changes:
+cargo test --release -p physio-algo --test dataset_parity -- --ignored --nocapture
+#   expect: 5 passed, 0 failed; dreamt 0.3123 (n=100), aauwss 0.412 (n=13), sleep-accel 0.379 (n=31)
 ```
 
 Pinned to **MSVC** via an in-dir `rustup override` (btleplug's WinRT deps need the MSVC linker; the
