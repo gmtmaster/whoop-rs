@@ -74,16 +74,17 @@ struct Score {
     frac: [f64; 4],
 }
 
+/// Fractions count LABELLED epochs only. Counting ours over the whole window while the reference counts
+/// only what it scored is a denominator mismatch: DREAMT labels 75.7% of a night, and reading its REM
+/// error off mixed denominators gave +0.4 pp where the matched figure is +3.2.
 fn score(nights: &[Night], preps: &[Prepared], p: &Params) -> Score {
     let (mut cm, mut frac) = ([[0i64; 4]; 4], [0i64; 4]);
     for (night, prep) in nights.iter().zip(preps) {
         let lab = labels(night, prep, p);
-        for &l in &lab {
-            frac[l] += 1;
-        }
         for (k, &t) in &night.truth {
             if *k < lab.len() && (0..4).contains(&t) {
                 cm[t as usize][lab[*k]] += 1;
+                frac[lab[*k]] += 1;
             }
         }
     }
