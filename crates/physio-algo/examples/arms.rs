@@ -294,4 +294,47 @@ fn main() {
     if let Some(b) = base_gap {
         println!("   {:<14} band onset gap {b:+.1} min", "ours");
     }
+
+    paired(&cohorts, &preps, &table);
+}
+
+/// Per-SUBJECT kappa deltas on the selection cohorts. A pooled delta of -0.008 sits exactly on the
+/// gate's own tolerance, so it has to be read against how many subjects actually moved and which way.
+fn paired(cohorts: &[(&str, bool, Vec<Night>)], preps: &[Vec<Prepared>], table: &[(&str, Params)]) {
+    println!("\nPAIRED, per subject — pooled kappa alone cannot tell -0.008 from noise");
+    print!("{:<42}", "arm");
+    for (ds, selects, _) in cohorts {
+        if *selects {
+            print!("{:>30}", format!("{ds}: median  better/worse"));
+        }
+    }
+    println!();
+
+    for (label, p) in table.iter() {
+        print!("{label:<42}");
+        for ((ds, selects, ns), pr) in cohorts.iter().zip(preps) {
+            let _ = ds;
+            if !*selects {
+                continue;
+            }
+            let mut d: Vec<f64> = Vec::new();
+            for (night, prep) in ns.iter().zip(pr) {
+                let one = |q: &Params| {
+                    let lab = labels(night, prep, q);
+                    let mut cm = [[0i64; 4]; 4];
+                    for (k, &t) in &night.truth {
+                        if *k < lab.len() && (0..4).contains(&t) {
+                            cm[t as usize][lab[*k]] += 1;
+                        }
+                    }
+                    kappa4(&cm)
+                };
+                d.push(one(p) - one(&Params::SHIPPED));
+            }
+            let better = d.iter().filter(|v| **v > 1e-9).count();
+            let worse = d.iter().filter(|v| **v < -1e-9).count();
+            print!("{:>+18.4}{:>6}/{:<5}", median(&mut d.clone()), better, worse);
+        }
+        println!();
+    }
 }
