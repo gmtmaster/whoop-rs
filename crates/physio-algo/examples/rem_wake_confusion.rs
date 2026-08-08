@@ -114,11 +114,11 @@ fn main() {
 
         println!("== {ds} (n={})", nights.len());
         println!("   {:<24}{:>9}{:>9}{:>9}{:>9}", "PSG says \\ we say", "wake", "light", "deep", "rem");
-        for t in 0..4 {
+        for (t, truth_name) in NAMES.iter().enumerate() {
             for (c, name) in CUT_NAMES.iter().enumerate() {
                 let r = pct_row(&cms[c], t);
                 let lbl =
-                    if c == 0 { format!("{} ({name})", NAMES[t]) } else { format!("   {name}") };
+                    if c == 0 { format!("{truth_name} ({name})") } else { format!("   {name}") };
                 println!("   {:<24}{:>8.1}%{:>8.1}%{:>8.1}%{:>8.1}%", lbl, r[0], r[1], r[2], r[3]);
             }
         }
@@ -137,19 +137,14 @@ fn main() {
         let tot = cms[0].iter().flatten().sum::<i64>().max(1) as f64;
         println!("   -> the REM excess, decomposed by where it comes FROM:");
         let mut inflow = 0.0;
-        for t in 0..4 {
-            if t == 3 {
-                continue;
-            }
+        for (t, truth_name) in NAMES.iter().enumerate().take(3) {
             let share = cms[0][t].iter().sum::<i64>() as f64 / tot;
-            let contrib = pct_row(&cms[0], t)[3] * share;
-            inflow += contrib;
+            let rate = pct_row(&cms[0], t)[3];
+            inflow += rate * share;
             println!(
-                "      {:<12} -> REM  {:>5.1}% of a {:>4.1}% class  =  {:+5.1} pp of the night",
-                NAMES[t],
-                pct_row(&cms[0], 3.min(t))[3].max(pct_row(&cms[0], t)[3]),
+                "      {truth_name:<12} -> REM  {rate:>5.1}% of a {:>4.1}% class  =  {:+5.1} pp of the night",
                 100.0 * share,
-                contrib
+                rate * share
             );
         }
         let rem_share = cms[0][3].iter().sum::<i64>() as f64 / tot;
