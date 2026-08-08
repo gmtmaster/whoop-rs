@@ -524,7 +524,7 @@ pub fn efficiency(start: i64, end: i64, stages: &[StageSegment]) -> f64 {
     ((in_bed - wake).max(0.0) / in_bed).min(1.0)
 }
 
-/// One accepted in-bed span with its session resting HR (computed for the daytime guard, reused downstream).
+/// One accepted in-bed span with its session resting HR (the median; the guards use the floor).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DetectedSpan {
     pub start: i64,
@@ -599,13 +599,17 @@ pub fn detect_sessions_with(
         if off_wrist_fraction(*p, &hr_s, wrist_off) >= MAX_OFF_WRIST_SLEEP_FRACTION {
             continue;
         }
+        // Two different questions, two different statistics. The GUARDS below compare against a
+        // baseline multiple and were tuned against the lowest-sustained floor, so they keep it. The
+        // value carried downstream is the reported resting HR, which is the median.
+        let resting_floor = resting_hr::session_resting_hr_floor(p.start, p.end, &rhr);
         let resting = resting_hr::session_resting_hr(p.start, p.end, &rhr);
         let continues_chain = chain_prev_end.is_some_and(|e| p.start - e <= continuation_gap_s);
         let is_night_tail = continues_chain && chain_from_overnight;
         let morning_wake_end = if chain_from_overnight { chain_prev_end } else { None };
         let is_daytime = is_daytime_center(*p, tz_offset_s);
         let passes_morning = if is_daytime {
-            passes_morning_stillness_guard(*p, resting.map(|r| r as i64), baseline, morning_wake_end, band_sleep_state)
+            passes_morning_stillness_guard(*p, resting_floor.map(|r| r as i64), baseline, morning_wake_end, band_sleep_state)
         } else {
             true
         };

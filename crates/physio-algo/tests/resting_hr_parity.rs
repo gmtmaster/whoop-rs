@@ -1,11 +1,15 @@
-//! Parity gate for resting_hr, over the crate's own module. These pin the SEMANTICS of the
-//! lowest-sustained-window floor - that it tracks a varying input, prefers a sustained low over a
-//! transient dip, and is neither the global minimum nor a mean. No external resting-HR reference is
-//! read anywhere in this crate, so nothing here measures agreement with a clinical resting HR.
+//! Parity gate for resting_hr, over the crate's own module. Two statistics are pinned: the SHIPPED
+//! median, and the lowest-sustained-window floor kept beside it as a comparison instrument - that it
+//! tracks a varying input, prefers a sustained low over a transient dip, and is neither the global
+//! minimum nor a mean. No external resting-HR reference is read anywhere in this crate, so nothing
+//! here measures agreement with a clinical resting HR; that sweep lives outside the crate.
 
-use physio_algo::resting_hr::{daily_resting_hr, floor_mean_log_line, session_resting_hr, HrSample};
+use physio_algo::resting_hr::{
+    daily_resting_hr, floor_mean_log_line, session_resting_hr, session_resting_hr_floor, HrSample,
+};
 
-const SUFFIX: &str = "(floor = WHOOP-style lowest-sustained = NOOP RHR; mean = sleeping-HR-app number)";
+const SUFFIX: &str =
+    "(floor = lowest-sustained instrument; mean = sleeping-HR-app number; NOOP RHR = the median)";
 
 #[test]
 fn log_line_floor_below_mean() {
@@ -101,7 +105,7 @@ fn session_floor_recovers_multiple_injected_values() {
     // Tracks a varying input: three different injected floors, each recovered exactly.
     for &(floor, high) in &[(48, 60), (44, 58), (52, 70)] {
         let hr = night_with_floor(1000, floor, high);
-        assert_eq!(session_resting_hr(1000, 1000 + 6 * 5 * 60, &hr), Some(floor));
+        assert_eq!(session_resting_hr_floor(1000, 1000 + 6 * 5 * 60, &hr), Some(floor));
     }
 }
 
@@ -111,7 +115,7 @@ fn session_floor_recovers_multiple_injected_values() {
 fn session_floor_prefers_a_sustained_low_over_a_transient_dip() {
     let hr = night_with_a_transient_dip();
     assert_eq!(hr.iter().map(|s| s.bpm).min(), Some(40), "the dip is the global minimum");
-    assert_eq!(session_resting_hr(1000, 2800, &hr), Some(52));
+    assert_eq!(session_resting_hr_floor(1000, 2800, &hr), Some(52));
 }
 
 /// The null arm: the three do-nothing scorers that would otherwise look right. The global minimum
@@ -130,7 +134,7 @@ fn no_do_nothing_scorer_reproduces_the_floors() {
     for (name, f) in nulls {
         assert!(!floor_misses(f).is_empty(), "the {name} scorer reproduced every floor");
     }
-    assert!(floor_misses(&session_resting_hr).is_empty(), "{:?}", floor_misses(&session_resting_hr));
+    assert!(floor_misses(&session_resting_hr_floor).is_empty(), "{:?}", floor_misses(&session_resting_hr_floor));
 }
 
 #[test]
@@ -142,7 +146,7 @@ fn session_floor_is_the_lowest_window_mean_not_the_global_min() {
         HrSample::new(300, 58),
         HrSample::new(360, 58),
     ];
-    assert_eq!(session_resting_hr(0, 600, &hr), Some(55));
+    assert_eq!(session_resting_hr_floor(0, 600, &hr), Some(55));
 }
 
 #[test]
@@ -154,20 +158,20 @@ fn session_floor_rounds_window_mean_half_up() {
         HrSample::new(120, 52),
         HrSample::new(300, 80),
     ];
-    assert_eq!(session_resting_hr(0, 600, &hr), Some(51));
+    assert_eq!(session_resting_hr_floor(0, 600, &hr), Some(51));
 }
 
 #[test]
 fn session_floor_empty_segment_is_none() {
-    assert_eq!(session_resting_hr(0, 600, &[]), None);
+    assert_eq!(session_resting_hr_floor(0, 600, &[]), None);
     // Samples all outside the window → still none.
-    assert_eq!(session_resting_hr(0, 600, &[HrSample::new(5000, 60)]), None);
+    assert_eq!(session_resting_hr_floor(0, 600, &[HrSample::new(5000, 60)]), None);
 }
 
 #[test]
 fn session_floor_falls_back_to_segment_mean_when_no_window_holds_a_sample() {
     // A lone sample exactly at `end` is in-segment (inclusive) but in no tumbling window → segment mean.
-    assert_eq!(session_resting_hr(0, 600, &[HrSample::new(600, 63)]), Some(63));
+    assert_eq!(session_resting_hr_floor(0, 600, &[HrSample::new(600, 63)]), Some(63));
 }
 
 #[test]
@@ -175,4 +179,88 @@ fn daily_resting_hr_is_the_min_session_floor() {
     assert_eq!(daily_resting_hr(&[Some(52), None, Some(48), Some(55)]), Some(48));
     assert_eq!(daily_resting_hr(&[None, None]), None);
     assert_eq!(daily_resting_hr(&[]), None);
+}
+
+// ── The shipped statistic: the median ────────────────────────────────────────────────────────────
+
+/// A night whose bpms are a known multiset, so the median is arithmetic rather than a fixture.
+fn night_of(bpms: &[i32]) -> Vec<HrSample> {
+    bpms.iter().enumerate().map(|(i, &b)| HrSample::new(1000 + i as i64 * 30, b)).collect()
+}
+
+#[test]
+fn session_median_recovers_multiple_injected_values() {
+    // Tracks a varying input: shift the whole night and the median follows it exactly.
+    for shift in [0, 7, 19, -5] {
+        let bpms: Vec<i32> = [55, 57, 59, 61, 63].iter().map(|b| b + shift).collect();
+        let hr = night_of(&bpms);
+        assert_eq!(session_resting_hr(1000, 9000, &hr), Some(59 + shift));
+    }
+}
+
+#[test]
+fn session_median_averages_the_two_middle_samples_and_rounds_half_up() {
+    // Even count: (58+61)/2 = 59.5 → 60.
+    assert_eq!(session_resting_hr(1000, 9000, &night_of(&[54, 58, 61, 70])), Some(60));
+    // Even count landing exactly: (58+60)/2 = 59.
+    assert_eq!(session_resting_hr(1000, 9000, &night_of(&[54, 58, 60, 70])), Some(59));
+}
+
+/// The whole point of the change: a one-sample dip does not move the median, and neither does the
+/// sustained 5-min window the floor keys on. The two statistics disagree by design.
+#[test]
+fn session_median_ignores_the_dip_the_floor_keys_on() {
+    let hr = night_with_a_transient_dip();
+    assert_eq!(session_resting_hr_floor(1000, 2800, &hr), Some(52), "floor takes the sustained low");
+    assert_eq!(session_resting_hr(1000, 2800, &hr), Some(70), "median stays at the night's level");
+}
+
+/// Measured on real paired data, the floor reads ~10 bpm BELOW the median. Pin the direction, since
+/// that gap is the whole reason the shipped statistic changed.
+#[test]
+fn floor_sits_below_the_median_on_a_night_with_a_quiet_stretch() {
+    let hr = night_with_floor(1000, 52, 78);
+    let floor = session_resting_hr_floor(1000, 2800, &hr).unwrap();
+    let median = session_resting_hr(1000, 2800, &hr).unwrap();
+    assert!(median > floor, "median {median} should sit above floor {floor}");
+    assert_eq!((median - floor, floor, median), (26, 52, 78));
+}
+
+#[test]
+fn session_median_respects_the_segment_bounds() {
+    let hr = [HrSample::new(0, 50), HrSample::new(600, 90), HrSample::new(5000, 200)];
+    // 5000 is outside [0, 600]: median of {50, 90} = 70, not touched by the 200.
+    assert_eq!(session_resting_hr(0, 600, &hr), Some(70));
+}
+
+#[test]
+fn session_median_empty_segment_is_none() {
+    assert_eq!(session_resting_hr(0, 600, &[]), None);
+    assert_eq!(session_resting_hr(0, 600, &[HrSample::new(5000, 60)]), None);
+}
+
+/// The null arm for the median, mirroring the floor's. A scorer that ignores its input, or returns a
+/// neighbouring order statistic, must fail at least one case.
+#[test]
+fn no_do_nothing_scorer_reproduces_the_medians() {
+    let cases: [(Vec<i32>, i32); 4] = [
+        (vec![55, 57, 59, 61, 63], 59),
+        (vec![54, 58, 61, 70], 60),
+        (vec![40, 70, 70, 70, 70], 70),
+        (vec![48, 49, 50], 49),
+    ];
+    let nulls: [(&str, FloorScorer); 5] = [
+        ("global minimum", &|_, _, hr: &[HrSample]| hr.iter().map(|s| s.bpm).min()),
+        ("global maximum", &|_, _, hr: &[HrSample]| hr.iter().map(|s| s.bpm).max()),
+        ("first sample", &|_, _, hr: &[HrSample]| hr.first().map(|s| s.bpm)),
+        ("constant 59", &|_, _, _: &[HrSample]| Some(59)),
+        ("refuses", &|_, _, _: &[HrSample]| None),
+    ];
+    let misses = |f: FloorScorer| -> usize {
+        cases.iter().filter(|(bpms, want)| f(1000, 9000, &night_of(bpms)) != Some(*want)).count()
+    };
+    for (name, f) in nulls {
+        assert!(misses(f) > 0, "the {name} scorer reproduced every median");
+    }
+    assert_eq!(misses(&session_resting_hr), 0, "the shipped median missed a case");
 }

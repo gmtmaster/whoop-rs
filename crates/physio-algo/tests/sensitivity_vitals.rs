@@ -20,7 +20,7 @@ use physio_algo::hrv::{
     duplicate_beat_count, overlapping_report_count, rolling_rmssd, rr_coverage, HrvReadiness,
 };
 use physio_algo::hrv_freq::freq_domain;
-use physio_algo::resting_hr::{daily_resting_hr, session_resting_hr, HrSample};
+use physio_algo::resting_hr::{daily_resting_hr, session_resting_hr_floor, HrSample};
 use physio_algo::respiratory_rate::resp_rate_from_rr;
 use physio_algo::signal::{find_peaks, moving_average_centred};
 use physio_algo::spo2::Spo2;
@@ -811,7 +811,7 @@ fn resp_synth(breath_hz: f64, base_rr_ms: f64, amp_ms: f64, span_s: f64) -> (Vec
 
 // ─────────────────────────── shadows: resting HR ───────────────────────────
 
-/// Session resting-HR floor with a variable window. Mirrors `resting_hr::session_resting_hr`.
+/// Session resting-HR floor with a variable window. Mirrors `resting_hr::session_resting_hr_floor`.
 fn shadow_session_rhr(start: i64, end: i64, hr: &[HrSample], window_seconds: i64) -> f64 {
     let seg: Vec<&HrSample> = hr.iter().filter(|s| s.ts >= start && s.ts <= end).collect();
     if seg.is_empty() || window_seconds <= 0 {
@@ -2067,7 +2067,7 @@ fn m7_respiratory_rate(t: &mut Tally) {
 fn m8_resting_hr(t: &mut Tally) {
     // `session_floor_recovers_multiple_injected_values`, floor 48.
     let gate = Gate {
-        label: "session_resting_hr(1000, 2800, night_with_floor(1000, 48, 60))",
+        label: "session_resting_hr_floor(1000, 2800, night_with_floor(1000, 48, 60))",
         source: "crates/physio-algo/tests/resting_hr_parity.rs session_floor_recovers_multiple_injected_values",
         target: 48.0,
         tol: 0.0,
@@ -2075,7 +2075,9 @@ fn m8_resting_hr(t: &mut Tally) {
     let hr = night_with_floor(1000, 48, 60);
     let (start, end) = (1000i64, 1000 + 6 * 5 * 60);
     let mut tb = Table::new("Resting HR (session lowest-sustained floor)", gate);
-    let shipped = session_resting_hr(start, end, &hr).unwrap() as f64;
+    // The FLOOR, which is what every mutation below varies. The shipped resting HR is the median
+    // (resting_hr.rs); its null arm lives in resting_hr_parity.rs, not here.
+    let shipped = session_resting_hr_floor(start, end, &hr).unwrap() as f64;
     let base = shadow_session_rhr(start, end, &hr, 300);
     assert!((shipped - base).abs() < 1e-15, "shadow {base} != shipped {shipped}");
     tb.add(Kind::Baseline, "baseline (unmutated)", base);
@@ -2107,7 +2109,7 @@ fn m8_resting_hr(t: &mut Tally) {
     ));
     tb.note(format!(
         "only resting_hr_parity.rs:71 separates the floor from the global min: it reads {} where the min is 50",
-        session_resting_hr(0, 600, &[HrSample::new(0, 50), HrSample::new(60, 60), HrSample::new(300, 58), HrSample::new(360, 58)]).unwrap()
+        session_resting_hr_floor(0, 600, &[HrSample::new(0, 50), HrSample::new(60, 60), HrSample::new(300, 58), HrSample::new(360, 58)]).unwrap()
     ));
     tb.note(format!(
         "daily_resting_hr gate at resting_hr_parity.rs:101 reads {:?}; nothing compares any of this to an external RHR reference",
@@ -3295,7 +3297,7 @@ const VITALS_COHORT: &[(&str, &str, usize)] = &[
     ("src/hrv_freq.rs", include_str!("../src/hrv_freq.rs"), 7),
     ("src/spo2.rs", include_str!("../src/spo2.rs"), 11),
     ("src/worn.rs", include_str!("../src/worn.rs"), 6),
-    ("tests/resting_hr_parity.rs", include_str!("resting_hr_parity.rs"), 12),
+    ("tests/resting_hr_parity.rs", include_str!("resting_hr_parity.rs"), 19),
     ("tests/ppg_hr_real.rs", include_str!("ppg_hr_real.rs"), 5),
 ];
 
