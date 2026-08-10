@@ -35,6 +35,132 @@ pub fn steps_in_window(samples: &[StepSample]) -> Option<u32> {
     if total > 0 { Some(total) } else { None }
 }
 
+
+// ── One steps model, both families ────────────────────────────────────────────────────────────────
+//
+// A 5.0/MG counts motion TICKS and a 4.0 has no counter at all, only movement volume. Both map to
+// steps by the same through-origin line, `steps = k * raw`, so the model, the fit and the confidence
+// are shared and only the INPUT differs. `StepsCfg` carries that difference and nothing else.
+
+/// One calibration day: the strap's raw movement signal, and a reference step count for the SAME day.
+#[derive(Clone, Copy, Debug)]
+pub struct StepsPoint {
+    pub raw: f64,
+    pub steps: f64,
+}
+
+/// The fitted (or hand-set) personal model.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StepsCalibration {
+    pub coefficient: f64,
+    pub sample_days: u32,
+    pub confidence: f64,
+    pub manual: bool,
+}
+
+/// What differs per strap family: the scale of `raw`, and therefore the floor below which a day is
+/// too still to fit or to estimate from. The MODEL either side of this is identical.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StepsCfg {
+    pub min_raw_for_fit: f64,
+    pub max_daily_steps: u32,
+}
+
+impl StepsCfg {
+    /// Gravity-delta volume: a day must move at least one whole unit to say anything.
+    pub const GEN4: StepsCfg = StepsCfg { min_raw_for_fit: 1.0, max_daily_steps: 60_000 };
+    /// Motion ticks. One tick is already a movement event, so the floor is one tick.
+    pub const GEN5: StepsCfg = StepsCfg { min_raw_for_fit: 1.0, max_daily_steps: 60_000 };
+}
+
+/// Fewest days carrying both a raw signal and a reference count before an auto-fit is trusted.
+pub const MIN_CALIBRATION_DAYS: usize = 3;
+/// Day count at which confidence saturates toward 1.
+pub const GOOD_CALIBRATION_DAYS: f64 = 14.0;
+
+/// Fit `k` as a raw-weighted median of per-day `steps / raw` ratios, so one odd day cannot drag it
+/// and a busy day votes harder than a near-still one. A positive `manual` short-circuits the fit.
+pub fn calibrate(points: &[StepsPoint], manual: Option<f64>, cfg: StepsCfg) -> Option<StepsCalibration> {
+    if let Some(k) = manual {
+        if k > 0.0 {
+            return Some(StepsCalibration {
+                coefficient: k,
+                sample_days: points.len() as u32,
+                confidence: 1.0,
+                manual: true,
+            });
+        }
+    }
+    let usable: Vec<(f64, f64)> = points
+        .iter()
+        .filter(|p| p.raw >= cfg.min_raw_for_fit && p.steps > 0.0)
+        .map(|p| (p.steps / p.raw, p.raw))
+        .collect();
+    if usable.len() < MIN_CALIBRATION_DAYS {
+        return None;
+    }
+    let ratios: Vec<f64> = usable.iter().map(|r| r.0).collect();
+    let weights: Vec<f64> = usable.iter().map(|r| r.1).collect();
+    let k = weighted_median(&ratios, &weights);
+    if k <= 0.0 {
+        return None;
+    }
+    // Confidence grows with sample size and shrinks with relative spread, so a noisy fit is honestly
+    // less trusted than a tight one. The MAD is weighted by the same days that drove `k`.
+    let size_term = (usable.len() as f64 / GOOD_CALIBRATION_DAYS).min(1.0);
+    let devs: Vec<f64> = ratios.iter().map(|r| (r - k).abs()).collect();
+    let mad = weighted_median(&devs, &weights);
+    let tightness = (1.0 - mad / k).max(0.0);
+    Some(StepsCalibration {
+        coefficient: k,
+        sample_days: usable.len() as u32,
+        confidence: (0.5 * size_term + 0.5 * tightness).clamp(0.0, 1.0),
+        manual: false,
+    })
+}
+
+/// Steps for one day from its raw signal. `None` below the family floor, so "too still to say" stays
+/// distinct from a real zero and the UI can show a dash rather than a fabricated 0.
+pub fn estimate(raw: f64, cal: &StepsCalibration, cfg: StepsCfg) -> Option<u32> {
+    if raw < cfg.min_raw_for_fit || cal.coefficient <= 0.0 {
+        return None;
+    }
+    let steps = (raw * cal.coefficient).round();
+    Some(steps.clamp(0.0, cfg.max_daily_steps as f64) as u32)
+}
+
+/// Weighted median: sort by value, walk the cumulative weight, take the value where it first passes
+/// half the total. On an exact half-mass boundary average the two straddling values, which reduces to
+/// the plain even-count midpoint at equal weights. Degenerate weights fall back to the plain median.
+pub fn weighted_median(xs: &[f64], weights: &[f64]) -> f64 {
+    if xs.is_empty() {
+        return 0.0;
+    }
+    if weights.len() != xs.len() {
+        return crate::stats::median(xs);
+    }
+    let total: f64 = weights.iter().sum();
+    if total <= 0.0 {
+        return crate::stats::median(xs);
+    }
+    let mut order: Vec<usize> = (0..xs.len()).collect();
+    order.sort_by(|a, b| xs[*a].partial_cmp(&xs[*b]).unwrap_or(std::cmp::Ordering::Equal));
+    let half = total / 2.0;
+    let mut cum = 0.0;
+    for pos in 0..order.len() {
+        let idx = order[pos];
+        cum += weights[idx].max(0.0);
+        if cum > half {
+            return xs[idx];
+        }
+        if cum == half {
+            let next = if pos + 1 < order.len() { order[pos + 1] } else { idx };
+            return (xs[idx] + xs[next]) / 2.0;
+        }
+    }
+    xs[order[order.len() - 1]]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +247,97 @@ mod tests {
     fn max_step_delta_boundary_is_exclusive() {
         assert_eq!(steps_in_window(&[step(0, 0), step(60, 512)]), None);
         assert_eq!(steps_in_window(&[step(0, 0), step(60, 511)]), Some(511));
+    }
+
+    fn pt(raw: f64, steps: f64) -> StepsPoint {
+        StepsPoint { raw, steps }
+    }
+
+    #[test]
+    fn a_positive_manual_k_short_circuits_the_fit() {
+        let cal = calibrate(&[pt(100.0, 500.0)], Some(7.5), StepsCfg::GEN4).unwrap();
+        assert_eq!(cal.coefficient, 7.5);
+        assert!(cal.manual);
+        assert_eq!(cal.confidence, 1.0);
+        // A zero or negative manual is not an override, it means "auto".
+        assert!(calibrate(&[pt(100.0, 500.0)], Some(0.0), StepsCfg::GEN4).is_none());
+    }
+
+    #[test]
+    fn a_fit_needs_the_minimum_number_of_usable_days() {
+        let two = [pt(100.0, 500.0), pt(200.0, 1000.0)];
+        assert!(calibrate(&two, None, StepsCfg::GEN4).is_none());
+        let three = [pt(100.0, 500.0), pt(200.0, 1000.0), pt(300.0, 1500.0)];
+        assert_eq!(calibrate(&three, None, StepsCfg::GEN4).unwrap().coefficient, 5.0);
+    }
+
+    /// The weighting is the point: a busy day pins the ratio harder than a near-still one.
+    #[test]
+    fn the_fit_is_weighted_by_raw_so_a_still_day_cannot_drag_it() {
+        let points = [pt(10.0, 100.0), pt(1000.0, 5000.0), pt(1000.0, 5000.0)];
+        let cal = calibrate(&points, None, StepsCfg::GEN4).unwrap();
+        assert_eq!(cal.coefficient, 5.0, "the two busy days at 5.0 outweigh the still day at 10.0");
+    }
+
+    #[test]
+    fn a_day_below_the_family_floor_never_enters_the_fit_or_produces_an_estimate() {
+        let points = [pt(0.5, 900.0), pt(100.0, 500.0), pt(200.0, 1000.0), pt(300.0, 1500.0)];
+        let cal = calibrate(&points, None, StepsCfg::GEN4).unwrap();
+        assert_eq!(cal.sample_days, 3, "the sub-floor day is excluded");
+        assert_eq!(cal.coefficient, 5.0);
+        assert_eq!(estimate(0.5, &cal, StepsCfg::GEN4), None, "too still to say, not zero");
+    }
+
+    #[test]
+    fn confidence_rises_with_days_and_falls_with_spread() {
+        let tight: Vec<StepsPoint> = (1..=14).map(|i| pt(100.0 * i as f64, 500.0 * i as f64)).collect();
+        let tight_cal = calibrate(&tight, None, StepsCfg::GEN4).unwrap();
+        assert!(tight_cal.confidence > 0.99, "14 days on an exact line: {}", tight_cal.confidence);
+
+        let noisy = [pt(100.0, 200.0), pt(100.0, 500.0), pt(100.0, 1500.0)];
+        let noisy_cal = calibrate(&noisy, None, StepsCfg::GEN4).unwrap();
+        assert!(noisy_cal.confidence < tight_cal.confidence);
+    }
+
+    #[test]
+    fn an_estimate_is_the_line_through_the_origin_and_is_clamped() {
+        let cal = StepsCalibration { coefficient: 5.0, sample_days: 5, confidence: 1.0, manual: false };
+        assert_eq!(estimate(1000.0, &cal, StepsCfg::GEN4), Some(5000));
+        assert_eq!(estimate(1_000_000.0, &cal, StepsCfg::GEN4), Some(StepsCfg::GEN4.max_daily_steps));
+    }
+
+    /// The reason this module is shared: a 5.0's ticks and a 4.0's motion volume run the SAME line.
+    /// Only the input differs, so the same points fit the same k under either family config.
+    #[test]
+    fn both_families_run_the_same_model() {
+        let points = [pt(1000.0, 5000.0), pt(2000.0, 10000.0), pt(3000.0, 15000.0)];
+        let g4 = calibrate(&points, None, StepsCfg::GEN4).unwrap();
+        let g5 = calibrate(&points, None, StepsCfg::GEN5).unwrap();
+        assert_eq!(g4.coefficient, g5.coefficient);
+        assert_eq!(estimate(1500.0, &g4, StepsCfg::GEN4), estimate(1500.0, &g5, StepsCfg::GEN5));
+    }
+
+    /// A 5.0 whose divisor is the shipped 1.0 default reads its raw tick count as its step count.
+    /// Pinned because that is the behaviour on a strap nobody has calibrated.
+    #[test]
+    fn the_gen5_default_divisor_is_a_pass_through() {
+        let cal = calibrate(&[], Some(1.0), StepsCfg::GEN5).unwrap();
+        assert_eq!(estimate(6953.0, &cal, StepsCfg::GEN5), Some(6953));
+    }
+
+    #[test]
+    fn weighted_median_matches_the_plain_median_at_equal_weights() {
+        let xs = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(weighted_median(&xs, &[1.0; 4]), 2.5, "even count averages the middle pair");
+        let odd = [1.0, 2.0, 3.0];
+        assert_eq!(weighted_median(&odd, &[1.0; 3]), 2.0);
+    }
+
+    #[test]
+    fn weighted_median_falls_back_when_the_weights_are_degenerate() {
+        let xs = [1.0, 2.0, 3.0];
+        assert_eq!(weighted_median(&xs, &[1.0, 2.0]), 2.0, "mismatched lengths");
+        assert_eq!(weighted_median(&xs, &[0.0, 0.0, 0.0]), 2.0, "zero total");
+        assert_eq!(weighted_median(&[], &[]), 0.0);
     }
 }
