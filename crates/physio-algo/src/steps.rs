@@ -73,10 +73,65 @@ impl StepsCfg {
     pub const GEN5: StepsCfg = StepsCfg { min_raw_for_fit: 1.0, max_daily_steps: 60_000 };
 }
 
-/// Fewest days carrying both a raw signal and a reference count before an auto-fit is trusted.
-pub const MIN_CALIBRATION_DAYS: usize = 3;
+/// Fewest days carrying both a raw signal and a reference count before an auto-fit is offered. ONE:
+/// the same schedule `calibration::STEPS_GEN4` already publishes. A single overlapping day pins the
+/// through-origin line, and the confidence it earns says how much to trust it.
+pub const MIN_CALIBRATION_DAYS: usize = 1;
 /// Day count at which confidence saturates toward 1.
 pub const GOOD_CALIBRATION_DAYS: f64 = 14.0;
+
+
+/// Where a steps figure's `k` came from, as numbers only. The frontend words it; nothing here is a
+/// string, so a locale change can never move a coefficient.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StepsState {
+    /// The user asserted `k` by hand.
+    Manual { coefficient: f64 },
+    /// Fitted from `days` days that carried both a raw signal and a reference count.
+    Fitted { coefficient: f64, days: u32, confidence: f64 },
+    /// Nothing usable to fit from yet. `have` is the count of usable days seen.
+    Uncalibrated { have: u32, need: u32 },
+}
+
+impl StepsState {
+    /// The `k` in force, or `None` when uncalibrated.
+    pub fn coefficient(&self) -> Option<f64> {
+        match self {
+            StepsState::Manual { coefficient } | StepsState::Fitted { coefficient, .. } => Some(*coefficient),
+            StepsState::Uncalibrated { .. } => None,
+        }
+    }
+
+    /// 0..1. A hand-set `k` is 1.0: the user asserted it.
+    pub fn confidence(&self) -> f64 {
+        match self {
+            StepsState::Manual { .. } => 1.0,
+            StepsState::Fitted { confidence, .. } => *confidence,
+            StepsState::Uncalibrated { .. } => 0.0,
+        }
+    }
+}
+
+/// The calibration state for a strap, from its overlapping days and any hand-set `k`.
+pub fn state(points: &[StepsPoint], manual: Option<f64>, cfg: StepsCfg) -> StepsState {
+    match calibrate(points, manual, cfg) {
+        Some(c) if c.manual => StepsState::Manual { coefficient: c.coefficient },
+        Some(c) => StepsState::Fitted {
+            coefficient: c.coefficient,
+            days: c.sample_days,
+            confidence: c.confidence,
+        },
+        None => StepsState::Uncalibrated {
+            have: usable_days(points, cfg),
+            need: MIN_CALIBRATION_DAYS as u32,
+        },
+    }
+}
+
+/// Days that could enter a fit: enough movement to be worth reading, and a reference count to fit to.
+pub fn usable_days(points: &[StepsPoint], cfg: StepsCfg) -> u32 {
+    points.iter().filter(|p| p.raw >= cfg.min_raw_for_fit && p.steps > 0.0).count() as u32
+}
 
 /// Fit `k` as a raw-weighted median of per-day `steps / raw` ratios, so one odd day cannot drag it
 /// and a busy day votes harder than a near-still one. A positive `manual` short-circuits the fit.
@@ -259,16 +314,43 @@ mod tests {
         assert_eq!(cal.coefficient, 7.5);
         assert!(cal.manual);
         assert_eq!(cal.confidence, 1.0);
-        // A zero or negative manual is not an override, it means "auto".
-        assert!(calibrate(&[pt(100.0, 500.0)], Some(0.0), StepsCfg::GEN4).is_none());
+        // A zero or negative manual is not an override, it means "auto" - so the fit runs instead.
+        let auto = calibrate(&[pt(100.0, 500.0)], Some(0.0), StepsCfg::GEN4).unwrap();
+        assert!(!auto.manual);
+        assert_eq!(auto.coefficient, 5.0);
+    }
+
+    /// ONE overlapping day is enough, matching the schedule `calibration::STEPS_GEN4` publishes. It is
+    /// trusted only as far as its confidence says, which is what makes a one-day fit safe to offer.
+    #[test]
+    fn one_overlapping_day_fits_and_earns_only_middling_confidence() {
+        let one = [pt(100.0, 500.0)];
+        let cal = calibrate(&one, None, StepsCfg::GEN4).unwrap();
+        assert_eq!(cal.coefficient, 5.0);
+        assert_eq!(cal.sample_days, 1);
+        assert!((0.5..0.6).contains(&cal.confidence), "one day: {}", cal.confidence);
+        assert!(calibrate(&[], None, StepsCfg::GEN4).is_none(), "no days fits nothing");
     }
 
     #[test]
-    fn a_fit_needs_the_minimum_number_of_usable_days() {
-        let two = [pt(100.0, 500.0), pt(200.0, 1000.0)];
-        assert!(calibrate(&two, None, StepsCfg::GEN4).is_none());
-        let three = [pt(100.0, 500.0), pt(200.0, 1000.0), pt(300.0, 1500.0)];
-        assert_eq!(calibrate(&three, None, StepsCfg::GEN4).unwrap().coefficient, 5.0);
+    fn the_state_reports_where_k_came_from_without_wording_it() {
+        assert_eq!(
+            state(&[pt(100.0, 500.0)], Some(7.5), StepsCfg::GEN4),
+            StepsState::Manual { coefficient: 7.5 },
+        );
+        match state(&[pt(100.0, 500.0)], None, StepsCfg::GEN4) {
+            StepsState::Fitted { coefficient, days, .. } => {
+                assert_eq!((coefficient, days), (5.0, 1));
+            }
+            other => panic!("expected Fitted, got {other:?}"),
+        }
+        // A day too still to read is counted as seen but not as usable.
+        assert_eq!(
+            state(&[pt(0.5, 900.0)], None, StepsCfg::GEN4),
+            StepsState::Uncalibrated { have: 0, need: 1 },
+        );
+        assert_eq!(state(&[], None, StepsCfg::GEN4).coefficient(), None);
+        assert_eq!(state(&[], Some(3.0), StepsCfg::GEN4).confidence(), 1.0);
     }
 
     /// The weighting is the point: a busy day pins the ratio harder than a near-still one.
