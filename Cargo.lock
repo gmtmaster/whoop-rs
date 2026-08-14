@@ -1534,6 +1534,7 @@ dependencies = [
 name = "whoop-client"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ble-core",
  "futures",
  "thiserror 2.0.18",

@@ -6,11 +6,15 @@
 mod capture;
 mod client;
 mod error;
+mod flash;
 mod policy;
 mod uuids;
 
 pub use capture::{capture_line, decode_capture};
 pub use client::WhoopClient;
 pub use error::Error;
+pub use flash::{
+    FlashArm, FlashFault, FlashOptions, FlashProgress, FlashReport, FlashStep, Quiesce, BATTERY_FLOOR_PCT,
+};
 pub use policy::{should_run, BackfillTrigger};
 pub use uuids::{all_services, characteristic, channel_of, service};

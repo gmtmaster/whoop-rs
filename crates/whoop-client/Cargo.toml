@@ -12,3 +12,7 @@ uuid.workspace = true
 futures.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+async-trait = "0.1"

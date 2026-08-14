@@ -8,4 +8,6 @@ pub enum Error {
     Forbidden(u8),
     #[error("record sink: {0}")]
     Sink(#[from] std::io::Error),
+    #[error(transparent)]
+    Flash(#[from] crate::flash::FlashFault),
 }

@@ -7,6 +7,7 @@ use futures::StreamExt;
 use ble_core::{BleTransport, Notification};
 use whoop_protocol::deframe::DeframerMap;
 use whoop_protocol::hello::GEN5_CLIENT_HELLO;
+use whoop_protocol::event::ResultCode;
 use whoop_protocol::response::{self, CommandResponse};
 use whoop_protocol::{
     command, config, framing, haptic, trim, Channel, Family, Frame, Offload, OffloadStep, PacketType, Record,
@@ -21,6 +22,10 @@ const HIST_IDLE: Duration = Duration::from_secs(8);
 
 /// How long `undo_trim` / `undo_trim_dry_run` listen for the strap's answer after their write.
 const TRIM_REPLY_SECS: u64 = 2;
+
+/// How long `battery_level` listens for the GET_BATTERY_LEVEL reply.
+const R22_REPLY_WAIT: Duration = Duration::from_secs(3);
+const BATTERY_REPLY_SECS: u64 = 2;
 
 /// A connected WHOOP band over transport `T`. One `DeframerMap` keeps the notify channels frame-aligned;
 /// the seq counter numbers outbound commands.
@@ -89,7 +94,7 @@ impl<T: BleTransport> WhoopClient<T> {
         // only acts on acked writes — the transport runs these off the async executor so they can't hang it.
         let confirmed = true;
         let mut offload = Offload::new(self.family);
-        let mut notifications = self.transport.notifications().await?;
+        let mut notifications = self.open_notifications().await?;
         self.transport.write(cmd_write, &offload.start_frame(), confirmed).await?;
 
         let mut records = Vec::new();
@@ -133,11 +138,43 @@ impl<T: BleTransport> WhoopClient<T> {
         self.read_identity_string(uuids::SERIAL_NUMBER).await
     }
 
+    /// Read the strap's firmware revision from the standard identity char (no bond needed).
+    pub async fn firmware_revision(&self) -> Option<String> {
+        self.read_identity_string(uuids::FIRMWARE_REVISION).await
+    }
+
+    /// Negotiated ATT MTU, when the transport reports one. A confirmed write of `n` bytes needs `n + 3`.
+    pub fn mtu(&self) -> Option<usize> {
+        self.transport.mtu()
+    }
+
+    /// The strap's battery percent from GET_BATTERY_LEVEL. `None` when nothing answered.
+    pub async fn battery_level(&mut self) -> Result<Option<f64>, Error> {
+        let notifications = self.open_notifications().await?;
+        self.send_raw(command::GET_BATTERY_LEVEL, &[0x01]).await?;
+        let replies = self.collect_responses(notifications, BATTERY_REPLY_SECS).await?;
+        Ok(replies.into_iter().find_map(|r| match r {
+            CommandResponse::Battery { percent } => Some(percent),
+            _ => None,
+        }))
+    }
+
+    /// Stage or commit a firmware image on the connected strap. Gated: `opts.arm` defaults to
+    /// `FlashArm::Plan`, which evaluates every precondition and sends no firmware command.
+    pub async fn flash_firmware(
+        &mut self,
+        image: &[u8],
+        opts: &crate::flash::FlashOptions,
+        on_progress: impl FnMut(crate::flash::FlashProgress),
+    ) -> Result<crate::flash::FlashReport, Error> {
+        crate::flash::run(self, image, opts, on_progress).await
+    }
+
     /// Collect live bpm from the standard HR characteristic (2a37) for `secs`. The strap only streams it
     /// when HR broadcast is on (see `set_broadcast_hr`); empty otherwise.
     pub async fn heart_rate(&mut self, secs: u64) -> Result<Vec<u8>, Error> {
         let _ = self.transport.subscribe(uuids::HEART_RATE_MEASUREMENT).await;
-        let mut notifications = self.transport.notifications().await?;
+        let mut notifications = self.open_notifications().await?;
         let mut out = Vec::new();
         let deadline = tokio::time::sleep(Duration::from_secs(secs));
         tokio::pin!(deadline);
@@ -160,7 +197,7 @@ impl<T: BleTransport> WhoopClient<T> {
     /// Read-only identity/state sweep: open the stream, send the getters, then collect + decode their
     /// COMMAND_RESPONSE replies for a few seconds (stream opened before the writes → no missed responses).
     pub async fn info(&mut self) -> Result<Vec<CommandResponse>, Error> {
-        let notifications = self.transport.notifications().await?;
+        let notifications = self.open_notifications().await?;
         let clock = if self.family == Family::Gen5 { command::GET_CLOCK_GEN5 } else { command::GET_CLOCK_GEN4 };
         // Hello opcode + body are per generation: GEN5 uses GET_HELLO (0x91) with b3 0x01; the 4.0's is
         // GET_HELLO_HARVARD (0x23) with a 9-byte client-time arg whose content is ignored.
@@ -189,7 +226,7 @@ impl<T: BleTransport> WhoopClient<T> {
     /// Read the 5.0 battery-pack fuel gauge (GET_BATTERY_PACK_INFO) — serial, SOC, mV, pack-id. Empty on a
     /// 4.0 (no pack command) or when no pack is attached.
     pub async fn battery_pack(&mut self) -> Result<Vec<CommandResponse>, Error> {
-        let notifications = self.transport.notifications().await?;
+        let notifications = self.open_notifications().await?;
         self.send_raw(command::GET_BATTERY_PACK_INFO, &[0x01]).await?;
         self.collect_responses(notifications, 2).await
     }
@@ -204,7 +241,7 @@ impl<T: BleTransport> WhoopClient<T> {
     /// Write one already-built command frame and collect every frame that arrives for `secs` (stream
     /// opened before the write → no missed reply). Shared by `probe` and the gated `force_trim`.
     async fn probe_frame(&mut self, frame: &[u8], secs: u64) -> Result<Vec<Frame>, Error> {
-        let notifications = self.transport.notifications().await?;
+        let notifications = self.open_notifications().await?;
         self.write_cmd(frame).await?;
         let mut out = Vec::new();
         self.collect_frames(notifications, secs, |f| out.push(f)).await?;
@@ -213,7 +250,7 @@ impl<T: BleTransport> WhoopClient<T> {
 
     /// Passively stream frames for `secs`, optionally filtered to one packet type (the raw-frame monitor).
     pub async fn monitor(&mut self, secs: u64, only_type: Option<u8>) -> Result<Vec<Frame>, Error> {
-        let notifications = self.transport.notifications().await?;
+        let notifications = self.open_notifications().await?;
         let mut out = Vec::new();
         self.collect_frames(notifications, secs, |frame| {
             if only_type.is_none_or(|t| frame.packet_type() == t) {
@@ -233,7 +270,7 @@ impl<T: BleTransport> WhoopClient<T> {
     /// 1:1 — mostly banked as HISTORICAL_DATA, some live as REALTIME_RAW_DATA. Nothing persists, so the
     /// off write in `optical_collection` fully reverses it.
     pub async fn raw_stream<F: FnMut(Frame)>(&mut self, secs: u64, on_frame: F) -> Result<(), Error> {
-        let notifications = self.transport.notifications().await?;
+        let notifications = self.open_notifications().await?;
         self.optical_collection(true).await?;
         let cmd_write = uuids::characteristic(self.family, Channel::CmdWrite);
         let mut offload = Offload::new(self.family);
@@ -260,6 +297,43 @@ impl<T: BleTransport> WhoopClient<T> {
         })
         .await?;
         Ok(out)
+    }
+
+    /// Wait on an already-open stream for the COMMAND_RESPONSE to `cmd` echoing `origin_seq`. Every
+    /// notification is deframed so the stream stays aligned; frames that answer nothing count through
+    /// `stray`. One push can carry an interim reply and its final one, so the LAST match in a batch
+    /// wins. `None` on timeout or on a stream that ended.
+    pub(crate) async fn await_response(
+        &mut self,
+        notifications: &mut BoxStream<'static, Notification>,
+        cmd: u8,
+        origin_seq: u8,
+        timeout: Duration,
+        stray: &mut usize,
+    ) -> Option<Frame> {
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            let note = tokio::select! {
+                _ = &mut deadline => return None,
+                note = notifications.next() => note?,
+            };
+            let Some(channel) = uuids::channel_of(self.family, note.uuid) else { continue };
+            let mut hit = None;
+            for frame in self.deframers.push(channel, &note.value) {
+                let answers = frame.packet().canonical() == PacketType::CommandResponse
+                    && frame.cmd() == cmd
+                    && response::resp_origin_seq(&frame) == Some(origin_seq);
+                if answers {
+                    hit = Some(frame);
+                } else {
+                    *stray += 1;
+                }
+            }
+            if hit.is_some() {
+                return hit;
+            }
+        }
     }
 
     /// Pump every reassembled frame from an already-opened stream through `on_frame` until `secs` elapse.
@@ -297,11 +371,35 @@ impl<T: BleTransport> WhoopClient<T> {
         }
         let count = config::R22_SEQUENCE.len();
         // Reserve a contiguous seq block so the 16 frames carry the same running seqs as before.
-        let start = self.seq.fetch_add(count as u8, Ordering::Relaxed);
+        let start = self.reserve_seq(count);
         for frame in config::r22_frames(start) {
             self.write_cmd(&frame).await?;
         }
         Ok(count)
+    }
+
+    /// The R22 sequence, optionally with `enable_r22_v9_packets` at `v9`, reading each flag's reply.
+    /// Returns one `(name, result)` per flag in send order; `None` means the strap never answered.
+    pub async fn enable_r22_reporting(
+        &mut self,
+        v9: Option<u8>,
+    ) -> Result<Vec<(String, Option<ResultCode>)>, Error> {
+        if self.family != Family::Gen5 {
+            return Ok(Vec::new());
+        }
+        let flags = config::r22_flags_ext(v9);
+        let mut notes = self.open_notifications().await?;
+        let mut out = Vec::with_capacity(flags.len());
+        let mut stray = 0usize;
+        for flag in &flags {
+            let seq = self.next_seq();
+            self.write_cmd(&config::feature_frame_named(seq, flag.name, flag.value)).await?;
+            let reply = self
+                .await_response(&mut notes, command::SET_CONFIG, seq, R22_REPLY_WAIT, &mut stray)
+                .await;
+            out.push((flag.name.to_string(), reply.as_ref().and_then(|f| response::resp_status(f).1)));
+        }
+        Ok(out)
     }
 
     /// Toggle the strap's standard-HR broadcast (Garmin/ANT). GEN5 only.
@@ -399,10 +497,21 @@ impl<T: BleTransport> WhoopClient<T> {
     }
 
     fn next_seq(&self) -> u8 {
-        self.seq.fetch_add(1, Ordering::Relaxed)
+        self.reserve_seq(1)
     }
 
-    async fn write_cmd(&self, frame: &[u8]) -> Result<(), Error> {
+    /// Reserve a contiguous block of `count` seq numbers and return the first. Truncating at 256 is
+    /// exactly right for a mod-256 counter.
+    pub(crate) fn reserve_seq(&self, count: usize) -> u8 {
+        self.seq.fetch_add(count as u8, Ordering::Relaxed)
+    }
+
+    /// Open the merged notify stream. Callers open it BEFORE their triggering write (race fix).
+    pub(crate) async fn open_notifications(&self) -> Result<BoxStream<'static, Notification>, Error> {
+        Ok(self.transport.notifications().await?)
+    }
+
+    pub(crate) async fn write_cmd(&self, frame: &[u8]) -> Result<(), Error> {
         let cmd_write = uuids::characteristic(self.family, Channel::CmdWrite);
         self.transport.write(cmd_write, frame, true).await?;
         Ok(())
