@@ -19,6 +19,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to let the scan populate before reading serials (identity needs a connect, which WinRT
 /// dislikes mid-scan — so we gather candidates first, then stop scanning and read them).
 const SERIAL_SCAN_WINDOW: Duration = Duration::from_secs(8);
+/// MTU the widest frame this stack builds (a 244-byte firmware chunk, confirmed) needs: payload + 3.
+const WIDE_FRAME_MTU: u16 = 247;
 
 /// A btleplug-backed connection to a device advertising `service`. `target_name` optionally pins which
 /// band to attach to (its advertised local name) when several are in range.
@@ -268,18 +270,18 @@ impl BleTransport for BtleplugTransport {
         };
 
         // MTU is auto-negotiated (btleplug exposes mtu() but no setter); WinRT updates it asynchronously,
-        // so poll briefly. Our largest write is the ~48-byte R22 config frame, which needs MTU >= ~51 —
-        // warn if it never rises above the 23-byte ATT default.
+        // so poll until it is wide enough for the widest frame this stack builds (a firmware chunk) or
+        // the window runs out. Callers that need the width gate on `mtu()`; 64 covers everything else.
         let mut mtu = peripheral.mtu();
         for _ in 0..10 {
-            if mtu >= 64 {
+            if mtu >= WIDE_FRAME_MTU {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
             mtu = peripheral.mtu();
         }
         if mtu < 64 {
-            tracing::warn!("negotiated MTU {mtu} may be too small for config writes (need ~51)");
+            tracing::warn!("negotiated MTU {mtu} is too small for config writes (need ~51)");
         }
 
         self.adapter = Some(adapter);
@@ -302,6 +304,10 @@ impl BleTransport for BtleplugTransport {
         })
         .await
         .map_err(|e| BleError::Pairing(e.to_string()))?
+    }
+
+    fn mtu(&self) -> Option<usize> {
+        self.peripheral().ok().map(|p| p.mtu() as usize)
     }
 
     async fn subscribe(&self, characteristic: Uuid) -> Result<(), BleError> {

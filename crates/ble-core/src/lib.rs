@@ -7,7 +7,7 @@ mod mock;
 mod transport;
 mod types;
 
-pub use mock::MockTransport;
+pub use mock::{MockTransport, Responder};
 pub use transport::BleTransport;
 pub use types::{
     gatt_string, BleError, Notification, DEVICE_NAME, FIRMWARE_REVISION, HARDWARE_REVISION, MODEL_NUMBER,
