@@ -33,6 +33,10 @@ pub const R22_SEQUENCE: [Flag; 16] = [
     Flag { name: "enable_sig12", value: b'1' },
 ];
 
+/// The R22 sub-version that appeared after the 16-flag sequence was transcribed. Its value is not
+/// known from any capture; `b'2'` matches every other R22 flag but the base and v4.
+pub const R22_V9: Flag = Flag { name: "enable_r22_v9_packets", value: b'2' };
+
 /// Config flags present in firmware but not sent by the R22 sequence (untried).
 pub const FIRMWARE_ONLY_FLAGS: [&str; 5] = [
     "whoop_live_2_hrm_devices",
@@ -86,11 +90,26 @@ pub fn device_frame(seq: u8, name: &str, value: u8) -> Vec<u8> {
 /// The full 16-frame R22 enable sequence, seq-numbered from `start_seq` (wrapping). The single source
 /// for both the client (which writes each frame) and the FFI (which hands them to the app to write).
 pub fn r22_frames(start_seq: u8) -> Vec<Vec<u8>> {
-    R22_SEQUENCE
+    r22_frames_ext(start_seq, None)
+}
+
+/// [`r22_frames`] plus [`R22_V9`] at `v9` when given. The base 16 are byte-identical either way, so an
+/// added flag can only ever appear last.
+pub fn r22_frames_ext(start_seq: u8, v9: Option<u8>) -> Vec<Vec<u8>> {
+    r22_flags_ext(v9)
         .iter()
         .enumerate()
         .map(|(i, flag)| feature_frame(start_seq.wrapping_add(i as u8), flag))
         .collect()
+}
+
+/// The flags [`r22_frames_ext`] would send, in order.
+pub fn r22_flags_ext(v9: Option<u8>) -> Vec<Flag> {
+    let mut v: Vec<Flag> = R22_SEQUENCE.iter().map(|f| Flag { name: f.name, value: f.value }).collect();
+    if let Some(value) = v9 {
+        v.push(Flag { name: R22_V9.name, value });
+    }
+    v
 }
 
 #[cfg(test)]
