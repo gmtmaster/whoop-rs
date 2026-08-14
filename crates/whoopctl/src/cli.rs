@@ -105,7 +105,15 @@ pub(crate) enum Cmd {
         agree: bool,
     },
     /// Enable the R22 deep-data streams (16 SET_CONFIG flags; reversible).
-    R22on,
+    R22on {
+        /// Also send `enable_r22_v9_packets` at this value (1 or 2). Untried: the flag exists only on
+        /// 50.41.1 and later, and no capture pins its value.
+        #[arg(long = "with-v9", value_parser = ["1", "2"])]
+        with_v9: Option<String>,
+        /// Report each flag's reply instead of only the count sent.
+        #[arg(long)]
+        report: bool,
+    },
     /// Fire the one-shot buzz.
     Buzz,
     /// Warm-reboot the strap (data kept).
@@ -124,6 +132,41 @@ pub(crate) enum Cmd {
     /// Draw an ECG as stacked rhythm strips at a true, stated scale. Offline only for now: `--demo`
     /// streams a synthetic waveform, because the strap's packet layout and counts-per-mV are unread.
     Ecg(EcgArgs),
+    /// Send a firmware image to the band. With no opt-in flag this only plans the transfer offline —
+    /// it opens no radio and writes nothing.
+    Flash(FlashArgs),
+}
+
+/// The firmware transfer's surface. Every level of arming is spelled out in full; there is no single
+/// flag that goes from nothing to committed, and nothing here prompts.
+#[derive(clap::Args)]
+pub(crate) struct FlashArgs {
+    /// The image to send: an already-extracted container file.
+    #[arg(long)]
+    pub(crate) image: PathBuf,
+    /// Connect and evaluate every gate read-only. Sends no firmware command, so it cannot be combined
+    /// with a flag that arms one.
+    #[arg(long, conflicts_with_all = ["stage", "commit"])]
+    pub(crate) check: bool,
+    /// Open the load, send every chunk, then ask the strap to check them. Stops before the commit, so
+    /// the running image is untouched.
+    #[arg(long = "i-agree-to-stage-firmware-on-band-910")]
+    pub(crate) stage: bool,
+    /// Also send the commit. This is the irreversible step, and it implies the staging flag.
+    #[arg(long = "i-agree-to-commit-firmware-on-band-910")]
+    pub(crate) commit: bool,
+    /// Battery floor in percent. Values below 80 are refused.
+    #[arg(long = "min-battery", default_value_t = 80.0)]
+    pub(crate) min_battery: f64,
+    /// Final chunk: `pad` to the full width, or the `exact` remaining bytes.
+    #[arg(long, default_value = "pad")]
+    pub(crate) tail: String,
+    /// Timeouts tolerated across the whole transfer, capped at 16.
+    #[arg(long, default_value_t = 6)]
+    pub(crate) retries: u32,
+    /// What to send before the load: `none`, `abort`, or the app's full `app` trio.
+    #[arg(long, default_value = "abort")]
+    pub(crate) quiesce: String,
 }
 
 /// The ECG renderer's surface. Every scale here is honoured or refused, never quietly changed.

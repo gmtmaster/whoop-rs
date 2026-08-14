@@ -15,6 +15,7 @@ use whoop_protocol::bytes::to_hex;
 use whoop_protocol::{command, response, Family, Frame, Record};
 
 mod cli;
+mod flash;
 mod report;
 
 use cli::{Cli, Cmd};
@@ -28,7 +29,7 @@ fn family(gen: u8) -> Family {
     }
 }
 
-fn make_client(cli: &Cli) -> WhoopClient<BtleplugTransport> {
+pub(crate) fn make_client(cli: &Cli) -> WhoopClient<BtleplugTransport> {
     let fam = family(cli.gen);
     let mut transport = BtleplugTransport::new(whoop_client::service(fam));
     if let Some(address) = &cli.address {
@@ -41,8 +42,22 @@ fn make_client(cli: &Cli) -> WhoopClient<BtleplugTransport> {
     WhoopClient::new(transport, fam)
 }
 
-async fn connect(cli: &Cli) -> Result<WhoopClient<BtleplugTransport>> {
+pub(crate) async fn connect(cli: &Cli) -> Result<WhoopClient<BtleplugTransport>> {
     let mut client = make_client(cli);
+    client.connect_and_bond().await?;
+    Ok(client)
+}
+
+/// Connect to one named band, whatever the global selectors say — an explicit `--address` still wins.
+/// Used where attaching to the wrong strap is itself the hazard.
+pub(crate) async fn connect_serial(cli: &Cli, serial: &str) -> Result<WhoopClient<BtleplugTransport>> {
+    let fam = family(cli.gen);
+    let mut transport = BtleplugTransport::new(whoop_client::service(fam));
+    transport = match &cli.address {
+        Some(address) => transport.with_target_address(address.clone()),
+        None => transport.with_target_serial(serial.to_string()),
+    };
+    let mut client = WhoopClient::new(transport, fam);
     client.connect_and_bond().await?;
     Ok(client)
 }
@@ -205,9 +220,17 @@ async fn main() -> Result<()> {
             client.disconnect().await.ok();
             report_trim_reply(&frames?);
         }
-        Cmd::R22on => {
-            let client = connect(&cli).await?;
-            println!("sent {} R22 flags", client.enable_r22().await?);
+        Cmd::R22on { with_v9, report } => {
+            let v9 = with_v9.as_deref().map(|v| v.as_bytes()[0]);
+            let mut client = connect(&cli).await?;
+            if *report || v9.is_some() {
+                for (name, result) in client.enable_r22_reporting(v9).await? {
+                    let shown = result.map_or_else(|| "no reply".to_string(), |r| format!("{r:?}"));
+                    println!("  {name:<32} {shown}");
+                }
+            } else {
+                println!("sent {} R22 flags", client.enable_r22().await?);
+            }
             client.disconnect().await.ok();
         }
         Cmd::Buzz => {
@@ -236,6 +259,7 @@ async fn main() -> Result<()> {
             report::decode_report(file, strap.as_deref(), &records);
         }
         Cmd::Ecg(args) => render_ecg(args)?,
+        Cmd::Flash(args) => flash::run(&cli, args).await?,
     }
     Ok(())
 }
@@ -310,15 +334,21 @@ fn report_trim_reply(frames: &[Frame]) {
     }
 }
 
-/// Refuse `--wipe` when the strap serial matches the local `WHOOPCTL_PROTECT` allowlist (comma-separated
-/// suffixes) or can't be read to check it. Environment-local guard; empty by default.
-async fn guard_wipe(client: &WhoopClient<BtleplugTransport>) -> Result<()> {
-    let protect: Vec<String> = std::env::var("WHOOPCTL_PROTECT")
+/// Serial suffixes the local `WHOOPCTL_PROTECT` names, comma-separated. Empty by default; it can only
+/// ever narrow what a write reaches, never widen it.
+pub(crate) fn protect_list() -> Vec<String> {
+    std::env::var("WHOOPCTL_PROTECT")
         .unwrap_or_default()
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .collect();
+        .collect()
+}
+
+/// Refuse `--wipe` when the strap serial matches the local `WHOOPCTL_PROTECT` allowlist or can't be
+/// read to check it.
+async fn guard_wipe(client: &WhoopClient<BtleplugTransport>) -> Result<()> {
+    let protect = protect_list();
     match client.serial().await {
         Some(s) if protect.iter().any(|p| s.to_ascii_uppercase().ends_with(&p.to_ascii_uppercase())) => {
             anyhow::bail!("refusing --wipe: strap {s} is protected by WHOOPCTL_PROTECT; read-keep only")
