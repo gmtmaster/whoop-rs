@@ -116,6 +116,27 @@ pub struct BodyLocation {
     pub status: u8,
 }
 
+/// The origin sequence number a COMMAND_RESPONSE echoes (payload byte 0 on 5/MG), so a reply can be
+/// matched to the command that asked for it. `None` on 4.0, which echoes no seq.
+pub fn resp_origin_seq(f: &Frame) -> Option<u8> {
+    match f.family {
+        Family::Gen5 => u8_at(f.payload(), 0),
+        Family::Gen4 => None,
+    }
+}
+
+/// Payload byte 3 of a firmware COMMAND_RESPONSE: the byte the load handlers place after the revision
+/// echo. Reported, never gated on — the code space is unmapped. VERIFY is excluded, since its payload is
+/// the revision echo alone and byte 3 there is only the 4-byte zero pad.
+pub fn firmware_status(f: &Frame) -> Option<u8> {
+    match f.cmd() {
+        command::START_FIRMWARE_LOAD_NEW
+        | command::LOAD_FIRMWARE_DATA_NEW
+        | command::PROCESS_FIRMWARE_IMAGE_NEW => u8_at(f.payload(), 3),
+        _ => None,
+    }
+}
+
 /// Read a GET_BODY_LOCATION_AND_STATUS reply. Payload-relative bytes 2/3/4; `None` when the frame
 /// answers a different command or is too short.
 pub fn body_location(f: &Frame) -> Option<BodyLocation> {
@@ -431,6 +452,35 @@ mod tests {
         let mut on_grid = vec![0u8; 15];
         on_grid[7..11].copy_from_slice(&1_750_000_000u32.to_le_bytes());
         assert_eq!(super::data_range_scan_oldest(&on_grid), Some(1_750_000_000));
+    }
+
+    /// The firmware reply reads: origin-seq echo at payload 0, driver status at payload 3. A reply to
+    /// another command, and one carrying the revision echo alone, both report no status.
+    #[test]
+    fn firmware_reply_reads_the_origin_seq_and_the_driver_status() {
+        let reply = |cmd: u8, p: &[u8]| {
+            let wire = framing::encode(Family::Gen5, 36, 0, cmd, p);
+            framing::decode(Family::Gen5, &wire).unwrap()
+        };
+
+        let load = reply(command::LOAD_FIRMWARE_DATA_NEW, &[0x2A, 1, 0x01, 0x0B]);
+        assert_eq!(super::resp_origin_seq(&load), Some(0x2A));
+        assert_eq!(super::firmware_status(&load), Some(0x0B));
+
+        // VERIFY answers with the revision echo alone; byte 3 there is inner pad, never a status.
+        let verify = reply(command::VERIFY_FIRMWARE_IMAGE, &[0x2B, 1, 0x01]);
+        assert_eq!(super::resp_origin_seq(&verify), Some(0x2B));
+        assert_eq!(verify.payload().get(3), Some(&0), "the pad byte is there and must not be read");
+        assert_eq!(super::firmware_status(&verify), None);
+
+        let other = reply(command::GET_BATTERY_LEVEL, &[0x2C, 1, 93, 7]);
+        assert_eq!(super::resp_origin_seq(&other), Some(0x2C));
+        assert_eq!(super::firmware_status(&other), None);
+
+        // 4.0 echoes no origin seq.
+        let wire = framing::encode(Family::Gen4, 36, 0, command::LOAD_FIRMWARE_DATA_NEW, &[9, 1, 1, 0]);
+        let gen4 = framing::decode(Family::Gen4, &wire).unwrap();
+        assert_eq!(super::resp_origin_seq(&gen4), None);
     }
 
     #[test]

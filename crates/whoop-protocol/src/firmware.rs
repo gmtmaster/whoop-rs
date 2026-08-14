@@ -1,34 +1,18 @@
 //! Firmware-image transfer frames (GEN5 / AMBIQ). Builds the four DFU commands and splits an image
-//! into offset-tagged chunks. Sans-IO: nothing here writes to a strap, and the opcodes stay in
-//! `command::DESTRUCTIVE` so the blind path still refuses them.
+//! into offset-tagged chunks; `firmware_image` checks the header those bytes carry. Sans-IO: nothing
+//! here writes to a strap, and the opcodes stay in `command::DESTRUCTIVE` so the blind path refuses them.
 
 use crate::bytes::prefixed;
 use crate::command;
 use crate::family::Family;
+use crate::firmware_image::transfer_len;
 use crate::framing;
 
 /// Payload bytes per `LOAD_FIRMWARE_DATA_NEW` frame on AMBIQ straps.
 pub const CHUNK_AMBIQ: usize = 220;
 
-/// Plaintext header ahead of the compressed image in a `.zbin`.
-pub const IMAGE_HEADER_LEN: usize = 512;
-
-/// Offset of the u32 LE payload length inside the header.
-const LEN_OFFSET: usize = 4;
-
 /// Revision marker carried as the first payload byte of every firmware command.
 const REVISION_1: u8 = 0x01;
-
-/// Transfer length of a `.zbin`: its header plus the payload length the header declares. `None` when
-/// `image` is shorter than the header or the declared length overruns it.
-pub fn transfer_len(image: &[u8]) -> Option<usize> {
-    if image.len() < IMAGE_HEADER_LEN {
-        return None;
-    }
-    let declared = u32::from_le_bytes(image[LEN_OFFSET..LEN_OFFSET + 4].try_into().ok()?) as usize;
-    let total = IMAGE_HEADER_LEN.checked_add(declared)?;
-    (total <= image.len()).then_some(total)
-}
 
 /// A firmware command whose whole payload is the revision marker.
 fn bare_frame(seq: u8, cmd: u8) -> Vec<u8> {
@@ -74,14 +58,38 @@ pub struct Chunk {
     pub frame: Vec<u8>,
 }
 
+/// How the final data frame is filled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Tail {
+    /// Real remaining bytes only.
+    Exact,
+    /// Zero-padded to [`CHUNK_AMBIQ`], length byte [`CHUNK_AMBIQ`].
+    #[default]
+    Pad,
+}
+
 /// Split `image` into [`CHUNK_AMBIQ`]-sized data frames, seq-numbered from `start_seq` (wrapping).
-/// Only the bytes [`transfer_len`] reports are sent; `None` when the header does not parse.
+/// Only the declared transfer length is sent; `None` when the header does not parse.
 pub fn data_frames(image: &[u8], start_seq: u8) -> Option<Vec<Chunk>> {
+    data_frames_with(image, start_seq, Tail::Exact)
+}
+
+/// [`data_frames`] with an explicit tail policy. Every chunk but the last is full width either way, so
+/// the policy only ever changes the final frame.
+pub fn data_frames_with(image: &[u8], start_seq: u8, tail: Tail) -> Option<Vec<Chunk>> {
     let total = transfer_len(image)?;
     let mut out = Vec::with_capacity(total.div_ceil(CHUNK_AMBIQ));
     for (i, chunk) in image[..total].chunks(CHUNK_AMBIQ).enumerate() {
         let offset = (i * CHUNK_AMBIQ) as u32;
-        out.push(Chunk { offset, frame: data_frame(start_seq.wrapping_add(i as u8), offset, chunk)? });
+        let seq = start_seq.wrapping_add(i as u8);
+        let frame = if tail == Tail::Pad && chunk.len() < CHUNK_AMBIQ {
+            let mut padded = vec![0u8; CHUNK_AMBIQ];
+            padded[..chunk.len()].copy_from_slice(chunk);
+            data_frame(seq, offset, &padded)?
+        } else {
+            data_frame(seq, offset, chunk)?
+        };
+        out.push(Chunk { offset, frame });
     }
     Some(out)
 }
@@ -89,31 +97,12 @@ pub fn data_frames(image: &[u8], start_seq: u8) -> Option<Vec<Chunk>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::firmware_image::{fixture::sized, IMAGE_HEADER_LEN};
     use crate::packet::PacketType;
-
-    /// A `.zbin`-shaped buffer: header declaring `payload` bytes, then that payload.
-    fn image(payload: usize) -> Vec<u8> {
-        let mut v = vec![0u8; IMAGE_HEADER_LEN + payload];
-        v[LEN_OFFSET..LEN_OFFSET + 4].copy_from_slice(&(payload as u32).to_le_bytes());
-        v
-    }
 
     /// Inner bytes of an encoded GEN5 command: `[type][seq][cmd] + payload`, header stripped.
     fn inner(frame: &[u8]) -> &[u8] {
         &frame[Family::Gen5.header().inner_start..frame.len() - 4]
-    }
-
-    #[test]
-    fn transfer_len_is_the_header_plus_the_declared_payload() {
-        assert_eq!(transfer_len(&image(1000)), Some(IMAGE_HEADER_LEN + 1000));
-    }
-
-    #[test]
-    fn transfer_len_rejects_a_short_buffer_and_an_overrunning_length() {
-        assert_eq!(transfer_len(&[0u8; 16]), None);
-        let mut v = image(1000);
-        v[LEN_OFFSET..LEN_OFFSET + 4].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert_eq!(transfer_len(&v), None);
     }
 
     #[test]
@@ -150,7 +139,7 @@ mod tests {
 
     #[test]
     fn chunk_offsets_are_contiguous_and_cover_exactly_the_transfer_length() {
-        let img = image(CHUNK_AMBIQ * 3 + 7);
+        let img = sized(CHUNK_AMBIQ * 3 + 7);
         let total = transfer_len(&img).unwrap();
         let chunks = data_frames(&img, 0).unwrap();
         assert_eq!(chunks.len(), total.div_ceil(CHUNK_AMBIQ));
@@ -163,10 +152,48 @@ mod tests {
 
     #[test]
     fn trailing_bytes_past_the_declared_length_are_not_sent() {
-        let mut img = image(100);
+        let mut img = sized(100);
         img.extend_from_slice(&[0xFF; 4096]);
         let chunks = data_frames(&img, 0).unwrap();
         assert_eq!(chunks.len(), (IMAGE_HEADER_LEN + 100).div_ceil(CHUNK_AMBIQ));
+    }
+
+    #[test]
+    fn a_padded_tail_declares_the_full_width_and_zero_fills_it() {
+        let img = sized(CHUNK_AMBIQ * 3 + 7);
+        let exact = data_frames_with(&img, 0, Tail::Exact).unwrap();
+        let padded = data_frames_with(&img, 0, Tail::Pad).unwrap();
+        assert_eq!(padded.len(), exact.len());
+
+        let last = inner(&padded.last().unwrap().frame);
+        assert_eq!(last[8], CHUNK_AMBIQ as u8);
+        let real = transfer_len(&img).unwrap() % CHUNK_AMBIQ;
+        assert!(last[9 + real..9 + CHUNK_AMBIQ].iter().all(|&b| b == 0));
+        assert_eq!(&last[9..9 + real], &inner(&exact.last().unwrap().frame)[9..9 + real]);
+    }
+
+    /// The padded tail is unconditional: a final frame whose full width would run past the image, or
+    /// past a flash block edge, still declares and carries [`CHUNK_AMBIQ`].
+    #[test]
+    fn the_padded_tail_does_not_shrink_near_a_block_edge() {
+        let img = sized(65_440 - IMAGE_HEADER_LEN);
+        let chunks = data_frames_with(&img, 0, Tail::Pad).unwrap();
+        let last = chunks.last().unwrap();
+        assert_eq!(last.offset, 65_340);
+        assert_eq!(inner(&last.frame)[8], CHUNK_AMBIQ as u8);
+    }
+
+    #[test]
+    fn the_old_entry_point_still_emits_the_short_tail() {
+        let img = sized(CHUNK_AMBIQ * 3 + 7);
+        let old = data_frames(&img, 4).unwrap();
+        let exact = data_frames_with(&img, 4, Tail::Exact).unwrap();
+        assert_eq!(old.len(), exact.len());
+        for (a, b) in old.iter().zip(&exact) {
+            assert_eq!((a.offset, &a.frame), (b.offset, &b.frame));
+        }
+        let tail_len = (IMAGE_HEADER_LEN + CHUNK_AMBIQ * 3 + 7) % CHUNK_AMBIQ;
+        assert_eq!(inner(&old.last().unwrap().frame)[8], tail_len as u8);
     }
 
     #[test]

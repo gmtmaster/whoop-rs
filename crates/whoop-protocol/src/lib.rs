@@ -18,6 +18,7 @@ pub mod error;
 pub mod event;
 pub mod family;
 pub mod firmware;
+pub mod firmware_image;
 pub mod framing;
 pub mod haptic;
 pub mod hello;
