@@ -134,6 +134,32 @@ pub fn fold_history(values: &[Option<f64>], cfg: &MetricCfg) -> BaselineState {
     })
 }
 
+// ── Deviation from baseline ──────────────────────────────────────────────────
+
+/// Z-score scale: converts the mean-absolute-deviation `spread` this module tracks into an
+/// approximate standard deviation (1 / sqrt(2/pi) ≈ 1.253), matching the agreed Swift semantics.
+const Z_SPREAD_SCALE: f64 = 1.253;
+
+/// One value's deviation from a `BaselineState`, as delta, z-score and ratio.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Deviation {
+    /// `value - baseline`, in the metric's own units.
+    pub delta: f64,
+    /// `(value - baseline) / (1.253 * spread)`.
+    pub z: f64,
+    /// `value / baseline - 1`.
+    pub ratio: f64,
+}
+
+/// A value's deviation from an established baseline: `delta = value - baseline`,
+/// `z = (value - baseline) / (1.253 * spread)`, `ratio = value / baseline - 1`.
+pub fn deviation(value: f64, state: &BaselineState) -> Deviation {
+    let delta = value - state.baseline;
+    let z = delta / (Z_SPREAD_SCALE * state.spread);
+    let ratio = value / state.baseline - 1.0;
+    Deviation { delta, z, ratio }
+}
+
 // ── Night validity as a conjunction across channels ─────────────────────────
 
 /// The nightly metrics a night's validity is decided for. Daily Effort/strain is a daytime metric
@@ -421,6 +447,23 @@ mod tests {
         assert!((young.baseline - 52.736230276).abs() < 1e-9, "got {}", young.baseline);
         // The same night one fold later is refused outright: the guard is a step, not a ramp.
         assert_eq!(update(Some(seeded(45.0, 5.0, EARLY_ADAPT_NIGHTS)), Some(200.0), &cfg).baseline, 45.0);
+    }
+
+    #[test]
+    fn deviation_matches_the_agreed_delta_z_ratio_formula() {
+        let state = seeded(50.0, 4.0, 20);
+        let d = deviation(58.0, &state);
+        assert!((d.delta - 8.0).abs() < 1e-12, "got {}", d.delta);
+        let want_z = 8.0 / (1.253 * 4.0);
+        assert!((d.z - want_z).abs() < 1e-12, "got {}, want {want_z}", d.z);
+        let want_ratio = 58.0 / 50.0 - 1.0;
+        assert!((d.ratio - want_ratio).abs() < 1e-12, "got {}, want {want_ratio}", d.ratio);
+        // A value exactly at baseline deviates by nothing on every axis.
+        let zero = deviation(50.0, &state);
+        assert_eq!((zero.delta, zero.z, zero.ratio), (0.0, 0.0, 0.0));
+        // Below baseline: every axis flips sign.
+        let below = deviation(42.0, &state);
+        assert!(below.delta < 0.0 && below.z < 0.0 && below.ratio < 0.0);
     }
 
     /// The status lifecycle end to end: Calibrating, Provisional, Trusted, Stale after `STALE_DAYS`

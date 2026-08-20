@@ -35,6 +35,7 @@ pub mod rr_irregularity;
 pub mod sleep;
 pub mod sleep_debt;
 pub mod signal;
+pub mod skin_temp;
 pub mod sleep_regularity;
 pub mod spo2;
 pub mod stats;
