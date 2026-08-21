@@ -12,7 +12,8 @@ const ALIGNMENT_FULL_WINDOW_SEC: i64 = 2 * 3_600;
 const ALIGNMENT_ZERO_SEC: i64 = 5 * 3_600;
 const MEANINGFUL_BONUS_EPSILON: f64 = 1e-9;
 const GAP_BRIDGE_MAX_MIN: i64 = 60;
-const NIGHT_TAIL_BRIDGE_MAX_MIN: i64 = 90;
+const NIGHT_TAIL_BRIDGE_MAX_MIN: i64 = 4 * 60;
+const NIGHT_TAIL_MIN_MIN: i64 = 2 * 60;
 pub const HABITUAL_MIN_DAYS: usize = 14;
 /// Trailing calendar span the per-day habitual series averages over. Three whole weeks, so a weekend
 /// lie-in enters and leaves the window together, and the slack over `HABITUAL_MIN_DAYS` keeps a few
@@ -164,8 +165,12 @@ pub fn bridged_night_groups(blocks: &[NightBlock], offset_s: i64) -> Vec<Bridged
         let b = blocks[idx];
         if let Some(last) = bridged.last().copied() {
             let gap = b.start - last.end;
+            let tail = b.end - b.start;
+            let substantial_night_tail = tail >= NIGHT_TAIL_MIN_MIN * 60
+                && tail > gap
+                && is_overnight_onset(b.start, offset_s);
             let bridges = gap >= 0
-                && (gap < bridge_s || (gap < night_tail_bridge_s && is_overnight_onset(b.start, offset_s)));
+                && (gap < bridge_s || (gap < night_tail_bridge_s && substantial_night_tail));
             if bridges {
                 if gap > 0 {
                     gaps.last_mut().expect("gaps non-empty: built from |indices|-1 merge steps").push((last.end, b.start));
@@ -577,14 +582,19 @@ mod tests {
         let b = a + 5 * 3600 + 5 * 3600; // 5h gap
         assert_eq!(main_night_group_indices(&[nb(a, a + 5 * 3600), nb(b, b + 2 * 3600)], 0, None), Some(vec![0]));
         let c = at_min(23, 30) - 86_400;
-        let d = c + 3 * 3600 + 70 * 60; // 70-min overnight mid-night wake -> #861 wider bridge
+        let d = c + 3 * 3600 + 2 * 3600; // 2-hour overnight interruption remains one opportunity
         assert_eq!(main_night_group_indices(&[nb(c, c + 3 * 3600), nb(d, d + 4 * 3600)], 0, None), Some(vec![0, 1]));
         assert_eq!(bridge_adjacent(&[nb(c, c + 3 * 3600), nb(d, d + 4 * 3600)]).len(), 2); // <60 contract unchanged
         let (night, nap) = (at_hour(0), at_hour(13)); // daytime nap onset -> never a night-tail
         assert_eq!(main_night_group_indices(&[nb(night, night + 6 * 3600), nb(nap, nap + 90 * 60)], 0, None), Some(vec![0]));
         let e = at_hour(23) - 86_400;
-        let f = e + 3 * 3600 + 95 * 60; // 95-min gap >= 90 -> no bridge even overnight
+        let f = e + 3 * 3600 + 4 * 3600; // the four-hour ceiling is exclusive
         assert_eq!(main_night_group_indices(&[nb(e, e + 3 * 3600), nb(f, f + 4 * 3600)], 0, None), Some(vec![1]));
+        let short_nap = e + 3 * 3600 + 3 * 3600;
+        assert_eq!(
+            main_night_group_indices(&[nb(e, e + 3 * 3600), nb(short_nap, short_nap + 90 * 60)], 0, None),
+            Some(vec![0])
+        );
     }
 
     #[test]

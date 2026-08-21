@@ -3297,7 +3297,7 @@ const VITALS_COHORT: &[(&str, &str, usize)] = &[
     ("src/hrv_freq.rs", include_str!("../src/hrv_freq.rs"), 7),
     ("src/spo2.rs", include_str!("../src/spo2.rs"), 11),
     ("src/worn.rs", include_str!("../src/worn.rs"), 6),
-    ("tests/resting_hr_parity.rs", include_str!("resting_hr_parity.rs"), 19),
+    ("tests/resting_hr_parity.rs", include_str!("resting_hr_parity.rs"), 21),
     ("tests/ppg_hr_real.rs", include_str!("ppg_hr_real.rs"), 5),
 ];
 

@@ -101,6 +101,22 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             accel: streams.accel.clone(),
         };
         let segments = refine::refine(&v2::stage(&input), &streams.accel, &streams.steps);
+        let deep_spans: Vec<(i64, i64)> = segments
+            .iter()
+            .filter(|segment| segment.stage == SleepStage::Deep)
+            .map(|segment| (segment.start, segment.end))
+            .collect();
+        let resting_hr_samples: Vec<crate::HrSample> = streams
+            .hr
+            .iter()
+            .map(|sample| crate::HrSample::new(sample.ts, sample.bpm as i32))
+            .collect();
+        let resting_hr = crate::resting_hr::session_resting_hr_stage_aware(
+            span.start,
+            span.end,
+            &resting_hr_samples,
+            &deep_spans,
+        );
         let efficiency = detect::efficiency(span.start, span.end, &segments);
         let avg_hrv = HrvReadiness::windowed_avg_hrv(span.start as u32, span.end as u32, &beats);
         let motion_grid = detect::session_epoch_motion(span.start, span.end, &streams.accel);
@@ -109,7 +125,7 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             start: span.start,
             end: span.end,
             efficiency,
-            resting_hr: span.resting_hr,
+            resting_hr,
             avg_hrv,
             segments,
             motion_grid,

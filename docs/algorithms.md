@@ -16,6 +16,11 @@ cohort kappa, the fourth prints the whole-corpus sheet and the fifth the stream 
 `cargo test -p physio-algo --test dataset_parity -- --ignored` to check the published kappas.
 `tools/docs-vs-code.py` re-derives every count on this page from the source and fails on drift.
 
+The reproducible SleepAccel path is kept in `tools/sleep_accel_to_fixtures.py` and
+`examples/sleep_accel_benchmark.rs`. Build fixtures from the official SleepAccel v1.0.0 tree, then
+set `WHOOP_SLEEP_FIXTURES` to the generated directory when running the ignored parity test or example.
+The generated corpus remains outside git; its manifest records source hashes and the dataset DOI.
+
 Every algorithm below is also tagged with the STRENGTH of its evidence, which is not the same as whether
 it is wired:
 

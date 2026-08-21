@@ -5,11 +5,12 @@
 //! here measures agreement with a clinical resting HR; that sweep lives outside the crate.
 
 use physio_algo::resting_hr::{
-    daily_resting_hr, floor_mean_log_line, session_resting_hr, session_resting_hr_floor, HrSample,
+    daily_resting_hr, floor_mean_log_line, session_resting_hr, session_resting_hr_floor,
+    session_resting_hr_stage_aware, HrSample,
 };
 
 const SUFFIX: &str =
-    "(floor = lowest-sustained instrument; mean = sleeping-HR-app number; NOOP RHR = the median)";
+    "(floor = lowest-sustained instrument; mean = sleeping-HR-app number; NOOP RHR = stage-aware Deep/SWS)";
 
 #[test]
 fn log_line_floor_below_mean() {
@@ -237,6 +238,38 @@ fn session_median_respects_the_segment_bounds() {
 fn session_median_empty_segment_is_none() {
     assert_eq!(session_resting_hr(0, 600, &[]), None);
     assert_eq!(session_resting_hr(0, 600, &[HrSample::new(5000, 60)]), None);
+}
+
+#[test]
+fn stage_aware_rhr_weights_later_complete_deep_windows_without_a_short_tail_dominating() {
+    let start = 1_000;
+    let mut hr = Vec::new();
+    for (window, bpm) in [60, 55, 50].into_iter().enumerate() {
+        for second in 0..300 {
+            hr.push(HrSample::new(start + window as i64 * 300 + second, bpm));
+        }
+    }
+    for second in 0..180 {
+        hr.push(HrSample::new(start + 1_200 + second, 40));
+    }
+    let deep = [(start, start + 900), (start + 1_200, start + 1_380)];
+    assert_eq!(session_resting_hr_stage_aware(start, start + 1_500, &hr, &deep), Some(53));
+}
+
+#[test]
+fn stage_aware_rhr_falls_back_to_all_deep_median_then_whole_session_median() {
+    let start = 10_000;
+    let hr: Vec<_> = (0..900)
+        .map(|second| HrSample::new(start + second, if second < 360 { 52 } else { 64 }))
+        .collect();
+    assert_eq!(
+        session_resting_hr_stage_aware(start, start + 900, &hr, &[(start, start + 360)]),
+        Some(52)
+    );
+    assert_eq!(
+        session_resting_hr_stage_aware(start, start + 900, &hr, &[(start, start + 180)]),
+        Some(64)
+    );
 }
 
 /// The null arm for the median, mirroring the floor's. A scorer that ignores its input, or returns a
