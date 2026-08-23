@@ -188,7 +188,9 @@ impl HrvReadiness {
 
     /// Plain RMSSD without artifact filtering. Accepts u16 values.
     pub fn rmssd_plain(rr_ms: &[u16]) -> Option<f64> {
-        if rr_ms.len() < 2 { return None; }
+        if rr_ms.len() < 2 {
+            return None;
+        }
         let mut sum_sq = 0.0;
         for i in 1..rr_ms.len() {
             let d = rr_ms[i] as f64 - rr_ms[i - 1] as f64;
@@ -199,7 +201,11 @@ impl HrvReadiness {
 
     /// Range-filter R-R intervals (keep 300–2000 ms).
     pub fn range_filter(rr_ms: &[u16]) -> Vec<u16> {
-        rr_ms.iter().copied().filter(|&v| (RR_MIN_MS..=RR_MAX_MS).contains(&v)).collect()
+        rr_ms
+            .iter()
+            .copied()
+            .filter(|&v| (RR_MIN_MS..=RR_MAX_MS).contains(&v))
+            .collect()
     }
 
     /// Sample standard deviation (ddof=1) of NN intervals (ms). `None` for < 2 values. Sums in f64 so a
@@ -209,7 +215,11 @@ impl HrvReadiness {
             return None;
         }
         let mean = rr_ms.iter().map(|&v| v as f64).sum::<f64>() / rr_ms.len() as f64;
-        let var = rr_ms.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / (rr_ms.len() - 1) as f64;
+        let var = rr_ms
+            .iter()
+            .map(|&v| (v as f64 - mean).powi(2))
+            .sum::<f64>()
+            / (rr_ms.len() - 1) as f64;
         Some(var.sqrt())
     }
 
@@ -227,7 +237,10 @@ impl HrvReadiness {
         let mut order: Vec<&(u32, Vec<u16>)> = beats.iter().collect();
         order.sort_by_key(|(t, _)| *t);
         let reports: Vec<(u32, &[u16])> = order.iter().map(|(t, rr)| (*t, rr.as_slice())).collect();
-        let flat: Vec<u16> = order.iter().flat_map(|(_, rr)| rr.iter().copied()).collect();
+        let flat: Vec<u16> = order
+            .iter()
+            .flat_map(|(_, rr)| rr.iter().copied())
+            .collect();
         let breaks = report_seam_breaks(&reports);
         let (nn, contiguous) = clean_rr_gap_aware_breaking(&flat, &breaks);
         rmssd_from_clean(&nn, &contiguous)
@@ -245,9 +258,17 @@ impl HrvReadiness {
     /// The windowing primitive under [`Self::nightly_hrv`]: per-bucket RMSSD like [windowed_avg_hrv],
     /// keeping only buckets whose center falls inside a `deep_spans` span. Bare beats carry no quality
     /// flag, so this applies NO trust filter — a displayed nightly value comes from `nightly_hrv`.
-    pub fn windowed_avg_hrv_deep(start: u32, end: u32, beats: &[(u32, u16)], deep_spans: &[(u32, u32)]) -> Option<f64> {
+    pub fn windowed_avg_hrv_deep(
+        start: u32,
+        end: u32,
+        beats: &[(u32, u16)],
+        deep_spans: &[(u32, u32)],
+    ) -> Option<f64> {
         // Boxing so the closure outlives this call while the inner function borrows the spans.
-        let spans: Vec<(u64, u64)> = deep_spans.iter().map(|&(s, e)| (s as u64, e as u64)).collect();
+        let spans: Vec<(u64, u64)> = deep_spans
+            .iter()
+            .map(|&(s, e)| (s as u64, e as u64))
+            .collect();
         Self::windowed_avg_hrv_inner(start, end, beats, move |t| {
             let center = t + HRV_WINDOW_SECS / 2;
             spans.iter().any(|&(ds, de)| center >= ds && center < de)
@@ -258,7 +279,11 @@ impl HrvReadiness {
     /// gap-aware RMSSD (`None` under two clean beats or with no surviving contiguous pair). The per-bucket
     /// breakdown behind [windowed_avg_hrv]; a caller that tags buckets by sleep stage reads this.
     pub fn windowed_buckets(start: u32, end: u32, beats: &[(u32, u16)]) -> Vec<HrvBucket> {
-        let seg: Vec<(u32, u16)> = beats.iter().copied().filter(|&(t, _)| t >= start && t <= end).collect();
+        let seg: Vec<(u32, u16)> = beats
+            .iter()
+            .copied()
+            .filter(|&(t, _)| t >= start && t <= end)
+            .collect();
         if seg.is_empty() {
             return Vec::new();
         }
@@ -269,20 +294,31 @@ impl HrvReadiness {
             // Beats sharing a second came from one report. Group them so a report that re-reports
             // time the previous one already covered breaks contiguity at its first beat.
             let mut reports: Vec<(u32, Vec<u16>)> = Vec::new();
-            for &(ts, rr) in seg.iter().filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi) {
+            for &(ts, rr) in seg
+                .iter()
+                .filter(|&&(ts, _)| ts as u64 >= t && (ts as u64) < hi)
+            {
                 match reports.last_mut() {
                     Some((rt, v)) if *rt == ts => v.push(rr),
                     _ => reports.push((ts, vec![rr])),
                 }
             }
-            let bucket: Vec<u16> = reports.iter().flat_map(|(_, rr)| rr.iter().copied()).collect();
-            let as_slices: Vec<(u32, &[u16])> = reports.iter().map(|(t, rr)| (*t, rr.as_slice())).collect();
+            let bucket: Vec<u16> = reports
+                .iter()
+                .flat_map(|(_, rr)| rr.iter().copied())
+                .collect();
+            let as_slices: Vec<(u32, &[u16])> =
+                reports.iter().map(|(t, rr)| (*t, rr.as_slice())).collect();
             let breaks = report_seam_breaks(&as_slices);
             let (nn, contiguous) = clean_rr_gap_aware_breaking(&bucket, &breaks);
             out.push(HrvBucket {
                 start: t as u32,
                 clean_beats: nn.len() as u32,
-                rmssd: if nn.len() >= 2 { rmssd_from_clean(&nn, &contiguous) } else { None },
+                rmssd: if nn.len() >= 2 {
+                    rmssd_from_clean(&nn, &contiguous)
+                } else {
+                    None
+                },
             });
             t = hi;
         }
@@ -292,7 +328,10 @@ impl HrvReadiness {
     /// Common bucket-loop body shared by [windowed_avg_hrv] and [windowed_avg_hrv_deep].
     /// The `bucket_filter` predicate gates each bucket's start; it is called once per bucket.
     fn windowed_avg_hrv_inner<F: Fn(u64) -> bool>(
-        start: u32, end: u32, beats: &[(u32, u16)], bucket_filter: F,
+        start: u32,
+        end: u32,
+        beats: &[(u32, u16)],
+        bucket_filter: F,
     ) -> Option<f64> {
         let (mut sum, mut n) = (0.0f64, 0usize);
         for b in Self::windowed_buckets(start, end, beats) {
@@ -313,11 +352,15 @@ impl HrvReadiness {
         reports: &[RrReport],
         deep_spans: &[(u32, u32)],
     ) -> Option<f64> {
-        let mut trusted: Vec<&RrReport> =
-            reports.iter().filter(|r| rr_trusted(r.optical_signal_poor)).collect();
+        let mut trusted: Vec<&RrReport> = reports
+            .iter()
+            .filter(|r| rr_trusted(r.optical_signal_poor))
+            .collect();
         trusted.sort_by_key(|r| r.unix);
-        let beats: Vec<(u32, u16)> =
-            trusted.iter().flat_map(|r| r.rr.iter().map(|&v| (r.unix, v))).collect();
+        let beats: Vec<(u32, u16)> = trusted
+            .iter()
+            .flat_map(|r| r.rr.iter().map(|&v| (r.unix, v)))
+            .collect();
         Self::windowed_avg_hrv_deep(start, end, &beats, deep_spans)
     }
 
@@ -327,14 +370,18 @@ impl HrvReadiness {
     /// Emits one entry per day that carries R-R; a day whose beats are all untrusted or all outside
     /// `deep_spans` yields `None`, and `evaluate` drops it along with the real gaps.
     pub fn nightly_rmssd(history: &[HistoryRecord], deep_spans: &[(u32, u32)]) -> Vec<Option<f64>> {
-        let mut by_day: std::collections::BTreeMap<u32, Vec<RrReport>> = std::collections::BTreeMap::new();
+        let mut by_day: std::collections::BTreeMap<u32, Vec<RrReport>> =
+            std::collections::BTreeMap::new();
         for h in history {
             if !h.rr_intervals.is_empty() {
-                by_day.entry(h.unix / SECS_PER_DAY).or_default().push(RrReport {
-                    unix: h.unix,
-                    rr: h.rr_intervals.clone(),
-                    optical_signal_poor: h.optical_signal_poor,
-                });
+                by_day
+                    .entry(h.unix / SECS_PER_DAY)
+                    .or_default()
+                    .push(RrReport {
+                        unix: h.unix,
+                        rr: h.rr_intervals.clone(),
+                        optical_signal_poor: h.optical_signal_poor,
+                    });
             }
         }
         by_day
@@ -369,10 +416,18 @@ impl HrvReadiness {
         let ell: Vec<f64> = valid.iter().map(|&v| v.max(1.0).ln()).collect();
         let baseline7 = mean(tail(&ell, ROLL_WINDOW));
 
-        let long_win = if valid.len() >= LONG_WINDOW { LONG_WINDOW } else { LONG_WINDOW_FALLBACK };
+        let long_win = if valid.len() >= LONG_WINDOW {
+            LONG_WINDOW
+        } else {
+            LONG_WINDOW_FALLBACK
+        };
         let long_ell = tail(&ell, long_win);
         let long_mean = mean(long_ell);
-        let long_sd_raw = if long_ell.len() >= 2 { sample_sd(long_ell) } else { sample_sd(tail(&ell, ROLL_WINDOW)) };
+        let long_sd_raw = if long_ell.len() >= 2 {
+            sample_sd(long_ell)
+        } else {
+            sample_sd(tail(&ell, ROLL_WINDOW))
+        };
         let long_sd = long_sd_raw.max(LONG_SD_FLOOR);
 
         let swc_half = SWC_K * long_sd;
@@ -401,7 +456,7 @@ impl HrvReadiness {
 
 /// Task-Force RMSSD (ms) over a cleaned series, pooling only successive differences whose two beats were
 /// adjacent in the source (`contiguous[i]`). `None` when no contiguous pair survives.
-fn rmssd_from_clean(nn: &[u16], contiguous: &[bool]) -> Option<f64> {
+pub(crate) fn rmssd_from_clean(nn: &[u16], contiguous: &[bool]) -> Option<f64> {
     let (mut sumsq, mut count) = (0.0f64, 0usize);
     for i in 1..nn.len() {
         if !contiguous[i] {
@@ -445,7 +500,7 @@ fn clean_rr_gap_aware(rr: &[u16]) -> (Vec<u16>, Vec<bool>) {
 /// As [`clean_rr_gap_aware`], with `breaks[i]` marking a beat that does not follow beat `i-1` in time.
 /// The strap re-reports part of its previous window each second, so a report's first beat is not the
 /// successor of the last beat of the report before it. An empty mask means no breaks.
-fn clean_rr_gap_aware_breaking(rr: &[u16], breaks: &[bool]) -> (Vec<u16>, Vec<bool>) {
+pub(crate) fn clean_rr_gap_aware_breaking(rr: &[u16], breaks: &[bool]) -> (Vec<u16>, Vec<bool>) {
     let (kept_orig, kept_val) = clean_rr_kept(rr);
     let contiguous: Vec<bool> = (0..kept_val.len())
         .map(|i| {
@@ -501,7 +556,12 @@ fn clean_rr_kept(rr: &[u16]) -> (Vec<usize>, Vec<u16>) {
 /// emits `(ts, rmssd_plain)` over the beats in `(ts - window_s, ts]` that hold >= `min_beats` survivors.
 /// `step_s > 0` thins to one point per that many seconds of advance, measured against the last EMITTED
 /// point. Empty below `min_beats` inputs or a non-positive window. Input need not be sorted.
-pub fn rolling_rmssd(beats: &[(i64, u16)], window_s: i64, step_s: i64, min_beats: usize) -> Vec<(i64, f64)> {
+pub fn rolling_rmssd(
+    beats: &[(i64, u16)],
+    window_s: i64,
+    step_s: i64,
+    min_beats: usize,
+) -> Vec<(i64, f64)> {
     if beats.len() < min_beats || window_s <= 0 {
         return Vec::new();
     }
@@ -547,7 +607,9 @@ pub fn rr_coverage(ts_sec: &[i64], rr_ms: &[f64]) -> f64 {
         return 0.0;
     }
     let (lo, hi) = (ts_sec.iter().min(), ts_sec.iter().max());
-    let (Some(&lo), Some(&hi)) = (lo, hi) else { return 0.0 };
+    let (Some(&lo), Some(&hi)) = (lo, hi) else {
+        return 0.0;
+    };
     let span_ms = (hi - lo) as f64 * 1000.0;
     if span_ms <= 0.0 {
         return 0.0;
@@ -591,12 +653,14 @@ pub fn overlapping_report_count(reports: &[(u32, Vec<u16>)]) -> (u32, u32) {
 /// few beats every second, so beat-time runs ahead of the clock; a report starting past the wall time is
 /// repeating beats and its first difference is not a real successive pair. Whole-second timestamps make
 /// a per-report test too noisy, so the comparison is cumulative.
-fn report_seam_breaks(reports: &[(u32, &[u16])]) -> Vec<bool> {
+pub(crate) fn report_seam_breaks(reports: &[(u32, &[u16])]) -> Vec<bool> {
     // Report times are whole seconds, so beat-time sits up to a second ahead of the clock without any
     // re-reporting. Only a lead beyond that is the strap repeating itself.
     const SEAM_SLACK_MS: u64 = 2_000;
     let mut out = Vec::new();
-    let Some(&(t0, _)) = reports.first() else { return out };
+    let Some(&(t0, _)) = reports.first() else {
+        return out;
+    };
     let mut covered_ms: u64 = 0;
     for &(t, rr) in reports {
         let elapsed_ms = u64::from(t.saturating_sub(t0)) * 1000;
@@ -615,7 +679,11 @@ fn cv_slope(ell: &[f64]) -> f64 {
     for i in start..ell.len() {
         let w = &ell[i + 1 - ROLL_WINDOW..=i];
         let m = mean(w);
-        cv.push(if m != 0.0 { 100.0 * sample_sd(w) / m } else { 0.0 });
+        cv.push(if m != 0.0 {
+            100.0 * sample_sd(w) / m
+        } else {
+            0.0
+        });
     }
     least_squares_slope(&cv)
 }
@@ -638,7 +706,10 @@ mod tests {
         let b: &[u16] = &[100, 110];
         assert!((HrvReadiness::rmssd_runs([a, b]).unwrap() - 10.0).abs() < 1e-9);
         // No run with two beats → None.
-        assert_eq!(HrvReadiness::rmssd_runs([[500u16].as_slice(), [600].as_slice()]), None);
+        assert_eq!(
+            HrvReadiness::rmssd_runs([[500u16].as_slice(), [600].as_slice()]),
+            None
+        );
         assert_eq!(HrvReadiness::rmssd_runs(std::iter::empty::<&[u16]>()), None);
     }
 
@@ -648,7 +719,10 @@ mod tests {
         // 10 ms diffs survive → ~10 ms, not the ~600 ms a raw pooling would give.
         let run: &[u16] = &[600, 610, 1500, 610, 600];
         let v = HrvReadiness::rmssd_runs([run]).unwrap();
-        assert!(v < 20.0, "artifact beat-to-beat jumps should be excluded, got {v}");
+        assert!(
+            v < 20.0,
+            "artifact beat-to-beat jumps should be excluded, got {v}"
+        );
     }
 
     /// The gap contract, pinned so it cannot be assumed away: `evaluate` counts READINGS, not calendar
@@ -670,7 +744,10 @@ mod tests {
 
         let a = HrvReadiness::evaluate(&padded).expect("10 valid nights clears MIN_NIGHTS");
         let b = HrvReadiness::evaluate(&omitted).expect("same 10 readings");
-        assert_eq!(a.baseline7_ms, b.baseline7_ms, "a None slot carries no information into evaluate");
+        assert_eq!(
+            a.baseline7_ms, b.baseline7_ms,
+            "a None slot carries no information into evaluate"
+        );
         assert_eq!(a.normal_low_ms, b.normal_low_ms);
         assert_eq!(a.normal_high_ms, b.normal_high_ms);
         assert_eq!(a.overreaching_watch, b.overreaching_watch);
@@ -691,9 +768,18 @@ mod tests {
 
     #[test]
     fn nightly_rmssd_produces_one_gap_aware_value_per_day() {
-        let rec = |unix: u32, rr: Vec<u16>| HistoryRecord { version: 18, unix, rr_intervals: rr, ..Default::default() };
+        let rec = |unix: u32, rr: Vec<u16>| HistoryRecord {
+            version: 18,
+            unix,
+            rr_intervals: rr,
+            ..Default::default()
+        };
         // day 0: two contiguous records; day 1: one record with two beats.
-        let hist = vec![rec(0, vec![600, 610]), rec(1, vec![605, 615]), rec(SECS_PER_DAY, vec![700, 720])];
+        let hist = vec![
+            rec(0, vec![600, 610]),
+            rec(1, vec![605, 615]),
+            rec(SECS_PER_DAY, vec![700, 720]),
+        ];
         let series = HrvReadiness::nightly_rmssd(&hist, &all_deep());
         assert_eq!(series.len(), 2);
         assert!(series.iter().all(|v| v.is_some()));
@@ -703,16 +789,30 @@ mod tests {
     /// producer that pooled the whole day would return the same number with the span moved away.
     #[test]
     fn nightly_hrv_reads_only_the_deep_window() {
-        let rep = |unix: u32, rr: Vec<u16>| RrReport { unix, rr, optical_signal_poor: None };
+        let rep = |unix: u32, rr: Vec<u16>| RrReport {
+            unix,
+            rr,
+            optical_signal_poor: None,
+        };
         // Two 300 s buckets, each one report: 800/810 in the first, 700/900 in the second.
         let reports = vec![rep(10, vec![800, 810]), rep(310, vec![700, 900])];
-        let first = HrvReadiness::nightly_hrv(0, 600, &reports, &[(0, 300)]).expect("bucket 1 is deep");
-        let second = HrvReadiness::nightly_hrv(0, 600, &reports, &[(300, 600)]).expect("bucket 2 is deep");
-        let both = HrvReadiness::nightly_hrv(0, 600, &reports, &[(0, 600)]).expect("both buckets are deep");
+        let first =
+            HrvReadiness::nightly_hrv(0, 600, &reports, &[(0, 300)]).expect("bucket 1 is deep");
+        let second =
+            HrvReadiness::nightly_hrv(0, 600, &reports, &[(300, 600)]).expect("bucket 2 is deep");
+        let both = HrvReadiness::nightly_hrv(0, 600, &reports, &[(0, 600)])
+            .expect("both buckets are deep");
         assert!((first - 10.0).abs() < 1e-9, "first {first}");
         assert!((second - 200.0).abs() < 1e-9, "second {second}");
-        assert!((both - 105.0).abs() < 1e-9, "the mean of the two buckets, {both}");
-        assert_eq!(HrvReadiness::nightly_hrv(0, 600, &reports, &[]), None, "no deep window, no value");
+        assert!(
+            (both - 105.0).abs() < 1e-9,
+            "the mean of the two buckets, {both}"
+        );
+        assert_eq!(
+            HrvReadiness::nightly_hrv(0, 600, &reports, &[]),
+            None,
+            "no deep window, no value"
+        );
     }
 
     /// The filter half, on the same fixture: a report the strap flagged contributes nothing, whichever
@@ -720,10 +820,18 @@ mod tests {
     #[test]
     fn nightly_hrv_drops_a_flagged_report_inside_the_deep_window() {
         let rep = |unix: u32, rr: Vec<u16>, poor: bool| RrReport {
-            unix, rr, optical_signal_poor: Some(poor),
+            unix,
+            rr,
+            optical_signal_poor: Some(poor),
         };
-        let clean = vec![rep(10, vec![800, 810], false), rep(310, vec![700, 900], false)];
-        let flagged = vec![rep(10, vec![800, 810], false), rep(310, vec![700, 900], true)];
+        let clean = vec![
+            rep(10, vec![800, 810], false),
+            rep(310, vec![700, 900], false),
+        ];
+        let flagged = vec![
+            rep(10, vec![800, 810], false),
+            rep(310, vec![700, 900], true),
+        ];
         let deep = [(0u32, 600u32)];
         assert!((HrvReadiness::nightly_hrv(0, 600, &clean, &deep).unwrap() - 105.0).abs() < 1e-9);
         assert!((HrvReadiness::nightly_hrv(0, 600, &flagged, &deep).unwrap() - 10.0).abs() < 1e-9);
@@ -746,7 +854,8 @@ mod tests {
             ..Default::default()
         };
         // A steady day plus one record whose beats swing far wider, in range and past Malik ectopic.
-        let steady: Vec<HistoryRecord> = (0u32..20).map(|t| rec(t, vec![800, 810], false)).collect();
+        let steady: Vec<HistoryRecord> =
+            (0u32..20).map(|t| rec(t, vec![800, 810], false)).collect();
         let mut noisy = steady.clone();
         noisy.push(rec(20, vec![850, 760], true));
         let deep = all_deep();
@@ -762,7 +871,8 @@ mod tests {
             HrvReadiness::nightly_rmssd(&steady, &deep)
         );
         // A day of nothing but flagged records yields no value rather than one built from them.
-        let all_poor: Vec<HistoryRecord> = (0u32..20).map(|t| rec(t, vec![800, 810], true)).collect();
+        let all_poor: Vec<HistoryRecord> =
+            (0u32..20).map(|t| rec(t, vec![800, 810], true)).collect();
         assert_eq!(HrvReadiness::nightly_rmssd(&all_poor, &deep), vec![None]);
     }
 
@@ -776,8 +886,9 @@ mod tests {
     fn rmssd_gap_aware_skips_the_seam_once_beat_time_runs_ahead() {
         // 3.56 s of beats a second: the lead clears the slack immediately, so every seam is dropped and
         // only the 60 ms in-report steps count. Flattened, the -180 ms seams would dominate.
-        let reports: Vec<(u32, Vec<u16>)> =
-            (1u32..=12).map(|t| (t, vec![800u16, 860, 920, 980])).collect();
+        let reports: Vec<(u32, Vec<u16>)> = (1u32..=12)
+            .map(|t| (t, vec![800u16, 860, 920, 980]))
+            .collect();
         let got = HrvReadiness::rmssd_gap_aware(&reports).unwrap();
         assert!((got - 60.0).abs() < 1e-9, "got {got}");
     }
@@ -786,8 +897,9 @@ mod tests {
     fn rmssd_gap_aware_keeps_seams_when_beat_time_tracks_the_clock() {
         // One beat a second at ~1000 ms: nothing is re-reported, so no seam may be dropped and every
         // successive pair counts.
-        let reports: Vec<(u32, Vec<u16>)> =
-            (1u32..=12).map(|t| (t, vec![if t % 2 == 0 { 1020u16 } else { 980 }])).collect();
+        let reports: Vec<(u32, Vec<u16>)> = (1u32..=12)
+            .map(|t| (t, vec![if t % 2 == 0 { 1020u16 } else { 980 }]))
+            .collect();
         let got = HrvReadiness::rmssd_gap_aware(&reports).unwrap();
         assert!((got - 40.0).abs() < 1e-9, "got {got}");
     }
@@ -799,7 +911,10 @@ mod tests {
         let breaks = report_seam_breaks(&refs);
         // 1660 ms a second against 1000: the lead passes the 2 s slack partway in, never before.
         assert!(!breaks[0], "the first report can never be a re-report");
-        assert!(breaks.iter().any(|&b| b), "a sustained overrun must eventually break");
+        assert!(
+            breaks.iter().any(|&b| b),
+            "a sustained overrun must eventually break"
+        );
         let first = breaks.iter().position(|&b| b).unwrap();
         assert!(first >= 6, "broke too early at index {first}");
     }
@@ -845,7 +960,14 @@ mod tests {
         let a = HrvReadiness::analyze_raw(&[800, 810, 820], None);
         assert_eq!(
             a,
-            HrvAnalysis { rmssd: None, sdnn: None, mean_nn: None, pnn50: None, n_input: 3, n_clean: 0 }
+            HrvAnalysis {
+                rmssd: None,
+                sdnn: None,
+                mean_nn: None,
+                pnn50: None,
+                n_input: 3,
+                n_clean: 0
+            }
         );
     }
 
@@ -876,7 +998,9 @@ mod tests {
     fn sdnn_does_not_overflow_on_a_long_series() {
         // 300 × ~800 ms sums to ~240k, far past u16::MAX; a u16 accumulator would have wrapped/panicked.
         // Alternating 800/810 → sample SD = sqrt(7500 / 299) ≈ 5.0084.
-        let s = HrvReadiness::analyze_raw(&alternating(300, 800, 810), None).sdnn.unwrap();
+        let s = HrvReadiness::analyze_raw(&alternating(300, 800, 810), None)
+            .sdnn
+            .unwrap();
         assert!((s - (7500.0f64 / 299.0).sqrt()).abs() < 1e-9, "got {s}");
         assert_eq!(HrvReadiness::sdnn(&vec![900u16; 400]), Some(0.0)); // flat long series → zero spread
     }
@@ -891,7 +1015,9 @@ mod tests {
         assert!((HrvReadiness::rmssd_gap_aware(&malik).unwrap() - 5.049752469181039).abs() < 1e-12);
         // Out-of-range 5 ms beat is dropped and splices 605→620 apart. sqrt(100/2).
         let range = vec![(0u32, vec![600u16, 610, 605, 5, 620, 615])];
-        assert!((HrvReadiness::rmssd_gap_aware(&range).unwrap() - 7.0710678118654755).abs() < 1e-12);
+        assert!(
+            (HrvReadiness::rmssd_gap_aware(&range).unwrap() - 7.0710678118654755).abs() < 1e-12
+        );
         // A clean series has no splices, so it equals the plain Task-Force RMSSD (÷ n-1). sqrt(325/4).
         let clean = vec![(0u32, vec![800u16, 810, 820, 815, 805])];
         assert!((HrvReadiness::rmssd_gap_aware(&clean).unwrap() - 9.013878188659973).abs() < 1e-12);
@@ -904,8 +1030,14 @@ mod tests {
         let a = 9.013878188659973f64;
         let b = 15.811388300841896f64;
         let beats: Vec<(u32, u16)> = vec![
-            (100, 800), (100, 810), (100, 820), (100, 815), (100, 805),
-            (400, 700), (400, 720), (400, 710),
+            (100, 800),
+            (100, 810),
+            (100, 820),
+            (100, 815),
+            (100, 805),
+            (400, 700),
+            (400, 720),
+            (400, 710),
         ];
         let got = HrvReadiness::windowed_avg_hrv(100, 700, &beats).unwrap();
         assert!((got - (a + b) / 2.0).abs() < 1e-12, "got {got}");
@@ -924,7 +1056,8 @@ mod tests {
     #[test]
     fn windowed_avg_hrv_single_bucket_equals_bucket_rmssd() {
         // One bucket, one clean series → avgHrv equals that bucket's gap-aware RMSSD.
-        let beats: Vec<(u32, u16)> = vec![(100, 800), (100, 810), (100, 820), (100, 815), (100, 805)];
+        let beats: Vec<(u32, u16)> =
+            vec![(100, 800), (100, 810), (100, 820), (100, 815), (100, 805)];
         let got = HrvReadiness::windowed_avg_hrv(100, 400, &beats).unwrap();
         assert!((got - 9.013878188659973).abs() < 1e-12, "got {got}");
     }
@@ -933,8 +1066,14 @@ mod tests {
     fn deep_windowed_avg_hrv_keeps_buckets_in_deep_spans() {
         // Two buckets: [100,400) and [400,700). Only [400,700) is deep → result = bucket B RMSSD.
         let beats: Vec<(u32, u16)> = vec![
-            (100, 800), (100, 810), (100, 820), (100, 815), (100, 805),
-            (400, 700), (400, 720), (400, 710),
+            (100, 800),
+            (100, 810),
+            (100, 820),
+            (100, 815),
+            (100, 805),
+            (400, 700),
+            (400, 720),
+            (400, 710),
         ];
         let deep = vec![(400u32, 700u32)];
         let got = HrvReadiness::windowed_avg_hrv_deep(100, 700, &beats, &deep).unwrap();
@@ -952,23 +1091,37 @@ mod tests {
     #[test]
     fn pnn50_plain_counts_every_pair_over_the_threshold() {
         // Alternating 700/800: every |d| = 100 > 50, so 100 %. A 10 ms alternation clears none.
-        assert_eq!(HrvReadiness::pnn50_plain(&alternating(20, 700, 800)), Some(100.0));
-        assert_eq!(HrvReadiness::pnn50_plain(&alternating(20, 800, 810)), Some(0.0));
+        assert_eq!(
+            HrvReadiness::pnn50_plain(&alternating(20, 700, 800)),
+            Some(100.0)
+        );
+        assert_eq!(
+            HrvReadiness::pnn50_plain(&alternating(20, 800, 810)),
+            Some(0.0)
+        );
         // Half the pairs over the threshold.
         let two_of_three = HrvReadiness::pnn50_plain(&[800, 900, 890, 990]).unwrap();
-        assert!((two_of_three - 200.0 / 3.0).abs() < 1e-9, "got {two_of_three}");
+        assert!(
+            (two_of_three - 200.0 / 3.0).abs() < 1e-9,
+            "got {two_of_three}"
+        );
         assert_eq!(HrvReadiness::pnn50_plain(&[800]), None);
     }
 
     #[test]
     fn rolling_rmssd_tracks_the_alternation_not_the_beat_period() {
         // ±10 ms alternation on a ~800 ms period: the curve settles near 10, nowhere near 800.
-        let series: Vec<(i64, u16)> =
-            (0..30).map(|i| (i, if i % 2 == 0 { 800u16 } else { 810 })).collect();
+        let series: Vec<(i64, u16)> = (0..30)
+            .map(|i| (i, if i % 2 == 0 { 800u16 } else { 810 }))
+            .collect();
         let out = rolling_rmssd(&series, 60, 0, 8);
         assert!(!out.is_empty());
         assert!(out.iter().all(|&(_, v)| v < 100.0));
-        assert!((out.last().unwrap().1 - 10.0).abs() < 3.0, "got {:?}", out.last());
+        assert!(
+            (out.last().unwrap().1 - 10.0).abs() < 3.0,
+            "got {:?}",
+            out.last()
+        );
     }
 
     #[test]
@@ -978,8 +1131,9 @@ mod tests {
         let out = rolling_rmssd(&steady, 300, 0, 8);
         assert_eq!((out.first().unwrap().0, out.last().unwrap().0), (107, 109));
         // A stride emits fewer points, each at least step_s after the previous EMITTED one.
-        let long: Vec<(i64, u16)> =
-            (0..60).map(|i| (1000 + i, if i % 2 == 0 { 800u16 } else { 810 })).collect();
+        let long: Vec<(i64, u16)> = (0..60)
+            .map(|i| (1000 + i, if i % 2 == 0 { 800u16 } else { 810 }))
+            .collect();
         let dense = rolling_rmssd(&long, 30, 0, 8);
         let thinned = rolling_rmssd(&long, 30, 10, 8);
         assert!(thinned.len() < dense.len());
@@ -991,7 +1145,11 @@ mod tests {
         // A 50 ms beat is out of range: it must never reach a window, so a steady series stays flat.
         let mut series: Vec<(i64, u16)> = (0..20).map(|i| (i, 800u16)).collect();
         series.push((100, 50));
-        assert!(rolling_rmssd(&series, 300, 0, 8).iter().all(|&(_, v)| v < 5.0));
+        assert!(
+            rolling_rmssd(&series, 300, 0, 8)
+                .iter()
+                .all(|&(_, v)| v < 5.0)
+        );
         // Two clusters 1000 s apart: a 60 s window never spans both, so no cross-cluster jump appears.
         let mut split: Vec<(i64, u16)> = (0..25).map(|i| (i, 800u16)).collect();
         split.extend((0..25).map(|i| (1000 + i, 820u16)));
@@ -1022,8 +1180,14 @@ mod tests {
 
     #[test]
     fn duplicate_beat_count_sees_exact_repeats_only() {
-        assert_eq!(duplicate_beat_count(&[100, 101, 102], &[1000.0, 1010.0, 1020.0]), 0);
-        assert_eq!(duplicate_beat_count(&[100, 100, 101], &[1000.0, 1000.0, 1010.0]), 1);
+        assert_eq!(
+            duplicate_beat_count(&[100, 101, 102], &[1000.0, 1010.0, 1020.0]),
+            0
+        );
+        assert_eq!(
+            duplicate_beat_count(&[100, 100, 101], &[1000.0, 1000.0, 1010.0]),
+            1
+        );
         assert_eq!(duplicate_beat_count(&[100, 100, 100], &[1000.0; 3]), 2);
         // Same second, different value: distinct beats, so the exact-repeat counter sees nothing --
         // which is exactly the overlap it cannot detect.
@@ -1033,13 +1197,25 @@ mod tests {
     #[test]
     fn overlapping_report_count_sees_the_overlap_duplicates_miss() {
         // 3.56 s of beat-time a second: reports re-report, and every value is distinct.
-        let over: Vec<(u32, Vec<u16>)> = (1u32..=12).map(|t| (t, vec![800u16, 860, 920, 980])).collect();
+        let over: Vec<(u32, Vec<u16>)> = (1u32..=12)
+            .map(|t| (t, vec![800u16, 860, 920, 980]))
+            .collect();
         let (overlapping, total) = overlapping_report_count(&over);
         assert_eq!(total, 12);
         assert!(overlapping > 0, "a sustained overrun must be counted");
-        let ts: Vec<i64> = over.iter().flat_map(|(t, rr)| rr.iter().map(|_| *t as i64)).collect();
-        let ms: Vec<f64> = over.iter().flat_map(|(_, rr)| rr.iter().map(|&v| v as f64)).collect();
-        assert_eq!(duplicate_beat_count(&ts, &ms), 0, "no exact repeats, yet coverage is over 1");
+        let ts: Vec<i64> = over
+            .iter()
+            .flat_map(|(t, rr)| rr.iter().map(|_| *t as i64))
+            .collect();
+        let ms: Vec<f64> = over
+            .iter()
+            .flat_map(|(_, rr)| rr.iter().map(|&v| v as f64))
+            .collect();
+        assert_eq!(
+            duplicate_beat_count(&ts, &ms),
+            0,
+            "no exact repeats, yet coverage is over 1"
+        );
         assert!(rr_coverage(&ts, &ms) > 1.0);
         // One beat a second at ~1000 ms: nothing is re-reported, so nothing is flagged.
         let tracking: Vec<(u32, Vec<u16>)> = (1u32..=12).map(|t| (t, vec![1000u16])).collect();
@@ -1054,9 +1230,15 @@ mod tests {
     #[test]
     fn readiness_unlocks_on_the_recovery_schedule_and_counts_only_valid_nights() {
         let sched = crate::calibration::RECOVERY_SCORE;
-        assert_eq!(MIN_NIGHTS, sched.unlock as usize, "the unlock must stay the schedule's, not a copy");
+        assert_eq!(
+            MIN_NIGHTS, sched.unlock as usize,
+            "the unlock must stay the schedule's, not a copy"
+        );
         assert!(HrvReadiness::evaluate(&[Some(50.0); MIN_NIGHTS - 1]).is_none());
-        assert!(HrvReadiness::evaluate(&[Some(50.0); MIN_NIGHTS]).is_some(), "the edge must open");
+        assert!(
+            HrvReadiness::evaluate(&[Some(50.0); MIN_NIGHTS]).is_some(),
+            "the edge must open"
+        );
         assert!(!sched.unlocked(MIN_NIGHTS - 1) && sched.unlocked(MIN_NIGHTS));
 
         // Thirty-one slots holding MIN_NIGHTS - 1 real nights stays shut, and one real night opens it.
@@ -1064,9 +1246,16 @@ mod tests {
         padded.extend(vec![None; 10]);
         padded.extend(vec![Some(HRV_MAX_MS + 0.001); 10]);
         padded.extend(vec![Some(HRV_MIN_MS - 0.001); 10]);
-        assert!(HrvReadiness::evaluate(&padded).is_none(), "{} slots unlocked it", padded.len());
+        assert!(
+            HrvReadiness::evaluate(&padded).is_none(),
+            "{} slots unlocked it",
+            padded.len()
+        );
         // A scorer counting slots rather than nights answers the other way on exactly this input.
-        assert_ne!(HrvReadiness::evaluate(&padded).is_some(), padded.len() >= MIN_NIGHTS);
+        assert_ne!(
+            HrvReadiness::evaluate(&padded).is_some(),
+            padded.len() >= MIN_NIGHTS
+        );
         padded.push(Some(50.0));
         assert!(HrvReadiness::evaluate(&padded).is_some());
 
@@ -1080,7 +1269,10 @@ mod tests {
     #[test]
     fn flat_history_reads_normal() {
         let nights = vec![Some(50.0); 20];
-        assert_eq!(HrvReadiness::evaluate(&nights).unwrap().tier, ReadinessTier::Normal);
+        assert_eq!(
+            HrvReadiness::evaluate(&nights).unwrap().tier,
+            ReadinessTier::Normal
+        );
     }
 
     /// RECORDED, not desired: at or below `ROLL_WINDOW` valid nights the 7-night tail and the long tail
@@ -1099,29 +1291,56 @@ mod tests {
             for (k, shape) in shapes.iter().enumerate() {
                 let nights: Vec<Option<f64>> = (0..n).map(|i| Some(shape(i))).collect();
                 let r = HrvReadiness::evaluate(&nights).unwrap();
-                assert_eq!(r.tier, ReadinessTier::Normal, "shape {k} over {n} nights left Normal");
-                assert!(!r.overreaching_watch, "shape {k} over {n} nights raised the watch");
+                assert_eq!(
+                    r.tier,
+                    ReadinessTier::Normal,
+                    "shape {k} over {n} nights left Normal"
+                );
+                assert!(
+                    !r.overreaching_watch,
+                    "shape {k} over {n} nights raised the watch"
+                );
             }
         }
         // The eighth night is where the two windows can differ, so it is the first that can move.
         let ramp: Vec<Option<f64>> = (0..10).map(|i| Some(20.0 + 15.0 * i as f64)).collect();
-        assert_eq!(HrvReadiness::evaluate(&ramp).unwrap().tier, ReadinessTier::Primed);
+        assert_eq!(
+            HrvReadiness::evaluate(&ramp).unwrap().tier,
+            ReadinessTier::Primed
+        );
     }
 
     /// Twenty-three noisy or quiet nights then a week at one level. Two rise and two fall, and within
     /// each pair the tiers differ, so only the band decides them.
     fn band_cases() -> Vec<(&'static str, Vec<Option<f64>>, ReadinessTier)> {
         let history = |lo: f64, hi: f64, last: f64| -> Vec<Option<f64>> {
-            let mut v: Vec<Option<f64>> =
-                (0..23).map(|i| Some(if i % 2 == 0 { lo } else { hi })).collect();
+            let mut v: Vec<Option<f64>> = (0..23)
+                .map(|i| Some(if i % 2 == 0 { lo } else { hi }))
+                .collect();
             v.extend(vec![Some(last); 7]);
             v
         };
         vec![
-            ("quiet history, week 4% up", history(49.0, 51.0, 53.0), ReadinessTier::Primed),
-            ("noisy history, week 12% up", history(30.0, 70.0, 52.0), ReadinessTier::Normal),
-            ("quiet history, week 4% down", history(49.0, 51.0, 47.0), ReadinessTier::Suppressed),
-            ("noisy history, week 2% down", history(30.0, 70.0, 44.0), ReadinessTier::Normal),
+            (
+                "quiet history, week 4% up",
+                history(49.0, 51.0, 53.0),
+                ReadinessTier::Primed,
+            ),
+            (
+                "noisy history, week 12% up",
+                history(30.0, 70.0, 52.0),
+                ReadinessTier::Normal,
+            ),
+            (
+                "quiet history, week 4% down",
+                history(49.0, 51.0, 47.0),
+                ReadinessTier::Suppressed,
+            ),
+            (
+                "noisy history, week 2% down",
+                history(30.0, 70.0, 44.0),
+                ReadinessTier::Normal,
+            ),
         ]
     }
 
@@ -1129,13 +1348,23 @@ mod tests {
     fn readiness_tier_follows_the_normal_band_not_the_direction_of_the_last_week() {
         for (what, nights, want) in band_cases() {
             let r = HrvReadiness::evaluate(&nights).unwrap();
-            assert_eq!(r.tier, want, "{what}: b7 {} in [{}, {}]",
-                r.baseline7_ms, r.normal_low_ms, r.normal_high_ms);
+            assert_eq!(
+                r.tier, want,
+                "{what}: b7 {} in [{}, {}]",
+                r.baseline7_ms, r.normal_low_ms, r.normal_high_ms
+            );
             // The tier and the band are shown side by side, so they must agree.
-            let from_band = if r.baseline7_ms > r.normal_high_ms { ReadinessTier::Primed }
-                else if r.baseline7_ms >= r.normal_low_ms { ReadinessTier::Normal }
-                else { ReadinessTier::Suppressed };
-            assert_eq!(r.tier, from_band, "{what}: the tier contradicts the band it ships with");
+            let from_band = if r.baseline7_ms > r.normal_high_ms {
+                ReadinessTier::Primed
+            } else if r.baseline7_ms >= r.normal_low_ms {
+                ReadinessTier::Normal
+            } else {
+                ReadinessTier::Suppressed
+            };
+            assert_eq!(
+                r.tier, from_band,
+                "{what}: the tier contradicts the band it ships with"
+            );
         }
         // The step series the gate used to run on, with its band derived by hand: 13 nights at 40 and
         // 7 at 80 over one 20-night window, so the log-domain spread is 1820/400/19 of ln(2) squared.
@@ -1145,9 +1374,21 @@ mod tests {
         let d = 2f64.ln();
         let long_mean = 40f64.ln() + 0.35 * d;
         let swc_half = SWC_K * (1820.0f64 / 400.0 / 19.0).sqrt() * d;
-        assert!((r.baseline7_ms - 80.0).abs() < 1e-9, "got {}", r.baseline7_ms);
-        assert!((r.normal_low_ms - (long_mean - swc_half).exp()).abs() < 1e-9, "got {}", r.normal_low_ms);
-        assert!((r.normal_high_ms - (long_mean + swc_half).exp()).abs() < 1e-9, "got {}", r.normal_high_ms);
+        assert!(
+            (r.baseline7_ms - 80.0).abs() < 1e-9,
+            "got {}",
+            r.baseline7_ms
+        );
+        assert!(
+            (r.normal_low_ms - (long_mean - swc_half).exp()).abs() < 1e-9,
+            "got {}",
+            r.normal_low_ms
+        );
+        assert!(
+            (r.normal_high_ms - (long_mean + swc_half).exp()).abs() < 1e-9,
+            "got {}",
+            r.normal_high_ms
+        );
         // It clears the band by a third of the band's own value, which is why it never probed anything.
         assert!(r.baseline7_ms > r.normal_high_ms * 1.3);
     }
@@ -1160,24 +1401,39 @@ mod tests {
             let xs = valid(v);
             let week = mean(&xs[xs.len() - 7..]);
             let all = mean(&xs);
-            if week > all { ReadinessTier::Primed } else if week < all { ReadinessTier::Suppressed }
-            else { ReadinessTier::Normal }
+            if week > all {
+                ReadinessTier::Primed
+            } else if week < all {
+                ReadinessTier::Suppressed
+            } else {
+                ReadinessTier::Normal
+            }
         };
         let by_first_and_last = |v: &[Option<f64>]| {
             let xs = valid(v);
-            if xs[xs.len() - 1] > xs[0] { ReadinessTier::Primed }
-            else if xs[xs.len() - 1] < xs[0] { ReadinessTier::Suppressed }
-            else { ReadinessTier::Normal }
+            if xs[xs.len() - 1] > xs[0] {
+                ReadinessTier::Primed
+            } else if xs[xs.len() - 1] < xs[0] {
+                ReadinessTier::Suppressed
+            } else {
+                ReadinessTier::Normal
+            }
         };
         let scorers: [Scorer<&[Option<f64>], ReadinessTier>; 3] = [
             ("always Normal", &always_normal),
-            ("the last week against the whole history", &by_week_vs_history),
+            (
+                "the last week against the whole history",
+                &by_week_vs_history,
+            ),
             ("the last night against the first", &by_first_and_last),
         ];
         let cases = band_cases();
         for (name, f) in scorers {
             let misses = cases.iter().any(|(_, nights, want)| f(nights) != *want);
-            assert!(misses, "the do-nothing tier `{name}` reproduces every band case");
+            assert!(
+                misses,
+                "the do-nothing tier `{name}` reproduces every band case"
+            );
         }
     }
 
@@ -1185,19 +1441,30 @@ mod tests {
     /// on the sixtieth night. Built with the older half far noisier than the recent half.
     #[test]
     fn the_normal_band_widens_when_the_sixty_night_window_opens() {
-        let noisy: Vec<Option<f64>> = (0..30).map(|i| Some(if i % 2 == 0 { 30.0 } else { 80.0 })).collect();
-        let quiet: Vec<Option<f64>> = (0..30).map(|i| Some(if i % 2 == 0 { 49.0 } else { 51.0 })).collect();
+        let noisy: Vec<Option<f64>> = (0..30)
+            .map(|i| Some(if i % 2 == 0 { 30.0 } else { 80.0 }))
+            .collect();
+        let quiet: Vec<Option<f64>> = (0..30)
+            .map(|i| Some(if i % 2 == 0 { 49.0 } else { 51.0 }))
+            .collect();
         let mut sixty = noisy.clone();
         sixty.extend(quiet.clone());
         let wide = HrvReadiness::evaluate(&sixty).unwrap();
         let narrow = HrvReadiness::evaluate(&sixty[1..]).unwrap();
         let quiet_only = HrvReadiness::evaluate(&quiet).unwrap();
-        assert_eq!(LONG_WINDOW_FALLBACK, quiet.len(), "the fallback window is what the 59-night case uses");
+        assert_eq!(
+            LONG_WINDOW_FALLBACK,
+            quiet.len(),
+            "the fallback window is what the 59-night case uses"
+        );
         // At 59 valid nights the band is the last 30 nights' band, which here is the quiet half alone.
         assert!((narrow.normal_low_ms - quiet_only.normal_low_ms).abs() < 1e-9);
         assert!((narrow.normal_high_ms - quiet_only.normal_high_ms).abs() < 1e-9);
         // The sixtieth night pulls the noisy half in and the band opens by more than tenfold.
-        let (w, n) = (wide.normal_high_ms - wide.normal_low_ms, narrow.normal_high_ms - narrow.normal_low_ms);
+        let (w, n) = (
+            wide.normal_high_ms - wide.normal_low_ms,
+            narrow.normal_high_ms - narrow.normal_low_ms,
+        );
         assert!(w > 10.0 * n, "band {w} at 60 nights vs {n} at 59");
     }
 
@@ -1220,30 +1487,59 @@ mod tests {
     #[test]
     fn the_overreaching_watch_needs_a_falling_cv_and_a_baseline_under_the_long_mean() {
         let cases: [WatchCase; 4] = [
-            ("cv falling, week under", trending_nights(12.0, -0.3, 55.0, -0.2), true),
-            ("cv falling, week over", trending_nights(12.0, -0.3, 45.0, 0.2), false),
-            ("cv rising, week under", trending_nights(1.0, 0.3, 55.0, -0.2), false),
-            ("cv rising, week over", trending_nights(1.0, 0.3, 45.0, 0.2), false),
+            (
+                "cv falling, week under",
+                trending_nights(12.0, -0.3, 55.0, -0.2),
+                true,
+            ),
+            (
+                "cv falling, week over",
+                trending_nights(12.0, -0.3, 45.0, 0.2),
+                false,
+            ),
+            (
+                "cv rising, week under",
+                trending_nights(1.0, 0.3, 55.0, -0.2),
+                false,
+            ),
+            (
+                "cv rising, week over",
+                trending_nights(1.0, 0.3, 45.0, 0.2),
+                false,
+            ),
         ];
         for (what, nights, want) in &cases {
             let r = HrvReadiness::evaluate(nights).unwrap();
             assert_eq!(r.overreaching_watch, *want, "{what}");
-            assert_eq!(r.tier, ReadinessTier::Normal, "{what}: the watch must not be read off the tier");
+            assert_eq!(
+                r.tier,
+                ReadinessTier::Normal,
+                "{what}: the watch must not be read off the tier"
+            );
         }
         // And a plainly Suppressed week does not raise it, so `watch == suppressed` is not the rule.
         let mut falling: Vec<Option<f64>> = vec![Some(80.0); 13];
         falling.extend(vec![Some(40.0); 7]);
         let s = HrvReadiness::evaluate(&falling).unwrap();
-        assert_eq!((s.tier, s.overreaching_watch), (ReadinessTier::Suppressed, false));
+        assert_eq!(
+            (s.tier, s.overreaching_watch),
+            (ReadinessTier::Suppressed, false)
+        );
 
         let always_on = |_: &WatchCase| true;
         let always_off = |_: &WatchCase| false;
         let from_tier =
             |c: &WatchCase| HrvReadiness::evaluate(&c.1).unwrap().tier == ReadinessTier::Suppressed;
-        let scorers: [Scorer<&WatchCase, bool>; 3] =
-            [("always on", &always_on), ("always off", &always_off), ("the Suppressed tier", &from_tier)];
+        let scorers: [Scorer<&WatchCase, bool>; 3] = [
+            ("always on", &always_on),
+            ("always off", &always_off),
+            ("the Suppressed tier", &from_tier),
+        ];
         for (name, f) in scorers {
-            assert!(cases.iter().any(|c| f(c) != c.2), "the do-nothing watch `{name}` reproduces all four arms");
+            assert!(
+                cases.iter().any(|c| f(c) != c.2),
+                "the do-nothing watch `{name}` reproduces all four arms"
+            );
         }
     }
 

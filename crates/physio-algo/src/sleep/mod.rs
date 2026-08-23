@@ -24,25 +24,28 @@ pub mod params;
 mod refine;
 mod v2;
 
-use crate::hrv::HrvReadiness;
-
-pub use input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
-pub use params::Params;
-pub use detect::{detect_sessions, detect_sessions_with, efficiency, DetectParams, DetectedSpan,
-    DAYTIME_BAND_END_HOUR, DAYTIME_BAND_START_HOUR, MAX_GAP_MIN, SPARSE_GRAVITY_SPAN_FRAC};
-pub use v2::{emissions_prepared as emissions_v2, epoch_starts as epoch_starts_v2, prepare as prepare_v2,
-    segments_of as segments_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
-    stage_with as stage_v2_with, viterbi as decode_v2, Prepared, DEEP_GATE_THRESH, STAGE_ORDER};
-pub use refine::{
-    is_motion_dense as motion_dense, motion_density, refine as refine_wake, refine_with as refine_wake_with,
-    RefineParams, MIN_DENSE_FRACTION,
+pub use detect::{
+    DAYTIME_BAND_END_HOUR, DAYTIME_BAND_START_HOUR, DetectParams, DetectedSpan, MAX_GAP_MIN,
+    SPARSE_GRAVITY_SPAN_FRAC, detect_sessions, detect_sessions_with, efficiency,
 };
+pub use input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 pub use mainnight::{
+    BridgedNightGroup, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS, HistoryBlock, MainNightReason,
+    MainNightSelection, NightBlock, OVERNIGHT_END_HOUR, OVERNIGHT_START_HOUR, ScoredNightBlock,
     bridge_adjacent, bridged_night_groups, habitual_midsleep_sec, habitual_midsleep_series,
-    main_night_group_indices, main_night_group_indices_scored, main_night_index, main_night_index_scored,
-    main_night_selection, main_night_selection_scored, BridgedNightGroup, HistoryBlock, MainNightReason,
-    MainNightSelection, NightBlock, ScoredNightBlock, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS,
-    OVERNIGHT_END_HOUR, OVERNIGHT_START_HOUR,
+    main_night_group_indices, main_night_group_indices_scored, main_night_index,
+    main_night_index_scored, main_night_selection, main_night_selection_scored,
+};
+pub use params::Params;
+pub use refine::{
+    MIN_DENSE_FRACTION, RefineParams, is_motion_dense as motion_dense, motion_density,
+    refine as refine_wake, refine_with as refine_wake_with,
+};
+pub use v2::{
+    DEEP_GATE_THRESH, Prepared, STAGE_ORDER, emissions_prepared as emissions_v2,
+    epoch_starts as epoch_starts_v2, prepare as prepare_v2, segments_of as segments_v2,
+    stage as stage_v2, stage_prepared as stage_v2_prepared, stage_with as stage_v2_with,
+    viterbi as decode_v2,
 };
 
 /// The stream bundle for one detection window: raw per-sample signals plus the wrist-off intervals, band
@@ -83,14 +86,6 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
         &streams.band_sleep_state,
         None,
     );
-    let mut beats: Vec<(u32, u16)> = Vec::new();
-    for run in &streams.rr {
-        for &ms in &run.intervals {
-            beats.push((run.ts as u32, ms));
-        }
-    }
-    beats.sort_by_key(|b| b.0);
-
     let mut out = Vec::with_capacity(spans.len());
     for span in spans {
         let input = SleepInput {
@@ -101,26 +96,21 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             accel: streams.accel.clone(),
         };
         let segments = refine::refine(&v2::stage(&input), &streams.accel, &streams.steps);
-        let deep_spans: Vec<(i64, i64)> = segments
-            .iter()
-            .filter(|segment| segment.stage == SleepStage::Deep)
-            .map(|segment| (segment.start, segment.end))
-            .collect();
-        let resting_hr_samples: Vec<crate::HrSample> = streams
-            .hr
-            .iter()
-            .map(|sample| crate::HrSample::new(sample.ts, sample.bpm as i32))
-            .collect();
-        let resting_hr = crate::resting_hr::session_resting_hr_stage_aware(
+        let physiology = crate::nightly_physiology::nightly_physiology(
             span.start,
             span.end,
-            &resting_hr_samples,
-            &deep_spans,
+            &streams.hr,
+            &streams.accel,
+            &streams.rr,
+            &streams.wrist_off,
+            &segments,
         );
+        let resting_hr = physiology.rhr.map(|result| result.rounded_bpm);
         let efficiency = detect::efficiency(span.start, span.end, &segments);
-        let avg_hrv = HrvReadiness::windowed_avg_hrv(span.start as u32, span.end as u32, &beats);
+        let avg_hrv = physiology.hrv.rmssd_ms;
         let motion_grid = detect::session_epoch_motion(span.start, span.end, &streams.accel);
-        let sleep_state_grid = detect::session_epoch_sleep_state(span.start, span.end, &streams.band_sleep_state);
+        let sleep_state_grid =
+            detect::session_epoch_sleep_state(span.start, span.end, &streams.band_sleep_state);
         out.push(Session {
             start: span.start,
             end: span.end,
