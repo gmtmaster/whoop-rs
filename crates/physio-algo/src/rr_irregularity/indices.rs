@@ -58,7 +58,10 @@ pub fn shannon_entropy_drr(rr_ms: &[u16]) -> Option<f64> {
     if rr_ms.len() < SHANNON_MIN_BEATS {
         return None;
     }
-    let mut diffs: Vec<f64> = rr_ms.windows(2).map(|w| f64::from(w[1]) - f64::from(w[0])).collect();
+    let mut diffs: Vec<f64> = rr_ms
+        .windows(2)
+        .map(|w| f64::from(w[1]) - f64::from(w[0]))
+        .collect();
     diffs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let keep = diffs.len().checked_sub(2 * SHANNON_TRIM)?;
     if keep == 0 {
@@ -118,7 +121,9 @@ mod tests {
 
     /// Alternating +/- `d` around `rr` — maximally regular scatter, every interior point a turn.
     fn zigzag(n: usize, rr: u16, d: u16) -> Vec<u16> {
-        (0..n).map(|i| if i % 2 == 0 { rr - d } else { rr + d }).collect()
+        (0..n)
+            .map(|i| if i % 2 == 0 { rr - d } else { rr + d })
+            .collect()
     }
 
     /// `n` differences taking 40 distinct values evenly across +/-20 ms, sign alternating so the series
@@ -127,7 +132,11 @@ mod tests {
         let mut rr = vec![800u16];
         for i in 0..n {
             let mag = 1 + (i / 2) % 20;
-            let d = if i % 2 == 0 { mag as i32 } else { -(mag as i32) };
+            let d = if i % 2 == 0 {
+                mag as i32
+            } else {
+                -(mag as i32)
+            };
             rr.push((i32::from(*rr.last().unwrap()) + d) as u16);
         }
         rr
@@ -144,7 +153,10 @@ mod tests {
         // A 200 ms jump must COUNT here; the artifact-corrected RMSSD would have dropped it.
         let mut jump = flat(40, 800);
         jump[20] = 1400;
-        assert!(rmssd_over_mean_rr(&jump).unwrap() > 0.1, "a large jump must not be filtered away");
+        assert!(
+            rmssd_over_mean_rr(&jump).unwrap() > 0.1,
+            "a large jump must not be filtered away"
+        );
     }
 
     #[test]

@@ -29,7 +29,11 @@ pub enum HrWatchState {
     /// Assessed, no sustained elevated-at-rest run.
     Normal,
     /// A sustained run of elevated HR while at rest — a wellness nudge, not a diagnosis.
-    ElevatedAtRest { peak_bpm: u8, start_unix: u32, dur_s: u32 },
+    ElevatedAtRest {
+        peak_bpm: u8,
+        start_unix: u32,
+        dur_s: u32,
+    },
 }
 
 pub struct HrWatch;
@@ -40,7 +44,10 @@ impl HrWatch {
     pub fn evaluate(history: &[HistoryRecord]) -> HrWatchState {
         let mut rest: Vec<(u32, u8)> = history.iter().filter_map(eligible).collect();
         if rest.len() < MIN_BASELINE_SAMPLES {
-            return HrWatchState::Calibrating { have: rest.len(), need: MIN_BASELINE_SAMPLES };
+            return HrWatchState::Calibrating {
+                have: rest.len(),
+                need: MIN_BASELINE_SAMPLES,
+            };
         }
         rest.sort_by_key(|&(t, _)| t);
 
@@ -55,12 +62,18 @@ impl HrWatch {
         for &(t, hr) in &rest {
             if hr >= threshold {
                 run = match run {
-                    Some((s, _, p)) if t.saturating_sub(prev) <= MAX_GAP_S => Some((s, t, p.max(hr))),
+                    Some((s, _, p)) if t.saturating_sub(prev) <= MAX_GAP_S => {
+                        Some((s, t, p.max(hr)))
+                    }
                     _ => Some((t, t, hr)),
                 };
                 if let Some((s, l, p)) = run {
                     if l.saturating_sub(s) >= SUSTAIN_S {
-                        return HrWatchState::ElevatedAtRest { peak_bpm: p, start_unix: s, dur_s: l - s };
+                        return HrWatchState::ElevatedAtRest {
+                            peak_bpm: p,
+                            start_unix: s,
+                            dur_s: l - s,
+                        };
                     }
                 }
             } else {
@@ -78,7 +91,8 @@ impl HrWatch {
 fn eligible(h: &HistoryRecord) -> Option<(u32, u8)> {
     let at_rest = h.activity_class == Some(0) || h.sleep_state == Some(2);
     // The band's own per-second verdict on its beat detection, alongside the confidence floor.
-    let good = h.signal_quality.is_some_and(|q| q >= QUAL_MIN) && h.optical_signal_poor != Some(true);
+    let good =
+        h.signal_quality.is_some_and(|q| q >= QUAL_MIN) && h.optical_signal_poor != Some(true);
     let on_wrist = !worn_state(h).is_off();
     let hr = h.heart_rate?;
     (at_rest && good && on_wrist && hr > 0).then_some((h.unix, hr))
@@ -103,7 +117,13 @@ mod tests {
     #[test]
     fn below_min_samples_is_calibrating() {
         let h: Vec<_> = (0..100).map(|i| rec(i, 60)).collect();
-        assert_eq!(HrWatch::evaluate(&h), HrWatchState::Calibrating { have: 100, need: MIN_BASELINE_SAMPLES });
+        assert_eq!(
+            HrWatch::evaluate(&h),
+            HrWatchState::Calibrating {
+                have: 100,
+                need: MIN_BASELINE_SAMPLES
+            }
+        );
     }
 
     #[test]
@@ -111,7 +131,9 @@ mod tests {
         let mut h: Vec<_> = (0..600).map(|i| rec(i, 60)).collect();
         h.extend((600..1000).map(|i| rec(i, 120)));
         match HrWatch::evaluate(&h) {
-            HrWatchState::ElevatedAtRest { peak_bpm, dur_s, .. } => {
+            HrWatchState::ElevatedAtRest {
+                peak_bpm, dur_s, ..
+            } => {
                 assert_eq!(peak_bpm, 120);
                 assert!(dur_s >= SUSTAIN_S);
             }
@@ -148,7 +170,13 @@ mod tests {
                 r
             })
             .collect();
-        assert_eq!(HrWatch::evaluate(&h), HrWatchState::Calibrating { have: 0, need: MIN_BASELINE_SAMPLES });
+        assert_eq!(
+            HrWatch::evaluate(&h),
+            HrWatchState::Calibrating {
+                have: 0,
+                need: MIN_BASELINE_SAMPLES
+            }
+        );
     }
 
     #[test]

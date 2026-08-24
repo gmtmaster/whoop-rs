@@ -127,9 +127,17 @@ pub fn aggregate(est: &[Estimate], bucket_secs: i64) -> Vec<Estimate> {
         .into_iter()
         .map(|(ts, (weighted, conf_sum, bpm_sum, n))| {
             // Every conf zero or negative → no usable weight, fall back to a plain mean.
-            let bpm = if conf_sum > 0.0 { weighted / conf_sum } else { bpm_sum / n as f64 };
+            let bpm = if conf_sum > 0.0 {
+                weighted / conf_sum
+            } else {
+                bpm_sum / n as f64
+            };
             let conf = conf_sum / n as f64;
-            Estimate { ts, bpm: bpm.round() as i32, conf: (conf * 1000.0).round() / 1000.0 }
+            Estimate {
+                ts,
+                bpm: bpm.round() as i32,
+                conf: (conf * 1000.0).round() / 1000.0,
+            }
         })
         .collect()
 }
@@ -139,7 +147,13 @@ pub fn aggregate(est: &[Estimate], bucket_secs: i64) -> Vec<Estimate> {
 /// [`aggregate`] and stops counting clean in [`signal_check`]. Every other second is returned unchanged.
 pub fn derate_poor_seconds(est: &[Estimate], poor_secs: &HashSet<i64>) -> Vec<Estimate> {
     est.iter()
-        .map(|e| if poor_secs.contains(&e.ts) { Estimate { conf: 0.0, ..*e } } else { *e })
+        .map(|e| {
+            if poor_secs.contains(&e.ts) {
+                Estimate { conf: 0.0, ..*e }
+            } else {
+                *e
+            }
+        })
         .collect()
 }
 
@@ -207,7 +221,8 @@ fn remove_record_rate_component(x: &[f64], fs: usize) -> Vec<f64> {
     if fs <= 1 || n < fs * 4 {
         return x.to_vec();
     }
-    let (mut within_sum, mut within_count, mut boundary_sum, mut boundary_count) = (0.0, 0usize, 0.0, 0usize);
+    let (mut within_sum, mut within_count, mut boundary_sum, mut boundary_count) =
+        (0.0, 0usize, 0.0, 0usize);
     for i in 1..n {
         let d = (x[i] - x[i - 1]).abs();
         if i % fs == 0 {
@@ -233,7 +248,13 @@ fn remove_record_rate_component(x: &[f64], fs: usize) -> Vec<f64> {
         col_count[i % fs] += 1;
     }
     let col_mean: Vec<f64> = (0..fs)
-        .map(|p| if col_count[p] > 0 { col_sum[p] / col_count[p] as f64 } else { 0.0 })
+        .map(|p| {
+            if col_count[p] > 0 {
+                col_sum[p] / col_count[p] as f64
+            } else {
+                0.0
+            }
+        })
         .collect();
     (0..n).map(|i| x[i] - col_mean[i % fs]).collect()
 }
@@ -292,7 +313,11 @@ fn estimate_window(x: &[f64], ts: i64) -> Option<Estimate> {
     // only; a non-concave fit falls back to the integer lag. conf stays the integer peak.
     let mut refined = best_lag as f64;
     if best_lag > lo_lag && best_lag < hi_lag {
-        let (y0, y1, y2) = (vals[&(best_lag - 1)], vals[&best_lag], vals[&(best_lag + 1)]);
+        let (y0, y1, y2) = (
+            vals[&(best_lag - 1)],
+            vals[&best_lag],
+            vals[&(best_lag + 1)],
+        );
         let denom = y0 - 2.0 * y1 + y2;
         if denom < 0.0 {
             let delta = (0.5 * (y0 - y2) / denom).clamp(-1.0, 1.0);
@@ -316,13 +341,18 @@ mod tests {
         for sec in 0..9i64 {
             for i in 0..SAMPLE_RATE_HZ {
                 let n = (sec as usize * SAMPLE_RATE_HZ + i) as f64;
-                let v = (1000.0 * (2.0 * std::f64::consts::PI * freq * n / SAMPLE_RATE_HZ as f64).sin()) as i32;
+                let v = (1000.0
+                    * (2.0 * std::f64::consts::PI * freq * n / SAMPLE_RATE_HZ as f64).sin())
+                    as i32;
                 samples.push(Sample { ts: sec, value: v });
             }
         }
         let est = estimate(&samples);
         assert!(!est.is_empty());
-        assert!(est.iter().any(|e| (86..=94).contains(&e.bpm)), "got {est:?}");
+        assert!(
+            est.iter().any(|e| (86..=94).contains(&e.bpm)),
+            "got {est:?}"
+        );
     }
 
     /// 90 bpm pulse under baseline wander 10x its amplitude at 0.06 and 0.13 Hz — the shape a real v26
@@ -338,12 +368,18 @@ mod tests {
                 let t = sec as f64 + i as f64 / SAMPLE_RATE_HZ as f64;
                 let tau = 2.0 * std::f64::consts::PI * t;
                 let wander = 6000.0 * (0.06 * tau).sin() + 4000.0 * (0.13 * tau + 1.0).sin();
-                samples.push(Sample { ts: sec, value: (1000.0 * (freq * tau).sin() + wander) as i32 });
+                samples.push(Sample {
+                    ts: sec,
+                    value: (1000.0 * (freq * tau).sin() + wander) as i32,
+                });
             }
         }
         let est = estimate(&samples);
         assert_eq!(est.len(), 40, "every second should still yield an estimate");
-        assert!(est.iter().all(|e| (80..=100).contains(&e.bpm)), "got {est:?}");
+        assert!(
+            est.iter().all(|e| (80..=100).contains(&e.bpm)),
+            "got {est:?}"
+        );
     }
 
     #[test]
@@ -351,10 +387,26 @@ mod tests {
         // One clean 60 bpm second against three noisy 150 bpm ones: the plain mean says 128, the
         // weighted mean stays near the second we trust.
         let est = vec![
-            Estimate { ts: 100, bpm: 60, conf: 0.9 },
-            Estimate { ts: 101, bpm: 150, conf: 0.05 },
-            Estimate { ts: 102, bpm: 150, conf: 0.05 },
-            Estimate { ts: 103, bpm: 150, conf: 0.05 },
+            Estimate {
+                ts: 100,
+                bpm: 60,
+                conf: 0.9,
+            },
+            Estimate {
+                ts: 101,
+                bpm: 150,
+                conf: 0.05,
+            },
+            Estimate {
+                ts: 102,
+                bpm: 150,
+                conf: 0.05,
+            },
+            Estimate {
+                ts: 103,
+                bpm: 150,
+                conf: 0.05,
+            },
         ];
         let out = aggregate(&est, 60);
         assert_eq!(out.len(), 1);
@@ -367,35 +419,93 @@ mod tests {
     #[test]
     fn aggregate_splits_buckets_and_survives_degenerate_input() {
         let est = vec![
-            Estimate { ts: 0, bpm: 60, conf: 1.0 },
-            Estimate { ts: 59, bpm: 80, conf: 1.0 },
-            Estimate { ts: 60, bpm: 100, conf: 1.0 },
+            Estimate {
+                ts: 0,
+                bpm: 60,
+                conf: 1.0,
+            },
+            Estimate {
+                ts: 59,
+                bpm: 80,
+                conf: 1.0,
+            },
+            Estimate {
+                ts: 60,
+                bpm: 100,
+                conf: 1.0,
+            },
         ];
         let out = aggregate(&est, 60);
-        assert_eq!(out.iter().map(|e| (e.ts, e.bpm)).collect::<Vec<_>>(), vec![(0, 70), (60, 100)]);
+        assert_eq!(
+            out.iter().map(|e| (e.ts, e.bpm)).collect::<Vec<_>>(),
+            vec![(0, 70), (60, 100)]
+        );
         // A zero-weight bucket falls back to the plain mean rather than dividing by zero.
-        let zero = vec![Estimate { ts: 5, bpm: 70, conf: 0.0 }, Estimate { ts: 6, bpm: 90, conf: 0.0 }];
+        let zero = vec![
+            Estimate {
+                ts: 5,
+                bpm: 70,
+                conf: 0.0,
+            },
+            Estimate {
+                ts: 6,
+                bpm: 90,
+                conf: 0.0,
+            },
+        ];
         assert_eq!(aggregate(&zero, 60)[0].bpm, 80);
         // Bucket sizes at or below one second are a no-op, and negative timestamps floor downward.
         assert_eq!(aggregate(&est, 1), est);
-        assert_eq!(aggregate(&[Estimate { ts: -5, bpm: 70, conf: 1.0 }], 60)[0].ts, -60);
+        assert_eq!(
+            aggregate(
+                &[Estimate {
+                    ts: -5,
+                    bpm: 70,
+                    conf: 1.0
+                }],
+                60
+            )[0]
+            .ts,
+            -60
+        );
         assert!(aggregate(&[], 60).is_empty());
     }
 
     #[test]
     fn derate_poor_seconds_silences_the_flagged_seconds_only() {
         let est = vec![
-            Estimate { ts: 10, bpm: 60, conf: 0.9 },
-            Estimate { ts: 11, bpm: 150, conf: 0.9 },
-            Estimate { ts: 12, bpm: 61, conf: 0.9 },
+            Estimate {
+                ts: 10,
+                bpm: 60,
+                conf: 0.9,
+            },
+            Estimate {
+                ts: 11,
+                bpm: 150,
+                conf: 0.9,
+            },
+            Estimate {
+                ts: 12,
+                bpm: 61,
+                conf: 0.9,
+            },
         ];
         let poor: HashSet<i64> = [11].into_iter().collect();
         let out = derate_poor_seconds(&est, &poor);
-        assert_eq!(out.iter().map(|e| e.conf).collect::<Vec<_>>(), vec![0.9, 0.0, 0.9]);
-        assert_eq!(out.iter().map(|e| (e.ts, e.bpm)).collect::<Vec<_>>(), vec![(10, 60), (11, 150), (12, 61)]);
+        assert_eq!(
+            out.iter().map(|e| e.conf).collect::<Vec<_>>(),
+            vec![0.9, 0.0, 0.9]
+        );
+        assert_eq!(
+            out.iter().map(|e| (e.ts, e.bpm)).collect::<Vec<_>>(),
+            vec![(10, 60), (11, 150), (12, 61)]
+        );
         // An empty set, and seconds that carry no estimate, both leave the series untouched.
         assert_eq!(derate_poor_seconds(&est, &HashSet::new()), est);
-        assert_eq!(derate_poor_seconds(&est, &[99i64].into_iter().collect()), est);
+        assert_eq!(
+            derate_poor_seconds(&est, &[99i64].into_iter().collect()),
+            est
+        );
         assert!(derate_poor_seconds(&[], &poor).is_empty());
     }
 
@@ -404,30 +514,63 @@ mod tests {
         // One flagged 150 bpm second against two clean 60 bpm ones, all equally confident: with the flag
         // applied the bucket is the clean pair, without it the strap's unreadable second drags it to 90.
         let est = vec![
-            Estimate { ts: 0, bpm: 60, conf: 0.9 },
-            Estimate { ts: 1, bpm: 150, conf: 0.9 },
-            Estimate { ts: 2, bpm: 60, conf: 0.9 },
+            Estimate {
+                ts: 0,
+                bpm: 60,
+                conf: 0.9,
+            },
+            Estimate {
+                ts: 1,
+                bpm: 150,
+                conf: 0.9,
+            },
+            Estimate {
+                ts: 2,
+                bpm: 60,
+                conf: 0.9,
+            },
         ];
         let poor: HashSet<i64> = [1].into_iter().collect();
         assert_eq!(aggregate(&est, 60)[0].bpm, 90);
         assert_eq!(aggregate(&derate_poor_seconds(&est, &poor), 60)[0].bpm, 60);
         // A whole span the strap could not read falls to Poor, where the raw confidences said Good.
-        let span: Vec<Estimate> = (0..80i64).map(|t| Estimate { ts: t, bpm: 60, conf: 0.9 }).collect();
+        let span: Vec<Estimate> = (0..80i64)
+            .map(|t| Estimate {
+                ts: t,
+                bpm: 60,
+                conf: 0.9,
+            })
+            .collect();
         let all: HashSet<i64> = (0..80i64).collect();
         assert_eq!(signal_check(&span, 0, 99), SignalCheck::Good);
-        assert_eq!(signal_check(&derate_poor_seconds(&span, &all), 0, 99), SignalCheck::Poor);
+        assert_eq!(
+            signal_check(&derate_poor_seconds(&span, &all), 0, 99),
+            SignalCheck::Poor
+        );
     }
 
     #[test]
     fn signal_check_grades_a_span_by_its_clean_second_fraction() {
         let span = |clean: usize| -> Vec<Estimate> {
-            (0..clean as i64).map(|t| Estimate { ts: t, bpm: 60, conf: 0.9 }).collect()
+            (0..clean as i64)
+                .map(|t| Estimate {
+                    ts: t,
+                    bpm: 60,
+                    conf: 0.9,
+                })
+                .collect()
         };
         assert_eq!(signal_check(&span(80), 0, 99), SignalCheck::Good);
         assert_eq!(signal_check(&span(30), 0, 99), SignalCheck::Fair);
         assert_eq!(signal_check(&span(10), 0, 99), SignalCheck::Poor);
         // Seconds the estimator never emitted count against the span exactly like low-confidence ones.
-        let low: Vec<Estimate> = (0..80).map(|t| Estimate { ts: t, bpm: 60, conf: 0.4 }).collect();
+        let low: Vec<Estimate> = (0..80)
+            .map(|t| Estimate {
+                ts: t,
+                bpm: 60,
+                conf: 0.4,
+            })
+            .collect();
         assert_eq!(signal_check(&low, 0, 99), SignalCheck::Poor);
         // Estimates outside the span do not rescue it, and a degenerate span is Poor.
         assert_eq!(signal_check(&span(80), 200, 299), SignalCheck::Poor);

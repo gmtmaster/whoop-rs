@@ -47,11 +47,7 @@ pub const STEPS_GEN4: Calibration = Calibration::at(1, 1);
 
 /// The steps schedule for a strap generation. `true` = a WHOOP 4.0.
 pub const fn steps(is_gen4: bool) -> Calibration {
-    if is_gen4 {
-        STEPS_GEN4
-    } else {
-        STEPS_GEN5
-    }
+    if is_gen4 { STEPS_GEN4 } else { STEPS_GEN5 }
 }
 
 // Two of the published rules are WINDOWED and this night-count model cannot express them; both are
@@ -81,8 +77,14 @@ mod tests {
     #[test]
     fn steps_waits_a_recovery_on_gen4_and_not_on_gen5() {
         // The only generation-dependent schedule: 5.0/MG counts steps on-chip, 4.0 estimates them.
-        assert!(steps(false).unlocked(0), "5.0/MG shows steps from the first day");
-        assert!(!steps(true).unlocked(0), "4.0 must not show an estimate before a recovery");
+        assert!(
+            steps(false).unlocked(0),
+            "5.0/MG shows steps from the first day"
+        );
+        assert!(
+            !steps(true).unlocked(0),
+            "4.0 must not show an estimate before a recovery"
+        );
         assert!(steps(true).unlocked(1));
     }
 }

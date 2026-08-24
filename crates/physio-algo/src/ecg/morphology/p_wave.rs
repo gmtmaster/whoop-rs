@@ -14,7 +14,7 @@
 //! Every figure is a RATIO against the record's own R amplitude, so nothing here needs counts-per-mV.
 
 use super::evidence_fraction;
-use crate::ecg::sqi::{beat_template_window, WindowBaseline, TEMPLATE_MIN_WIDTH};
+use crate::ecg::sqi::{TEMPLATE_MIN_WIDTH, WindowBaseline, beat_template_window};
 use crate::ecg::{qt_end_ms, sanitized, usable_rate};
 use crate::signal::moving_average_centred;
 use crate::stats::median;
@@ -148,14 +148,20 @@ pub fn p_wave(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> PWaveEvidence {
     let hi = (hi_ms / 1000.0 * fs_hz).round() as isize;
     let width = (hi - lo + 1) as usize;
     if width < TEMPLATE_MIN_WIDTH {
-        let limit = PWaveLimit::WindowTooNarrow { samples: width, need: TEMPLATE_MIN_WIDTH };
+        let limit = PWaveLimit::WindowTooNarrow {
+            samples: width,
+            need: TEMPLATE_MIN_WIDTH,
+        };
         return PWaveEvidence::refused(limit, 0, peaks.len());
     }
 
     let x = sanitized(samples);
     let (eligible, excluded) = eligible_beats(&x, fs_hz, peaks, lo, hi);
     if eligible.len() < P_MIN_BEATS {
-        let limit = PWaveLimit::TooFewBeats { have: eligible.len(), need: P_MIN_BEATS };
+        let limit = PWaveLimit::TooFewBeats {
+            have: eligible.len(),
+            need: P_MIN_BEATS,
+        };
         return PWaveEvidence::refused(limit, eligible.len(), excluded);
     }
 
@@ -163,7 +169,10 @@ pub fn p_wave(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> PWaveEvidence {
     let band = moving_average_centred(&x, smooth_len);
     let baseline = WindowBaseline::Detrended;
     let Some(t) = beat_template_window(&band, fs_hz, &eligible, lo_ms, hi_ms, baseline) else {
-        let limit = PWaveLimit::TooFewBeats { have: eligible.len(), need: P_MIN_BEATS };
+        let limit = PWaveLimit::TooFewBeats {
+            have: eligible.len(),
+            need: P_MIN_BEATS,
+        };
         return PWaveEvidence::refused(limit, eligible.len(), excluded);
     };
 
@@ -188,7 +197,11 @@ pub fn p_wave(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> PWaveEvidence {
     let noise_ratio = ensemble_noise / r_amplitude;
     let deflection = t.template.iter().fold(0.0f64, |a, &v| a.max(v.abs()));
     let amplitude_ratio = deflection / r_amplitude;
-    let matched = t.correlations.iter().filter(|r| **r >= P_BEAT_CORRELATION_MIN).count();
+    let matched = t
+        .correlations
+        .iter()
+        .filter(|r| **r >= P_BEAT_CORRELATION_MIN)
+        .count();
     let present_fraction = matched as f64 / t.correlations.len() as f64;
 
     // Order is the integrity of this measure. A deflection that was SEEN can be reported however noisy
@@ -222,20 +235,24 @@ pub fn p_wave(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> PWaveEvidence {
 /// Beats whose PR window fits in the buffer AND starts after the previous beat's T wave has ended.
 /// Returns the eligible peaks and how many were dropped. The first beat is always dropped: with no
 /// preceding interval there is no way to know whether its window sits on a T wave.
-fn eligible_beats(x: &[f64], fs_hz: f64, peaks: &[usize], lo: isize, hi: isize) -> (Vec<usize>, usize) {
+fn eligible_beats(
+    x: &[f64],
+    fs_hz: f64,
+    peaks: &[usize],
+    lo: isize,
+    hi: isize,
+) -> (Vec<usize>, usize) {
     let mut eligible = Vec::with_capacity(peaks.len());
     let mut excluded = 0usize;
     for (i, &p) in peaks.iter().enumerate() {
         // `hi` is negative, so a window can fit entirely while the peak itself sits past the end of the
         // buffer; the R amplitude is read AT the peak, so that has to be excluded too.
         let fits = p < x.len() && p as isize + lo >= 0 && p as isize + hi < x.len() as isize;
-        let clear_of_t = i > 0
-            && peaks[i - 1] < p
-            && {
-                let rr_ms = (p - peaks[i - 1]) as f64 / fs_hz * 1000.0;
-                let t_end = peaks[i - 1] as f64 + qt_end_ms(rr_ms) / 1000.0 * fs_hz;
-                t_end <= (p as isize + lo) as f64
-            };
+        let clear_of_t = i > 0 && peaks[i - 1] < p && {
+            let rr_ms = (p - peaks[i - 1]) as f64 / fs_hz * 1000.0;
+            let t_end = peaks[i - 1] as f64 + qt_end_ms(rr_ms) / 1000.0 * fs_hz;
+            t_end <= (p as isize + lo) as f64
+        };
         if fits && clear_of_t {
             eligible.push(p);
         } else {
@@ -251,7 +268,12 @@ mod tests {
     use crate::ecg::test_signals::{constant, synthetic_ecg};
 
     /// The synthetic generator's beat carries a P wave at 0.15 of R; strip it by rebuilding without it.
-    fn with_and_without_p(fs: f64, seconds: f64, noise_sd: f64, seed: u64) -> (Vec<f64>, Vec<f64>, Vec<usize>) {
+    fn with_and_without_p(
+        fs: f64,
+        seconds: f64,
+        noise_sd: f64,
+        seed: u64,
+    ) -> (Vec<f64>, Vec<f64>, Vec<usize>) {
         let (with, truth) = synthetic_ecg(fs, seconds, 60.0, 1.0, noise_sd, seed);
         // Subtract the P wave the generator adds at -180 ms, sigma 25 ms, gain 0.15.
         let mut without = with.clone();
@@ -259,7 +281,9 @@ mod tests {
             let mu = centre as f64 - 0.180 * fs;
             let sigma = 0.025 * fs;
             let span = (4.0 * sigma).ceil() as isize;
-            for i in (mu as isize - span).max(0)..((mu as isize + span).min(without.len() as isize - 1)) {
+            for i in
+                (mu as isize - span).max(0)..((mu as isize + span).min(without.len() as isize - 1))
+            {
                 let d = (i as f64 - mu) / sigma;
                 without[i as usize] -= 0.15 * (-0.5 * d * d).exp();
             }
@@ -276,11 +300,17 @@ mod tests {
         let a = p_wave(&with, fs, &truth);
         assert_eq!(a.finding, PWaveFinding::Present, "{a:?}");
         assert!(a.amplitude_ratio.unwrap() > P_MIN_DEFLECTION_RATIO, "{a:?}");
-        assert!(a.beats_examined >= P_MIN_BEATS && a.confidence > 0.0, "{a:?}");
+        assert!(
+            a.beats_examined >= P_MIN_BEATS && a.confidence > 0.0,
+            "{a:?}"
+        );
 
         let b = p_wave(&without, fs, &truth);
         assert_eq!(b.finding, PWaveFinding::Absent, "{b:?}");
-        assert!(b.present_fraction.unwrap() <= P_ABSENT_FRACTION_MAX, "{b:?}");
+        assert!(
+            b.present_fraction.unwrap() <= P_ABSENT_FRACTION_MAX,
+            "{b:?}"
+        );
     }
 
     #[test]
@@ -292,8 +322,15 @@ mod tests {
         let fs = 250.0;
         let (_, without, truth) = with_and_without_p(fs, 40.0, 0.90, 2);
         let r = p_wave(&without, fs, &truth);
-        assert_eq!(r.finding, PWaveFinding::Indeterminate(PWaveLimit::BelowNoiseFloor), "{r:?}");
-        assert!(r.noise_ratio.unwrap() * P_DETECT_SNR > P_RESOLVABLE_RATIO, "{r:?}");
+        assert_eq!(
+            r.finding,
+            PWaveFinding::Indeterminate(PWaveLimit::BelowNoiseFloor),
+            "{r:?}"
+        );
+        assert!(
+            r.noise_ratio.unwrap() * P_DETECT_SNR > P_RESOLVABLE_RATIO,
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -309,7 +346,10 @@ mod tests {
         ));
         // A flat line has beats nowhere and no amplitude to reference.
         let flat = p_wave(&constant(10_000, 3.0), 250.0, &truth);
-        assert!(matches!(flat.finding, PWaveFinding::Indeterminate(_)), "{flat:?}");
+        assert!(
+            matches!(flat.finding, PWaveFinding::Indeterminate(_)),
+            "{flat:?}"
+        );
         // Non-finite samples are flattened, not propagated.
         assert!(matches!(
             p_wave(&[f64::NAN; 10_000], 250.0, &truth).finding,
@@ -324,7 +364,10 @@ mod tests {
         ));
         let mut mixed = truth.clone();
         mixed.push(x.len() + 5);
-        assert_eq!(p_wave(&x, 250.0, &mixed).beats_examined, p_wave(&x, 250.0, &truth).beats_examined);
+        assert_eq!(
+            p_wave(&x, 250.0, &mixed).beats_examined,
+            p_wave(&x, 250.0, &truth).beats_examined
+        );
     }
 
     #[test]
@@ -346,7 +389,13 @@ mod tests {
         let (x, truth) = synthetic_ecg(fs, 40.0, 150.0, 1.0, 0.0, 5);
         let r = p_wave(&x, fs, &truth);
         assert!(r.beats_excluded > 0, "{r:?}");
-        assert!(matches!(r.finding, PWaveFinding::Indeterminate(PWaveLimit::TooFewBeats { .. })), "{r:?}");
+        assert!(
+            matches!(
+                r.finding,
+                PWaveFinding::Indeterminate(PWaveLimit::TooFewBeats { .. })
+            ),
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -359,7 +408,10 @@ mod tests {
             let scaled: Vec<f64> = x.iter().map(|v| v * gain).collect();
             let r = p_wave(&scaled, fs, &truth);
             assert_eq!(r.finding, base.finding, "gain {gain}");
-            assert!((r.amplitude_ratio.unwrap() - base.amplitude_ratio.unwrap()).abs() < 1e-9, "gain {gain}");
+            assert!(
+                (r.amplitude_ratio.unwrap() - base.amplitude_ratio.unwrap()).abs() < 1e-9,
+                "gain {gain}"
+            );
         }
     }
 }

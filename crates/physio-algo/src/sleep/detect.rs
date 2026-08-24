@@ -61,13 +61,21 @@ pub struct DetectParams {
 
 impl DetectParams {
     /// The thresholds [`detect_sessions`] runs, and so the window every new session is cut on.
-    pub const SHIPPED: DetectParams =
-        DetectParams { still_enter: 0.80, still_exit: 0.65, min_sleep_min: 60, wake_absorb_max_min: 45 };
+    pub const SHIPPED: DetectParams = DetectParams {
+        still_enter: 0.80,
+        still_exit: 0.65,
+        min_sleep_min: 60,
+        wake_absorb_max_min: 45,
+    };
 
     /// The single-threshold spine that wrote every already-stored session. Kept so a stored-versus-fresh
     /// comparison stays attributable to one detector after the enter/exit split.
-    pub const PRE_HYSTERESIS: DetectParams =
-        DetectParams { still_enter: 0.70, still_exit: 0.70, min_sleep_min: 60, wake_absorb_max_min: 0 };
+    pub const PRE_HYSTERESIS: DetectParams = DetectParams {
+        still_enter: 0.70,
+        still_exit: 0.70,
+        min_sleep_min: 60,
+        wake_absorb_max_min: 0,
+    };
 }
 
 impl Default for DetectParams {
@@ -141,7 +149,9 @@ pub(super) fn is_gravity_sparse(grav: &[AccelSample], hr: &[HrSample]) -> bool {
 /// True when HR stays in the sleep band (`<= baseline x HR_SLEEP_BAND_MULT`) across `(a, b]`; false with
 /// no baseline or no HR in the interval (cannot vouch → treat as a real break).
 fn hr_sleep_band_across(a: i64, b: i64, hr: &[HrSample], baseline: Option<f64>) -> bool {
-    let Some(baseline) = baseline else { return false };
+    let Some(baseline) = baseline else {
+        return false;
+    };
     let seg: Vec<&HrSample> = hr.iter().filter(|h| h.ts > a && h.ts <= b).collect();
     if seg.is_empty() {
         return false;
@@ -169,7 +179,11 @@ pub(super) fn classify_still(grav: &[AccelSample], deltas: &[f64], p: &DetectPar
         let lo = i.saturating_sub(half);
         let hi = (i + half + 1).min(n);
         let frac = (still_prefix[hi] - still_prefix[lo]) as f64 / (hi - lo) as f64;
-        in_run = if in_run { frac >= p.still_exit } else { frac >= p.still_enter };
+        in_run = if in_run {
+            frac >= p.still_exit
+        } else {
+            frac >= p.still_enter
+        };
         flags.push(in_run);
     }
     flags
@@ -238,17 +252,30 @@ pub(super) fn merge_periods(periods: &[Period]) -> Vec<Period> {
         }
         let has_prev = i > 0 && !merged.is_empty();
         let has_next = i + 1 < pending.len();
-        let bridges_same = has_prev && has_next && pending[i - 1].is_sleep == pending[i + 1].is_sleep;
+        let bridges_same =
+            has_prev && has_next && pending[i - 1].is_sleep == pending[i + 1].is_sleep;
         if bridges_same {
             let prev = merged.pop().unwrap();
-            merged.push(Period { is_sleep: prev.is_sleep, start: prev.start, end: pending[i + 1].end });
+            merged.push(Period {
+                is_sleep: prev.is_sleep,
+                start: prev.start,
+                end: pending[i + 1].end,
+            });
             i += 2;
         } else if has_next {
-            pending[i + 1] = Period { is_sleep: pending[i + 1].is_sleep, start: current.start, end: pending[i + 1].end };
+            pending[i + 1] = Period {
+                is_sleep: pending[i + 1].is_sleep,
+                start: current.start,
+                end: pending[i + 1].end,
+            };
             i += 1;
         } else if has_prev {
             let prev = merged.pop().unwrap();
-            merged.push(Period { is_sleep: prev.is_sleep, start: prev.start, end: current.end });
+            merged.push(Period {
+                is_sleep: prev.is_sleep,
+                start: prev.start,
+                end: current.end,
+            });
             i += 1;
         } else {
             i += 1;
@@ -259,7 +286,12 @@ pub(super) fn merge_periods(periods: &[Period]) -> Vec<Period> {
 
 /// Merge two sleep runs left ADJACENT in the list by a data gap (never by a wake run) when the
 /// intervening HR stays in the sleep band. `max_gap_min <= 0` is a no-op.
-pub(super) fn bridge_sleep_gap(periods: &[Period], max_gap_min: i64, hr: &[HrSample], baseline: Option<f64>) -> Vec<Period> {
+pub(super) fn bridge_sleep_gap(
+    periods: &[Period],
+    max_gap_min: i64,
+    hr: &[HrSample],
+    baseline: Option<f64>,
+) -> Vec<Period> {
     if max_gap_min <= 0 || periods.is_empty() {
         return periods.to_vec();
     }
@@ -269,10 +301,16 @@ pub(super) fn bridge_sleep_gap(periods: &[Period], max_gap_min: i64, hr: &[HrSam
         if let Some(last) = out.last() {
             if last.is_sleep && p.is_sleep {
                 let gap = p.start - last.end;
-                if (0..=bridge_gap_s).contains(&gap) && hr_sleep_band_across(last.end, p.start, hr, baseline) {
+                if (0..=bridge_gap_s).contains(&gap)
+                    && hr_sleep_band_across(last.end, p.start, hr, baseline)
+                {
                     let start = last.start;
                     out.pop();
-                    out.push(Period { is_sleep: true, start, end: p.end });
+                    out.push(Period {
+                        is_sleep: true,
+                        start,
+                        end: p.end,
+                    });
                     continue;
                 }
             }
@@ -307,7 +345,11 @@ pub(super) fn absorb_short_wake(
             && hr_sleep_band_across(cur.start, cur.end, hr, baseline);
         if absorb {
             let prev = out.pop().expect("out.last() was Some in the guard above");
-            out.push(Period { is_sleep: true, start: prev.start, end: periods[i + 1].end });
+            out.push(Period {
+                is_sleep: true,
+                start: prev.start,
+                end: periods[i + 1].end,
+            });
             i += 2;
             continue;
         }
@@ -361,7 +403,9 @@ fn run_is_deeply_quiescent(p: Period, grav: &[AccelSample]) -> bool {
     }
     let (mut judged, mut stable) = (0i64, 0i64);
     for samples in by_minute.values() {
-        let Some(v) = posture_variance_g2(samples) else { continue };
+        let Some(v) = posture_variance_g2(samples) else {
+            continue;
+        };
         judged += 1;
         if v < QUIESCENT_POSTURE_VAR_G2 {
             stable += 1;
@@ -382,12 +426,22 @@ pub(super) fn confirm_sleep_with_hr(
     grav: &[AccelSample],
     sleep_hr_baseline: Option<f64>,
 ) -> bool {
-    let Some(eff_baseline) = sleep_hr_baseline.or(baseline) else { return true };
-    let seg: Vec<f64> = hr.iter().filter(|h| h.ts >= p.start && h.ts <= p.end).map(|h| h.bpm as f64).collect();
+    let Some(eff_baseline) = sleep_hr_baseline.or(baseline) else {
+        return true;
+    };
+    let seg: Vec<f64> = hr
+        .iter()
+        .filter(|h| h.ts >= p.start && h.ts <= p.end)
+        .map(|h| h.bpm as f64)
+        .collect();
     if seg.len() < HR_REFINE_MIN_SAMPLES {
         return true;
     }
-    let mult = if run_is_deeply_quiescent(p, grav) { QUIESCENT_HR_SLEEP_MULT } else { HR_SLEEP_BASELINE_MULT };
+    let mult = if run_is_deeply_quiescent(p, grav) {
+        QUIESCENT_HR_SLEEP_MULT
+    } else {
+        HR_SLEEP_BASELINE_MULT
+    };
     median(&seg) <= eff_baseline * mult
 }
 
@@ -409,13 +463,19 @@ fn passes_daytime_guard(p: Period, resting_hr: Option<i64>, baseline: Option<f64
     if (p.end - p.start) < DAYTIME_MIN_SLEEP_MIN * 60 {
         return false;
     }
-    let (Some(baseline), Some(resting)) = (baseline, resting_hr) else { return false };
+    let (Some(baseline), Some(resting)) = (baseline, resting_hr) else {
+        return false;
+    };
     resting as f64 <= baseline * DAYTIME_RESTING_HR_MULT
 }
 
 /// True when the strap's own banked band sleep_state over the run reads predominantly "asleep".
 fn band_state_confirms_asleep(p: Period, band_sleep_state: &[(i64, i32)]) -> bool {
-    let in_block: Vec<i32> = band_sleep_state.iter().filter(|(t, _)| *t >= p.start && *t <= p.end).map(|(_, s)| *s).collect();
+    let in_block: Vec<i32> = band_sleep_state
+        .iter()
+        .filter(|(t, _)| *t >= p.start && *t <= p.end)
+        .map(|(_, s)| *s)
+        .collect();
     if in_block.is_empty() {
         return false;
     }
@@ -445,7 +505,9 @@ pub(super) fn passes_morning_stillness_guard(
     if band_state_confirms_asleep(p, band_sleep_state) {
         return true;
     }
-    let (Some(baseline), Some(resting)) = (baseline, resting_hr) else { return false };
+    let (Some(baseline), Some(resting)) = (baseline, resting_hr) else {
+        return false;
+    };
     resting as f64 <= baseline * MORNING_REONSET_RESTING_HR_MULT
 }
 
@@ -462,10 +524,18 @@ fn off_wrist_hr_gap_spans(p: Period, hr: &[HrSample]) -> Vec<(i64, i64)> {
         return Vec::new();
     }
     let gap_s = OFF_WRIST_HR_GAP_MIN * 60;
-    let mut seg: Vec<i64> = hr.iter().filter(|h| h.ts >= p.start && h.ts <= p.end).map(|h| h.ts).collect();
+    let mut seg: Vec<i64> = hr
+        .iter()
+        .filter(|h| h.ts >= p.start && h.ts <= p.end)
+        .map(|h| h.ts)
+        .collect();
     seg.sort_unstable();
     if seg.is_empty() {
-        return if (p.end - p.start) >= gap_s { vec![(p.start, p.end)] } else { Vec::new() };
+        return if (p.end - p.start) >= gap_s {
+            vec![(p.start, p.end)]
+        } else {
+            Vec::new()
+        };
     }
     let mut spans = Vec::new();
     if seg[0] - p.start >= gap_s {
@@ -520,7 +590,11 @@ pub fn efficiency(start: i64, end: i64, stages: &[StageSegment]) -> f64 {
     if in_bed <= 0.0 {
         return 0.0;
     }
-    let wake: f64 = stages.iter().filter(|s| s.stage == SleepStage::Wake).map(|s| (s.end - s.start) as f64).sum();
+    let wake: f64 = stages
+        .iter()
+        .filter(|s| s.stage == SleepStage::Wake)
+        .map(|s| (s.end - s.start) as f64)
+        .sum();
     ((in_bed - wake).max(0.0) / in_bed).min(1.0)
 }
 
@@ -570,8 +644,13 @@ pub fn detect_sessions_with(
     }
     let mut hr_s = hr.to_vec();
     hr_s.sort_by_key(|h| h.ts);
-    let rhr: Vec<resting_hr::HrSample> =
-        hr_s.iter().map(|h| resting_hr::HrSample { ts: h.ts, bpm: h.bpm as i32 }).collect();
+    let rhr: Vec<resting_hr::HrSample> = hr_s
+        .iter()
+        .map(|h| resting_hr::HrSample {
+            ts: h.ts,
+            bpm: h.bpm as i32,
+        })
+        .collect();
 
     let baseline = hr_baseline(&hr_s);
     let sparse = is_gravity_sparse(&grav, &hr_s);
@@ -580,7 +659,12 @@ pub fn detect_sessions_with(
     let runs = build_runs(&grav, &flags, sparse, &hr_s, baseline);
     let runs = merge_periods(&runs);
     // A data gap only splits sleep runs when gravity is sparse; a wake run splits them on either path.
-    let runs = bridge_sleep_gap(&runs, if sparse { SPARSE_BRIDGE_GAP_MIN } else { 0 }, &hr_s, baseline);
+    let runs = bridge_sleep_gap(
+        &runs,
+        if sparse { SPARSE_BRIDGE_GAP_MIN } else { 0 },
+        &hr_s,
+        baseline,
+    );
     let runs = absorb_short_wake(&runs, params.wake_absorb_max_min, &hr_s, baseline);
 
     let min_sleep_s = params.min_sleep_min * 60;
@@ -606,17 +690,31 @@ pub fn detect_sessions_with(
         let resting = resting_hr::session_resting_hr(p.start, p.end, &rhr);
         let continues_chain = chain_prev_end.is_some_and(|e| p.start - e <= continuation_gap_s);
         let is_night_tail = continues_chain && chain_from_overnight;
-        let morning_wake_end = if chain_from_overnight { chain_prev_end } else { None };
+        let morning_wake_end = if chain_from_overnight {
+            chain_prev_end
+        } else {
+            None
+        };
         let is_daytime = is_daytime_center(*p, tz_offset_s);
         let passes_morning = if is_daytime {
-            passes_morning_stillness_guard(*p, resting_floor.map(|r| r as i64), baseline, morning_wake_end, band_sleep_state)
+            passes_morning_stillness_guard(
+                *p,
+                resting_floor.map(|r| r as i64),
+                baseline,
+                morning_wake_end,
+                band_sleep_state,
+            )
         } else {
             true
         };
         if is_daytime && !passes_morning && !is_night_tail {
             continue;
         }
-        sessions.push(DetectedSpan { start: p.start, end: p.end, resting_hr: resting });
+        sessions.push(DetectedSpan {
+            start: p.start,
+            end: p.end,
+            resting_hr: resting,
+        });
         if !continues_chain {
             chain_from_overnight = is_overnight_onset(p.start, tz_offset_s);
         }
@@ -629,7 +727,11 @@ pub fn detect_sessions_with(
 /// Per-epoch motion magnitudes over `[start, end]` on the 30 s epoch grid: each entry is the epoch's summed
 /// `|Δgravity|`. `[]` when there is too little gravity to grid (the caller then persists nothing).
 pub(super) fn session_epoch_motion(start: i64, end: i64, grav: &[AccelSample]) -> Vec<f64> {
-    let seg: Vec<AccelSample> = grav.iter().copied().filter(|g| g.ts >= start && g.ts <= end).collect();
+    let seg: Vec<AccelSample> = grav
+        .iter()
+        .copied()
+        .filter(|g| g.ts >= start && g.ts <= end)
+        .collect();
     if seg.len() < 2 || end <= start {
         return Vec::new();
     }
@@ -653,8 +755,16 @@ pub(super) fn session_epoch_motion(start: i64, end: i64, grav: &[AccelSample]) -
 
 /// The strap's own band sleep-state gridded onto the same 30 s epochs: each epoch takes the last sample in
 /// its window, carrying forward when empty; lead-in takes the first sample. `[]` when no band samples.
-pub(super) fn session_epoch_sleep_state(start: i64, end: i64, sleep_state: &[(i64, i32)]) -> Vec<i32> {
-    let mut seg: Vec<(i64, i32)> = sleep_state.iter().copied().filter(|(t, _)| *t >= start && *t <= end).collect();
+pub(super) fn session_epoch_sleep_state(
+    start: i64,
+    end: i64,
+    sleep_state: &[(i64, i32)],
+) -> Vec<i32> {
+    let mut seg: Vec<(i64, i32)> = sleep_state
+        .iter()
+        .copied()
+        .filter(|(t, _)| *t >= start && *t <= end)
+        .collect();
     seg.sort_by_key(|s| s.0);
     if seg.is_empty() || end <= start {
         return Vec::new();
@@ -687,7 +797,11 @@ mod tests {
 
     #[test]
     fn gravity_deltas_first_zero_then_l2() {
-        let g = vec![a(0, 0.0, 0.0, 1.0), a(1, 0.0, 0.0, 1.0), a(2, 3.0, 4.0, 1.0)];
+        let g = vec![
+            a(0, 0.0, 0.0, 1.0),
+            a(1, 0.0, 0.0, 1.0),
+            a(2, 3.0, 4.0, 1.0),
+        ];
         let d = gravity_deltas(&g);
         assert_eq!(d[0], 0.0);
         assert_eq!(d[1], 0.0);
@@ -697,7 +811,10 @@ mod tests {
     #[test]
     fn window_size_falls_back_and_tracks_cadence() {
         // Too few samples to time -> DEFAULT_INTERVAL_S -> 15 min / 60 s = 15 windows.
-        assert_eq!(window_size(&[100]), (STILL_WINDOW_MIN * 60 / DEFAULT_INTERVAL_S as i64));
+        assert_eq!(
+            window_size(&[100]),
+            (STILL_WINDOW_MIN * 60 / DEFAULT_INTERVAL_S as i64)
+        );
         // 1 s cadence -> a 15-min window spans 900 samples.
         assert_eq!(window_size(&[0, 1, 2, 3]), STILL_WINDOW_MIN * 60);
         // A 400 s gap is excluded (>= 300); the remaining 2 s gap sets the cadence.
@@ -711,7 +828,11 @@ mod tests {
         let hr: Vec<_> = (0..600).map(|t| h(t, 60)).collect();
         assert!(!is_gravity_sparse(&grav, &hr));
         // clumped: one > MAX_GAP_MIN (20 min) gap trips it
-        let grav2 = vec![a(0, 0.0, 0.0, 1.0), a(1, 0.0, 0.0, 1.0), a(2000, 0.0, 0.0, 1.0)];
+        let grav2 = vec![
+            a(0, 0.0, 0.0, 1.0),
+            a(1, 0.0, 0.0, 1.0),
+            a(2000, 0.0, 0.0, 1.0),
+        ];
         let hr2: Vec<_> = (0..2000).map(|t| h(t, 60)).collect();
         assert!(is_gravity_sparse(&grav2, &hr2));
     }
@@ -719,7 +840,9 @@ mod tests {
     #[test]
     fn build_runs_breaks_on_class_change_and_gap() {
         let grav: Vec<_> = (0..10).map(|t| a(t, 0.0, 0.0, 1.0)).collect();
-        let flags = vec![true, true, true, false, false, false, true, true, true, true];
+        let flags = vec![
+            true, true, true, false, false, false, true, true, true, true,
+        ];
         let runs = build_runs(&grav, &flags, false, &[], None);
         assert_eq!(runs.len(), 3);
         assert!(runs[0].is_sleep && !runs[1].is_sleep && runs[2].is_sleep);
@@ -737,10 +860,28 @@ mod tests {
         // Four moving samples per 15 -> every interior window reads a still fraction of 11/15 = 0.733,
         // which sits between the two thresholds and so behaves differently opening and holding.
         let mid = |i: usize| f64::from([0usize, 4, 8, 12].contains(&(i % 15)));
-        let approach: Vec<f64> =
-            (0..n).map(|i| if i < 30 { 1.0 } else if i < 60 { mid(i) } else { 0.0 }).collect();
-        let leave: Vec<f64> =
-            (0..n).map(|i| if i < 30 { 0.0 } else if i < 60 { mid(i) } else { 1.0 }).collect();
+        let approach: Vec<f64> = (0..n)
+            .map(|i| {
+                if i < 30 {
+                    1.0
+                } else if i < 60 {
+                    mid(i)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let leave: Vec<f64> = (0..n)
+            .map(|i| {
+                if i < 30 {
+                    0.0
+                } else if i < 60 {
+                    mid(i)
+                } else {
+                    1.0
+                }
+            })
+            .collect();
         let asleep_mid = |d: &[f64], p: &DetectParams| classify_still(&grav, d, p)[45];
 
         assert!(asleep_mid(&approach, &DetectParams::PRE_HYSTERESIS)); // one threshold: it opened a run
@@ -755,7 +896,11 @@ mod tests {
     }
 
     fn sleep(start: i64, end: i64) -> Period {
-        Period { is_sleep: true, start, end }
+        Period {
+            is_sleep: true,
+            start,
+            end,
+        }
     }
 
     #[test]
@@ -771,8 +916,16 @@ mod tests {
     #[test]
     fn efficiency_is_asleep_over_in_bed() {
         let stages = vec![
-            StageSegment { start: 0, end: 100, stage: SleepStage::Light },
-            StageSegment { start: 100, end: 150, stage: SleepStage::Wake },
+            StageSegment {
+                start: 0,
+                end: 100,
+                stage: SleepStage::Light,
+            },
+            StageSegment {
+                start: 100,
+                end: 150,
+                stage: SleepStage::Wake,
+            },
         ];
         assert!((efficiency(0, 150, &stages) - 100.0 / 150.0).abs() < 1e-12);
         assert_eq!(efficiency(0, 0, &stages), 0.0);
@@ -783,8 +936,16 @@ mod tests {
     #[test]
     fn efficiency_counts_an_uncovered_gap_as_asleep() {
         let stages = vec![
-            StageSegment { start: 0, end: 50, stage: SleepStage::Light },
-            StageSegment { start: 80, end: 100, stage: SleepStage::Wake },
+            StageSegment {
+                start: 0,
+                end: 50,
+                stage: SleepStage::Light,
+            },
+            StageSegment {
+                start: 80,
+                end: 100,
+                stage: SleepStage::Wake,
+            },
         ];
         assert!((efficiency(0, 100, &stages) - 0.80).abs() < 1e-12);
         assert!((efficiency(0, 100, &stages) - 50.0 / 70.0).abs() > 0.08);
@@ -793,7 +954,11 @@ mod tests {
     // Wake past the corrected wake time is not clipped away, so an edit must reclip before asking.
     #[test]
     fn efficiency_reads_wake_outside_the_span_too() {
-        let stages = vec![StageSegment { start: 100, end: 200, stage: SleepStage::Wake }];
+        let stages = vec![StageSegment {
+            start: 100,
+            end: 200,
+            stage: SleepStage::Wake,
+        }];
         assert_eq!(efficiency(0, 100, &stages), 0.0);
     }
 
@@ -827,8 +992,14 @@ mod tests {
     #[test]
     fn band_state_confirms_asleep_at_threshold() {
         let p = sleep(0, 100);
-        assert!(band_state_confirms_asleep(p, &[(10, 2), (20, 2), (30, 2), (40, 0)])); // 0.75
-        assert!(!band_state_confirms_asleep(p, &[(10, 2), (20, 0), (30, 0), (40, 3)])); // 0.25
+        assert!(band_state_confirms_asleep(
+            p,
+            &[(10, 2), (20, 2), (30, 2), (40, 0)]
+        )); // 0.75
+        assert!(!band_state_confirms_asleep(
+            p,
+            &[(10, 2), (20, 0), (30, 0), (40, 3)]
+        )); // 0.25
     }
 
     // ── gate parity pins ───────────────────────────────────────────────────────────────────────────
@@ -841,7 +1012,9 @@ mod tests {
         (0..dur).map(|i| a(start + i, 0.0, 0.0, 1.0)).collect()
     }
     fn active_gravity(start: i64, dur: i64) -> Vec<AccelSample> {
-        (0..dur).map(|i| a(start + i, (i % 2) as f64 * 0.5, 0.0, 1.0)).collect()
+        (0..dur)
+            .map(|i| a(start + i, (i % 2) as f64 * 0.5, 0.0, 1.0))
+            .collect()
     }
     fn hr_stream(start: i64, dur: i64, bpm: u16) -> Vec<HrSample> {
         (0..dur).map(|i| h(start + i, bpm)).collect()
@@ -872,7 +1045,12 @@ mod tests {
         assert!(off_wrist_fraction(p, &sparse, &[(0, 3000)]) >= 0.5); // explicit events stay authoritative
     }
 
-    fn detect(hr: &[HrSample], grav: &[AccelSample], tz: i64, wrist_off: &[(i64, i64)]) -> Vec<DetectedSpan> {
+    fn detect(
+        hr: &[HrSample],
+        grav: &[AccelSample],
+        tz: i64,
+        wrist_off: &[(i64, i64)],
+    ) -> Vec<DetectedSpan> {
         detect_sessions(hr, grav, tz, wrist_off, &[], None)
     }
 
@@ -937,7 +1115,10 @@ mod tests {
         let hr = hr_stream(start, dur, 50);
         assert_eq!(detect(&hr, &grav, 0, &[]).len(), 1);
         // 5-min blip (~5.5%) keeps it; a wrist-off covering >=50% drops it
-        assert_eq!(detect(&hr, &grav, 0, &[(start + 30 * 60, start + 35 * 60)]).len(), 1);
+        assert_eq!(
+            detect(&hr, &grav, 0, &[(start + 30 * 60, start + 35 * 60)]).len(),
+            1
+        );
         assert!(detect(&hr, &grav, 0, &[(start + 5 * 60, start + dur)]).is_empty());
     }
 
@@ -990,9 +1171,15 @@ mod tests {
         let start = 6_000_000i64;
         let hr = hr_stream(start, 6 * 3600, 50);
         assert!(is_gravity_sparse(&still_gravity(start, 30 * 60), &hr)); // (a) short span
-        assert!(is_gravity_sparse(&sparse_still_gravity(start, 6 * 3600, 25 * 60), &hr)); // (b) big gaps
+        assert!(is_gravity_sparse(
+            &sparse_still_gravity(start, 6 * 3600, 25 * 60),
+            &hr
+        )); // (b) big gaps
         assert!(!is_gravity_sparse(&still_gravity(start, 6 * 3600), &hr)); // (c) dense
-        assert!(!is_gravity_sparse(&sparse_still_gravity(start, 6 * 3600, 25 * 60), &[])); // (d) no HR span
+        assert!(!is_gravity_sparse(
+            &sparse_still_gravity(start, 6 * 3600, 25 * 60),
+            &[]
+        )); // (d) no HR span
         let mut clumped = still_gravity(start, 160 * 60); // (e) spans night, small median gap, one big dropout
         clumped.extend(still_gravity(start + (160 + 40) * 60, 160 * 60));
         assert!(is_gravity_sparse(&clumped, &hr));
@@ -1040,8 +1227,14 @@ mod tests {
     #[test]
     fn hr_confirm_median_survives_spike_but_rejects_elevated() {
         let start = 1_000_000i64;
-        let p = Period { is_sleep: true, start, end: start + 600 };
-        let spiky: Vec<_> = (0..600).map(|i| h(start + i, if i < 30 { 190 } else { 48 })).collect();
+        let p = Period {
+            is_sleep: true,
+            start,
+            end: start + 600,
+        };
+        let spiky: Vec<_> = (0..600)
+            .map(|i| h(start + i, if i < 30 { 190 } else { 48 }))
+            .collect();
         assert!(confirm_sleep_with_hr(p, &spiky, Some(50.0), &[], None)); // median 48 <= 52.5
         let hot: Vec<_> = (0..600).map(|i| h(start + i, 60)).collect();
         assert!(!confirm_sleep_with_hr(p, &hot, Some(50.0), &[], None)); // median 60 > 52.5
@@ -1061,10 +1254,21 @@ mod tests {
             .collect()
     }
     fn walking_gravity(start: i64, dur: i64) -> Vec<AccelSample> {
-        (0..dur).map(|i| a(start + i, 0.5 * ((i % 4) as f64).sin(), 0.5 * ((i % 4) as f64).cos(), 0.7)).collect()
+        (0..dur)
+            .map(|i| {
+                a(
+                    start + i,
+                    0.5 * ((i % 4) as f64).sin(),
+                    0.5 * ((i % 4) as f64).cos(),
+                    0.7,
+                )
+            })
+            .collect()
     }
     fn elevated_flat_hr(start: i64, dur: i64, base: u16) -> Vec<HrSample> {
-        (0..dur).map(|i| h(start + i, base + ((i / 90) % 3) as u16)).collect()
+        (0..dur)
+            .map(|i| h(start + i, base + ((i / 90) % 3) as u16))
+            .collect()
     }
 
     #[test]
@@ -1072,11 +1276,19 @@ mod tests {
         let (s1, over) = (at_hour(22), 18 * 3600);
         assert!(detect(&hr_stream(s1, over, 50), &still_gravity(s1, over), 0, &[]).is_empty()); // 18h > 16h cap
         let (s2, ok) = (at_hour(21), 15 * 3600);
-        assert_eq!(detect(&hr_stream(s2, ok, 50), &still_gravity(s2, ok), 0, &[]).len(), 1); // 15h <= cap
+        assert_eq!(
+            detect(&hr_stream(s2, ok, 50), &still_gravity(s2, ok), 0, &[]).len(),
+            1
+        ); // 15h <= cap
     }
 
     /// A night broken by one stir: `[still d1][active stir][still d2]`, the stir at `stir_bpm`.
-    fn stirred_night(d1: i64, stir: i64, stir_bpm: u16, d2: i64) -> (Vec<AccelSample>, Vec<HrSample>) {
+    fn stirred_night(
+        d1: i64,
+        stir: i64,
+        stir_bpm: u16,
+        d2: i64,
+    ) -> (Vec<AccelSample>, Vec<HrSample>) {
         let s1 = at_hour(23) - 86_400;
         let (s_stir, s2) = (s1 + d1, s1 + d1 + stir);
         let mut grav = still_gravity(s1, d1);
@@ -1093,8 +1305,15 @@ mod tests {
         let (four_h, three_h) = (4 * 3600, 3 * 3600);
         let (g, h) = stirred_night(four_h, 30 * 60, 50, three_h);
         let one = detect(&h, &g, 0, &[]);
-        assert_eq!(one.len(), 1, "a 30-min sleep-band stir is inside wake_absorb_max_min");
-        assert!(one[0].end - one[0].start > four_h + three_h, "the stir is inside the span");
+        assert_eq!(
+            one.len(),
+            1,
+            "a 30-min sleep-band stir is inside wake_absorb_max_min"
+        );
+        assert!(
+            one[0].end - one[0].start > four_h + three_h,
+            "the stir is inside the span"
+        );
         // Longer than the absorb window: the night legitimately splits in two.
         let (g, h) = stirred_night(four_h, 70 * 60, 50, three_h);
         assert_eq!(detect(&h, &g, 0, &[]).len(), 2);
@@ -1105,22 +1324,59 @@ mod tests {
 
     #[test]
     fn morning_stillness_guard_cases() {
-        let daytime = |sh: i64, dm: i64| Period { is_sleep: true, start: at_hour(sh), end: at_hour(sh) + dm * 60 };
+        let daytime = |sh: i64, dm: i64| Period {
+            is_sleep: true,
+            start: at_hour(sh),
+            end: at_hour(sh) + dm * 60,
+        };
         let wake = at_hour(8);
         let p = daytime(9, 120);
-        assert!(!passes_morning_stillness_guard(p, Some(74), Some(80.0), Some(wake), &[])); // 74>72 re-onset bar
-        assert!(passes_morning_stillness_guard(p, Some(70), Some(78.0), Some(wake), &[])); // clear dip 70<=70.2
-        assert!(passes_morning_stillness_guard(daytime(14, 120), Some(70), Some(80.0), None, &[])); // no wake -> daytime bar
-        let band: Vec<(i64, i32)> = (0..100).map(|i| (p.start + i * 60, if i < 80 { 2 } else { 1 })).collect();
-        assert!(passes_morning_stillness_guard(p, Some(74), Some(80.0), Some(wake), &band)); // band rescues
+        assert!(!passes_morning_stillness_guard(
+            p,
+            Some(74),
+            Some(80.0),
+            Some(wake),
+            &[]
+        )); // 74>72 re-onset bar
+        assert!(passes_morning_stillness_guard(
+            p,
+            Some(70),
+            Some(78.0),
+            Some(wake),
+            &[]
+        )); // clear dip 70<=70.2
+        assert!(passes_morning_stillness_guard(
+            daytime(14, 120),
+            Some(70),
+            Some(80.0),
+            None,
+            &[]
+        )); // no wake -> daytime bar
+        let band: Vec<(i64, i32)> = (0..100)
+            .map(|i| (p.start + i * 60, if i < 80 { 2 } else { 1 }))
+            .collect();
+        assert!(passes_morning_stillness_guard(
+            p,
+            Some(74),
+            Some(80.0),
+            Some(wake),
+            &band
+        )); // band rescues
     }
 
     #[test]
     fn run_is_deeply_quiescent_cases() {
         let (start, dur) = (1_000_000i64, 60 * 60);
-        let p = Period { is_sleep: true, start, end: start + dur };
+        let p = Period {
+            is_sleep: true,
+            start,
+            end: start + dur,
+        };
         assert!(run_is_deeply_quiescent(p, &still_gravity(start, dur)));
-        assert!(run_is_deeply_quiescent(p, &still_with_turnovers(start, dur, 90))); // occasional turn-overs still >90% stable
+        assert!(run_is_deeply_quiescent(
+            p,
+            &still_with_turnovers(start, dur, 90)
+        )); // occasional turn-overs still >90% stable
         assert!(!run_is_deeply_quiescent(p, &walking_gravity(start, dur)));
         assert!(!run_is_deeply_quiescent(p, &[]));
     }
@@ -1128,12 +1384,28 @@ mod tests {
     #[test]
     fn motionless_elevated_confirmed_only_with_gravity() {
         let (start, dur) = (1_000_000i64, 90 * 60);
-        let p = Period { is_sleep: true, start, end: start + dur };
+        let p = Period {
+            is_sleep: true,
+            start,
+            end: start + dur,
+        };
         let hr = elevated_flat_hr(start, dur, 58); // median ~59
-        assert!(confirm_sleep_with_hr(p, &hr, Some(48.0), &still_gravity(start, dur), None)); // 59 <= 48*1.30
+        assert!(confirm_sleep_with_hr(
+            p,
+            &hr,
+            Some(48.0),
+            &still_gravity(start, dur),
+            None
+        )); // 59 <= 48*1.30
         assert!(!confirm_sleep_with_hr(p, &hr, Some(48.0), &[], None)); // 59 > 48*1.05 strict
         let hot = elevated_flat_hr(start, dur, 72); // median ~73 > 48*1.30=62.4
-        assert!(!confirm_sleep_with_hr(p, &hot, Some(48.0), &still_gravity(start, dur), None)); // floor holds
+        assert!(!confirm_sleep_with_hr(
+            p,
+            &hot,
+            Some(48.0),
+            &still_gravity(start, dur),
+            None
+        )); // floor holds
     }
 
     #[test]
@@ -1153,7 +1425,10 @@ mod tests {
         let s = session_epoch_sleep_state(start, start + 90 * 60, &band);
         assert_eq!(s.len(), 180);
         assert!(s.iter().all(|&x| x == 2));
-        assert_eq!(session_epoch_sleep_state(0, 180, &[(0, 0), (75, 2), (160, 3)]), vec![0, 0, 2, 2, 2, 3]);
+        assert_eq!(
+            session_epoch_sleep_state(0, 180, &[(0, 0), (75, 2), (160, 3)]),
+            vec![0, 0, 2, 2, 2, 3]
+        );
         assert!(session_epoch_sleep_state(0, 1800, &[]).is_empty());
         assert!(session_epoch_sleep_state(0, 1800, &[(9000, 2)]).is_empty()); // out-of-window ignored
     }

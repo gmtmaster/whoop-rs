@@ -26,14 +26,16 @@ pub mod sweep;
 #[cfg(test)]
 mod test_signals;
 
-pub use agreement::{beat_agreement, Agreement, DEFAULT_MATCH_WINDOW_MS};
-pub use mains::{mains_anchor, mains_anchor_with, MainsAnchor, MainsConfig, MainsFix, MainsUnavailable};
-pub use morphology::{morphology, EcgMorphology};
+pub use agreement::{Agreement, DEFAULT_MATCH_WINDOW_MS, beat_agreement};
+pub use mains::{
+    MainsAnchor, MainsConfig, MainsFix, MainsUnavailable, mains_anchor, mains_anchor_with,
+};
+pub use morphology::{EcgMorphology, morphology};
 pub use qrs_pan_tompkins::detect_pan_tompkins;
 pub use qrs_wavelet::detect_wavelet;
-pub use score::{score, EcgScore, EcgVerdict};
+pub use score::{EcgScore, EcgVerdict, score};
 pub use spectrum::Periodogram;
-pub use sqi::{bas_sqi, beat_template, beat_template_window, k_sqi, p_sqi, BeatTemplate};
+pub use sqi::{BeatTemplate, bas_sqi, beat_template, beat_template_window, k_sqi, p_sqi};
 
 /// Supported sample-rate span. The strap's ECG rate is unknown, so every stage sizes its windows from
 /// `fs` in seconds rather than in samples; outside this span the detectors return no peaks. The upper
@@ -59,7 +61,10 @@ pub(crate) fn usable_rate(fs_hz: f64) -> bool {
 /// packet, a divide in a caller's decode); a detector that propagates them returns garbage indices or
 /// panics on a `partial_cmp`, so they are flattened once here and never again downstream.
 pub(crate) fn sanitized(samples: &[f64]) -> Vec<f64> {
-    samples.iter().map(|&v| if v.is_finite() { v } else { 0.0 }).collect()
+    samples
+        .iter()
+        .map(|&v| if v.is_finite() { v } else { 0.0 })
+        .collect()
 }
 
 /// Window length in samples for a duration in ms, at least `min`.
@@ -79,7 +84,12 @@ pub(crate) fn qt_end_ms(rr_ms: f64) -> f64 {
 /// Zero-phase band limit: a centred moving average whose first null sits at `lowpass_null_hz` keeps the
 /// low side, and subtracting a second centred average nulling at `highpass_null_hz` removes the slow
 /// side. Centred means no group delay to subtract back off any position measured on the result.
-pub(crate) fn band_limited(x: &[f64], fs_hz: f64, lowpass_null_hz: f64, highpass_null_hz: f64) -> Vec<f64> {
+pub(crate) fn band_limited(
+    x: &[f64],
+    fs_hz: f64,
+    lowpass_null_hz: f64,
+    highpass_null_hz: f64,
+) -> Vec<f64> {
     let lp_len = (fs_hz / lowpass_null_hz).round().max(1.0) as usize;
     let hp_len = (fs_hz / highpass_null_hz).round().max(3.0) as usize;
     let low = crate::signal::moving_average_centred(x, lp_len);

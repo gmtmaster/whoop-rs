@@ -22,7 +22,9 @@ impl Periodogram {
     pub fn new(x: &[f64]) -> Self {
         let n = x.len();
         if n < 2 {
-            return Periodogram { windowed: Vec::new() };
+            return Periodogram {
+                windowed: Vec::new(),
+            };
         }
         let (slope, intercept) = least_squares_line(x);
         let denom = (n - 1) as f64;
@@ -109,14 +111,19 @@ mod tests {
     use super::*;
 
     fn sine(n: usize, f: f64, amp: f64) -> Vec<f64> {
-        (0..n).map(|i| amp * (2.0 * PI * f * i as f64).sin()).collect()
+        (0..n)
+            .map(|i| amp * (2.0 * PI * f * i as f64).sin())
+            .collect()
     }
 
     #[test]
     fn a_pure_tone_peaks_at_its_own_frequency() {
         let p = Periodogram::new(&sine(2048, 0.1, 1.0));
         let on = p.power_at(0.1);
-        assert!(on > 1000.0 * p.power_at(0.2), "tone must dominate an empty part of the band");
+        assert!(
+            on > 1000.0 * p.power_at(0.2),
+            "tone must dominate an empty part of the band"
+        );
         assert!(on > p.power_at(0.1 + 4.0 * p.bin_width()));
     }
 
@@ -125,7 +132,10 @@ mod tests {
         let p = Periodogram::new(&sine(2048, 0.30, 1.0));
         let inside = p.band_power(0.28, 0.32);
         let outside = p.band_power(0.05, 0.09);
-        assert!(inside > 100.0 * outside, "inside {inside:e} outside {outside:e}");
+        assert!(
+            inside > 100.0 * outside,
+            "inside {inside:e} outside {outside:e}"
+        );
     }
 
     #[test]
@@ -133,7 +143,11 @@ mod tests {
         // The detrend is the whole reason baseline drift does not swamp basSQI.
         let ramp: Vec<f64> = (0..1024).map(|i| i as f64).collect();
         let p = Periodogram::new(&ramp);
-        assert!(p.band_power(0.001, 0.02) < 1e-12, "a pure ramp must be removed, got {}", p.band_power(0.001, 0.02));
+        assert!(
+            p.band_power(0.001, 0.02) < 1e-12,
+            "a pure ramp must be removed, got {}",
+            p.band_power(0.001, 0.02)
+        );
     }
 
     #[test]

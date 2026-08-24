@@ -110,11 +110,23 @@ mod tests {
     #[test]
     fn matches_reference_outputs() {
         let g = cosinor_age(30.0, 25.0, -1.5, 40.0, Sex::Unknown).unwrap();
-        assert!((g.cosinor_age_years - 40.4054333204).abs() < 1e-4, "generic {}", g.cosinor_age_years);
+        assert!(
+            (g.cosinor_age_years - 40.4054333204).abs() < 1e-4,
+            "generic {}",
+            g.cosinor_age_years
+        );
         let f = cosinor_age(30.0, 25.0, -1.5, 40.0, Sex::Female).unwrap();
-        assert!((f.cosinor_age_years - 39.6765236784).abs() < 1e-4, "female {}", f.cosinor_age_years);
+        assert!(
+            (f.cosinor_age_years - 39.6765236784).abs() < 1e-4,
+            "female {}",
+            f.cosinor_age_years
+        );
         let m = cosinor_age(30.0, 25.0, -1.5, 40.0, Sex::Male).unwrap();
-        assert!((m.cosinor_age_years - 43.4054735692).abs() < 1e-4, "male {}", m.cosinor_age_years);
+        assert!(
+            (m.cosinor_age_years - 43.4054735692).abs() < 1e-4,
+            "male {}",
+            m.cosinor_age_years
+        );
     }
 
     #[test]

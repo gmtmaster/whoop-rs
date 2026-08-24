@@ -20,7 +20,7 @@ use crate::ecg::{qt_end_ms, sanitized, usable_rate};
 use crate::stats::median;
 
 use super::evidence_fraction;
-use super::p_wave::{PR_GUARD_MS, P_SEARCH_MS};
+use super::p_wave::{P_SEARCH_MS, PR_GUARD_MS};
 
 /// The atrial band, and the in-band reference it is expressed as a share of. The reference starts at
 /// 1 Hz so residual baseline drift does not inflate the denominator, and stops at 30 Hz because above
@@ -95,7 +95,9 @@ pub fn atrial_band(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> AtrialBandEv
         }
         let rr_ms = (next - prev) as f64 / fs_hz * 1000.0;
         let start = prev + (qt_end_ms(rr_ms) / 1000.0 * fs_hz).round() as usize;
-        let Some(end) = next.checked_sub(p_onset) else { continue };
+        let Some(end) = next.checked_sub(p_onset) else {
+            continue;
+        };
         if end <= start || end - start < min_len {
             continue;
         }
@@ -110,7 +112,10 @@ pub fn atrial_band(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> AtrialBandEv
     }
 
     if ratios.len() < MIN_SEGMENTS {
-        let limit = AtrialBandLimit::TooFewSegments { have: ratios.len(), need: MIN_SEGMENTS };
+        let limit = AtrialBandLimit::TooFewSegments {
+            have: ratios.len(),
+            need: MIN_SEGMENTS,
+        };
         return AtrialBandEvidence::Indeterminate(limit);
     }
     AtrialBandEvidence::Measured(AtrialBand {
@@ -139,13 +144,22 @@ mod tests {
         let fs = 250.0;
         let (x, truth) = synthetic_ecg(fs, 40.0, 60.0, 1.0, 0.0, 1);
         let add = |hz: f64, amp: f64| -> Vec<f64> {
-            x.iter().enumerate().map(|(i, v)| v + amp * (2.0 * PI * hz * i as f64 / fs).sin()).collect()
+            x.iter()
+                .enumerate()
+                .map(|(i, v)| v + amp * (2.0 * PI * hz * i as f64 / fs).sin())
+                .collect()
         };
         let inside = measured(atrial_band(&add(6.0, 0.05), fs, &truth)).ratio;
         let outside = measured(atrial_band(&add(20.0, 0.05), fs, &truth)).ratio;
-        assert!(inside > 0.7, "a 6 Hz tone must dominate the band, got {inside:.3}");
+        assert!(
+            inside > 0.7,
+            "a 6 Hz tone must dominate the band, got {inside:.3}"
+        );
         assert!(outside < 0.2, "a 20 Hz tone must not, got {outside:.3}");
-        assert!(inside > 3.0 * outside, "inside {inside:.3} outside {outside:.3}");
+        assert!(
+            inside > 3.0 * outside,
+            "inside {inside:.3} outside {outside:.3}"
+        );
     }
 
     #[test]
@@ -153,9 +167,15 @@ mod tests {
         let fs = 250.0;
         let (x, truth) = synthetic_ecg(fs, 40.0, 60.0, 1.0, 0.01, 2);
         let m = measured(atrial_band(&x, fs, &truth));
-        assert!(m.segments >= MIN_SEGMENTS && m.segments < truth.len(), "{m:?}");
+        assert!(
+            m.segments >= MIN_SEGMENTS && m.segments < truth.len(),
+            "{m:?}"
+        );
         assert!(m.median_segment_ms >= TP_MIN_MS, "{m:?}");
-        assert!((0.0..=1.0).contains(&m.confidence) && (0.0..=1.0).contains(&m.ratio), "{m:?}");
+        assert!(
+            (0.0..=1.0).contains(&m.confidence) && (0.0..=1.0).contains(&m.ratio),
+            "{m:?}"
+        );
     }
 
     #[test]
@@ -204,7 +224,10 @@ mod tests {
         let base = measured(atrial_band(&x, fs, &truth)).ratio;
         for gain in [1e-3, 37.0, 5000.0] {
             let scaled: Vec<f64> = x.iter().map(|v| v * gain).collect();
-            assert!((measured(atrial_band(&scaled, fs, &truth)).ratio - base).abs() < 1e-9, "gain {gain}");
+            assert!(
+                (measured(atrial_band(&scaled, fs, &truth)).ratio - base).abs() < 1e-9,
+                "gain {gain}"
+            );
         }
     }
 }

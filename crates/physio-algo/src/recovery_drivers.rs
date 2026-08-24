@@ -7,9 +7,9 @@
 //! baseline that driver sits.
 
 use crate::recovery::{
-    score_of, z_score, RecoveryInput, RECOVERY_INDEX_SCALE_BPM_PER_HR, SKIN_TEMP_DEV_SCALE,
-    SLEEP_PERF_CENTER, SLEEP_PERF_SCALE, W_ACTIVITY_BALANCE, W_HRV, W_RECOVERY_INDEX, W_RESP, W_RHR,
-    W_SKIN_TEMP, W_SLEEP,
+    RECOVERY_INDEX_SCALE_BPM_PER_HR, RecoveryInput, SKIN_TEMP_DEV_SCALE, SLEEP_PERF_CENTER,
+    SLEEP_PERF_SCALE, W_ACTIVITY_BALANCE, W_HRV, W_RECOVERY_INDEX, W_RESP, W_RHR, W_SKIN_TEMP,
+    W_SLEEP, score_of, z_score,
 };
 
 /// Half-width (°C) of the skin-temp band that reads as typical, inclusive at both edges. Outside it
@@ -69,11 +69,7 @@ struct Term {
 /// Nearest whole value, ties toward +∞ — the whole points a row shows. NaN in, NaN out.
 fn round_half_up(x: f64) -> f64 {
     let floor = x.floor();
-    if x - floor >= 0.5 {
-        floor + 1.0
-    } else {
-        floor
-    }
+    if x - floor >= 0.5 { floor + 1.0 } else { floor }
 }
 
 /// Exact Shapley shares of the Charge swing, one per term, in the order `terms` holds them: each
@@ -147,13 +143,25 @@ pub fn driver_rows(input: &RecoveryInput) -> Vec<DriverRow> {
     }
     let mut terms: Vec<Term> = Vec::new();
     if let Some(b) = input.hrv_baseline {
-        terms.push(Term { kind: DriverKind::Hrv, z: z_score(input.hrv, b.mean, b.spread), w: W_HRV });
+        terms.push(Term {
+            kind: DriverKind::Hrv,
+            z: z_score(input.hrv, b.mean, b.spread),
+            w: W_HRV,
+        });
     }
     if let Some(b) = input.rhr_baseline {
-        terms.push(Term { kind: DriverKind::RestingHr, z: z_score(b.mean, input.rhr, b.spread), w: W_RHR });
+        terms.push(Term {
+            kind: DriverKind::RestingHr,
+            z: z_score(b.mean, input.rhr, b.spread),
+            w: W_RHR,
+        });
     }
     if let (Some(resp), Some(b)) = (input.resp, input.resp_baseline) {
-        terms.push(Term { kind: DriverKind::Respiratory, z: z_score(b.mean, resp, b.spread), w: W_RESP });
+        terms.push(Term {
+            kind: DriverKind::Respiratory,
+            z: z_score(b.mean, resp, b.spread),
+            w: W_RESP,
+        });
     }
     if let Some(sp) = input.sleep_perf {
         terms.push(Term {
@@ -192,12 +200,18 @@ pub fn driver_rows(input: &RecoveryInput) -> Vec<DriverRow> {
 
     let mut rows: Vec<DriverRow> = Vec::new();
     for kind in ROW_ORDER {
-        let Some(idx) = terms.iter().position(|t| t.kind == kind) else { continue };
+        let Some(idx) = terms.iter().position(|t| t.kind == kind) else {
+            continue;
+        };
         let verdict = match kind {
             DriverKind::SkinTemp => skin_temp_verdict(input.skin_temp_dev.unwrap_or(0.0)),
             _ => direction(terms[idx].z),
         };
-        rows.push(DriverRow { kind, delta_points: round_half_up(points[idx]), verdict });
+        rows.push(DriverRow {
+            kind,
+            delta_points: round_half_up(points[idx]),
+            verdict,
+        });
     }
     rows.sort_by(|a, b| {
         b.delta_points
@@ -215,7 +229,10 @@ mod tests {
 
     // DriverBaseline from a Gaussian sigma (spread is internal abs-dev units): spread = sigma / 1.253.
     fn baseline(mean: f64, sigma: f64) -> DriverBaseline {
-        DriverBaseline { mean, spread: sigma / 1.253 }
+        DriverBaseline {
+            mean,
+            spread: sigma / 1.253,
+        }
     }
 
     fn full_night() -> RecoveryInput {
@@ -296,11 +313,23 @@ mod tests {
         );
         // The score itself is pinned, which is what broke the old attribution.
         let score = crate::recovery::recovery(&input).expect("a usable baseline scores");
-        assert!(score > 99.9, "score {score} is not saturated, so this is the wrong fixture");
+        assert!(
+            score > 99.9,
+            "score {score} is not saturated, so this is the wrong fixture"
+        );
         // Not one present driver is off its baseline and silent.
         for r in &rows {
-            assert_ne!(r.verdict, DriverVerdict::Neutral, "{:?} read neutral", r.kind);
-            assert_ne!(r.delta_points, 0.0, "{:?} moved a saturated score by nothing", r.kind);
+            assert_ne!(
+                r.verdict,
+                DriverVerdict::Neutral,
+                "{:?} read neutral",
+                r.kind
+            );
+            assert_ne!(
+                r.delta_points, 0.0,
+                "{:?} moved a saturated score by nothing",
+                r.kind
+            );
         }
     }
 
@@ -308,7 +337,13 @@ mod tests {
     /// night, to within the half point per row that rounding costs.
     #[test]
     fn the_rows_sum_to_the_distance_from_an_all_baseline_night() {
-        for input in [full_night(), RecoveryInput { sleep_perf: None, ..full_night() }] {
+        for input in [
+            full_night(),
+            RecoveryInput {
+                sleep_perf: None,
+                ..full_night()
+            },
+        ] {
             let rows = driver_rows(&input);
             let swing = crate::recovery::recovery(&input).expect("scores") - score_of(0.0);
             let summed: f64 = rows.iter().map(|r| r.delta_points).sum();
@@ -333,11 +368,17 @@ mod tests {
     #[test]
     fn direction_flips_either_side_of_the_baseline_and_is_neutral_on_it() {
         let verdict = |rows: Vec<DriverRow>| {
-            rows.iter().find(|r| r.kind == DriverKind::Hrv).unwrap().verdict
+            rows.iter()
+                .find(|r| r.kind == DriverKind::Hrv)
+                .unwrap()
+                .verdict
         };
         assert_eq!(verdict(two_term(|i| i.hrv = 49.0)), DriverVerdict::Limiting);
         assert_eq!(verdict(two_term(|i| i.hrv = 50.0)), DriverVerdict::Neutral);
-        assert_eq!(verdict(two_term(|i| i.hrv = 51.0)), DriverVerdict::Supporting);
+        assert_eq!(
+            verdict(two_term(|i| i.hrv = 51.0)),
+            DriverVerdict::Supporting
+        );
     }
 
     // The skin-temp row for one nightly deviation, against a two-driver night.
@@ -378,10 +419,16 @@ mod tests {
             ("always Supporting", DriverVerdict::Supporting),
         ] {
             let wrong = SKIN_CASES.iter().filter(|(_, want)| null != *want).count();
-            assert!(wrong >= 4, "null verdict '{name}' disagreed on only {wrong} cases");
+            assert!(
+                wrong >= 4,
+                "null verdict '{name}' disagreed on only {wrong} cases"
+            );
         }
         // Every single-sided driver yields only the first three verdicts; the side is skin temp's.
-        for r in driver_rows(&full_night()).iter().filter(|r| r.kind != DriverKind::SkinTemp) {
+        for r in driver_rows(&full_night())
+            .iter()
+            .filter(|r| r.kind != DriverKind::SkinTemp)
+        {
             assert!(
                 matches!(
                     r.verdict,
@@ -404,14 +451,21 @@ mod tests {
         };
         assert_eq!(seen(0.20), (DriverVerdict::Neutral, 0.0));
         assert_eq!(seen(0.22), (DriverVerdict::Neutral, -1.0));
-        assert_eq!(seen(SKIN_TEMP_TYPICAL_BAND_C), (DriverVerdict::Neutral, -1.0));
+        assert_eq!(
+            seen(SKIN_TEMP_TYPICAL_BAND_C),
+            (DriverVerdict::Neutral, -1.0)
+        );
         assert_eq!(seen(-0.22), (DriverVerdict::Neutral, -1.0));
     }
 
     #[test]
     fn the_logistic_saturates_the_swing_at_the_range_ends() {
         let hrv_delta = |hrv: f64| {
-            two_term(|i| i.hrv = hrv).iter().find(|r| r.kind == DriverKind::Hrv).unwrap().delta_points
+            two_term(|i| i.hrv = hrv)
+                .iter()
+                .find(|r| r.kind == DriverKind::Hrv)
+                .unwrap()
+                .delta_points
         };
         assert_eq!(hrv_delta(5000.0), 42.0);
         assert_eq!(hrv_delta(-5000.0), -58.0);
@@ -419,7 +473,10 @@ mod tests {
         let zero_spread = driver_rows(&RecoveryInput {
             hrv: 60.0,
             rhr: 55.0,
-            hrv_baseline: Some(DriverBaseline { mean: 50.0, spread: 0.0 }),
+            hrv_baseline: Some(DriverBaseline {
+                mean: 50.0,
+                spread: 0.0,
+            }),
             rhr_baseline: Some(baseline(55.0, 3.0)),
             ..Default::default()
         });
@@ -432,7 +489,14 @@ mod tests {
         input.hrv_baseline_usable = false;
         assert!(driver_rows(&input).is_empty());
         // No driver at all is the other empty: nothing to break down.
-        assert!(driver_rows(&RecoveryInput { hrv: 60.0, rhr: 50.0, ..Default::default() }).is_empty());
+        assert!(
+            driver_rows(&RecoveryInput {
+                hrv: 60.0,
+                rhr: 50.0,
+                ..Default::default()
+            })
+            .is_empty()
+        );
     }
 
     #[test]

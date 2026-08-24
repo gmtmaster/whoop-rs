@@ -46,7 +46,10 @@ mod tests {
     /// Each share rounded on its own — the defect this module exists to remove.
     fn naive(parts: &[f64]) -> Vec<i64> {
         let total: f64 = parts.iter().sum();
-        parts.iter().map(|p| (p / total * 100.0).round() as i64).collect()
+        parts
+            .iter()
+            .map(|p| (p / total * 100.0).round() as i64)
+            .collect()
     }
 
     #[test]
@@ -59,7 +62,10 @@ mod tests {
     #[test]
     fn a_lone_measured_part_owns_the_split() {
         assert_eq!(whole_percentages(&[42.0]), Some(vec![100]));
-        assert_eq!(whole_percentages(&[0.0, 90.0, 0.0, 0.0]), Some(vec![0, 100, 0, 0]));
+        assert_eq!(
+            whole_percentages(&[0.0, 90.0, 0.0, 0.0]),
+            Some(vec![0, 100, 0, 0])
+        );
     }
 
     #[test]
@@ -89,7 +95,11 @@ mod tests {
         let split = whole_percentages(&parts).unwrap();
         for (i, p) in parts.iter().enumerate() {
             let exact = p / total * 100.0;
-            assert!((split[i] as f64 - exact).abs() < 1.0, "{i}: {} vs {exact}", split[i]);
+            assert!(
+                (split[i] as f64 - exact).abs() < 1.0,
+                "{i}: {} vs {exact}",
+                split[i]
+            );
         }
     }
 

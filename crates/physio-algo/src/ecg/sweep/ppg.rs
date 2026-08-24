@@ -16,7 +16,7 @@
 //! above a half, or a doubled rate reads as a partial success rather than as the wrong answer it is.
 
 use crate::ecg::agreement::matched_pairs;
-use crate::ecg::{beat_agreement, MAX_FS_HZ, MIN_FS_HZ};
+use crate::ecg::{MAX_FS_HZ, MIN_FS_HZ, beat_agreement};
 use crate::stats::linear_fit;
 
 /// Offsets searched, in ms. Wider than the plausible band on purpose: an offset found outside it is
@@ -34,7 +34,6 @@ pub const PTT_STEP_MS: f64 = 5.0;
 pub const PPG_JITTER_MS: f64 = 40.0;
 /// Fewest beats on either side for an alignment to mean anything.
 pub const PPG_MIN_BEATS: usize = 4;
-
 
 /// The 1/1024-second conversion the BLE heart-rate characteristic invites. An R-R series that has been
 /// through it once is off by this ratio, and so is any rate solved from it.
@@ -106,7 +105,11 @@ pub fn ppg_agreement(
             matched: g.matched,
             ecg_beats: ecg_peaks.len(),
             ppg_beats: shifted.len(),
-            match_fraction: if denom > 0.0 { g.matched as f64 / denom } else { 0.0 },
+            match_fraction: if denom > 0.0 {
+                g.matched as f64 / denom
+            } else {
+                0.0
+            },
             excess: g.excess,
             f1: g.f1,
             fs_solved_hz: solved,
@@ -118,7 +121,10 @@ pub fn ppg_agreement(
     // sharp maximum. Taking the first of them would report the earliest offset that happens to work,
     // which is systematically early by half the jitter window; the middle of the plateau is the fitted
     // mean transit time the alignment is actually claiming.
-    let best = scored.iter().map(|a| a.excess).fold(f64::NEG_INFINITY, f64::max);
+    let best = scored
+        .iter()
+        .map(|a| a.excess)
+        .fold(f64::NEG_INFINITY, f64::max);
     let tied: Vec<&PpgAgreement> = scored.iter().filter(|a| a.excess >= best - 1e-12).collect();
     tied.get(tied.len() / 2).map(|a| **a)
 }
@@ -180,10 +186,16 @@ pub fn suspected_unit_error(fs_solved: f64, rates: &[f64], tol: f64) -> Option<U
             continue;
         }
         if (fs_solved - r * BLE_RR_SCALE).abs() / r <= tol {
-            return Some(UnitErrorSuspicion { true_fs_hz: r, rr_reported_long: true });
+            return Some(UnitErrorSuspicion {
+                true_fs_hz: r,
+                rr_reported_long: true,
+            });
         }
         if (fs_solved - r / BLE_RR_SCALE).abs() / r <= tol {
-            return Some(UnitErrorSuspicion { true_fs_hz: r, rr_reported_long: false });
+            return Some(UnitErrorSuspicion {
+                true_fs_hz: r,
+                rr_reported_long: false,
+            });
         }
     }
     None
@@ -202,19 +214,31 @@ mod tests {
     fn a_true_rate_aligns_at_the_transit_time_and_a_wrong_one_does_not() {
         let fs = 512.0;
         let rr_ms = 900.0;
-        let peaks: Vec<usize> = (0..30).map(|k| (k as f64 * rr_ms / 1000.0 * fs) as usize + 100).collect();
+        let peaks: Vec<usize> = (0..30)
+            .map(|k| (k as f64 * rr_ms / 1000.0 * fs) as usize + 100)
+            .collect();
         let span = 30 * (rr_ms / 1000.0 * fs) as usize + 500;
         let ppg = beat_times(30, rr_ms, 100.0 / fs * 1000.0 + 220.0);
 
         let right = ppg_agreement(&peaks, span, fs, &ppg).unwrap();
-        assert!((right.offset_ms - 220.0).abs() <= 2.0 * PTT_STEP_MS, "fitted PTT {}", right.offset_ms);
-        assert!(right.offset_plausible && right.match_fraction > 0.95, "{right:?}");
+        assert!(
+            (right.offset_ms - 220.0).abs() <= 2.0 * PTT_STEP_MS,
+            "fitted PTT {}",
+            right.offset_ms
+        );
+        assert!(
+            right.offset_plausible && right.match_fraction > 0.95,
+            "{right:?}"
+        );
 
         // Half the rate maps every ECG peak onto every OTHER optical beat, exactly and with a perfect
         // linear fit, so the match fraction lands on exactly 1/2 rather than collapsing. A factor-of-k
         // rate error scores 1/k, which is why the gate has to sit above a half - see the module note.
         let wrong = ppg_agreement(&peaks, span, fs / 2.0, &ppg).unwrap();
-        assert!((wrong.match_fraction - 0.5).abs() < 0.05, "half rate matches every other beat: {wrong:?}");
+        assert!(
+            (wrong.match_fraction - 0.5).abs() < 0.05,
+            "half rate matches every other beat: {wrong:?}"
+        );
         assert!(wrong.excess < right.excess * 0.75);
     }
 
@@ -222,7 +246,9 @@ mod tests {
     fn the_rate_solves_out_of_the_matched_pairs() {
         let fs = 256.0;
         let rr_ms = 750.0;
-        let peaks: Vec<usize> = (0..25).map(|k| (k as f64 * rr_ms / 1000.0 * fs) as usize).collect();
+        let peaks: Vec<usize> = (0..25)
+            .map(|k| (k as f64 * rr_ms / 1000.0 * fs) as usize)
+            .collect();
         let ppg = beat_times(25, rr_ms, 200.0);
         let a = ppg_agreement(&peaks, 6000, fs, &ppg).unwrap();
         let solved = a.fs_solved_hz.unwrap();
@@ -230,10 +256,24 @@ mod tests {
         assert!(a.fs_fit_r.unwrap() > 0.999);
         // A rhythm that varies beat to beat still solves, because the fit spans the whole window rather
         // than comparing two medians over two different beat sets.
-        let varied: Vec<f64> = (0..25).map(|k| 200.0 + (0..k).map(|j| rr_ms + 60.0 * ((j % 3) as f64 - 1.0)).sum::<f64>()).collect();
-        let vpeaks: Vec<usize> = varied.iter().map(|t| ((t - 200.0) / 1000.0 * fs).round() as usize).collect();
+        let varied: Vec<f64> = (0..25)
+            .map(|k| {
+                200.0
+                    + (0..k)
+                        .map(|j| rr_ms + 60.0 * ((j % 3) as f64 - 1.0))
+                        .sum::<f64>()
+            })
+            .collect();
+        let vpeaks: Vec<usize> = varied
+            .iter()
+            .map(|t| ((t - 200.0) / 1000.0 * fs).round() as usize)
+            .collect();
         let b = ppg_agreement(&vpeaks, 6000, fs, &varied).unwrap();
-        assert!((b.fs_solved_hz.unwrap() - fs).abs() < 1.0, "{:?}", b.fs_solved_hz);
+        assert!(
+            (b.fs_solved_hz.unwrap() - fs).abs() < 1.0,
+            "{:?}",
+            b.fs_solved_hz
+        );
     }
 
     #[test]

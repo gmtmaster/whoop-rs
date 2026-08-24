@@ -1,0 +1,11 @@
+[package]
+name = "cloud-map"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Maps decoded whoop-protocol records onto noop-backend's protocol-free /api/v1/sync/batch contract, and computes the stable cloud sourceId. No BLE, no async, no uniffi - a plain Rust crate any client (whoop-ffi, whoopctl, a future desktop bridge) can call directly."
+
+[dependencies]
+whoop-protocol.workspace = true
+
+[dev-dependencies]

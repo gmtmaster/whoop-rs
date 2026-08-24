@@ -64,7 +64,12 @@ pub fn freq_domain(rr_ms: &[u16]) -> Option<HrvBands> {
         Some(l) => band_power(&times, &y, VLF_LOW_HZ, LF_LOW_HZ) + l + hf,
         None => hf,
     };
-    Some(HrvBands { lf, hf, lfhf, total_power })
+    Some(HrvBands {
+        lf,
+        hf,
+        lfhf,
+        total_power,
+    })
 }
 
 /// Trapezoidal integral of the Lomb-Scargle power across `[f_low, f_high]`, stepped by [`FREQ_STEP_HZ`].
@@ -112,8 +117,16 @@ fn lomb_scargle_power(times: &[f64], y: &[f64], freq_hz: f64, variance: f64) -> 
         s_term += y[i] * s;
         s_den += s * s;
     }
-    let cos_part = if c_den > 0.0 { c_term * c_term / c_den } else { 0.0 };
-    let sin_part = if s_den > 0.0 { s_term * s_term / s_den } else { 0.0 };
+    let cos_part = if c_den > 0.0 {
+        c_term * c_term / c_den
+    } else {
+        0.0
+    };
+    let sin_part = if s_den > 0.0 {
+        s_term * s_term / s_den
+    } else {
+        0.0
+    };
     (cos_part + sin_part) / (2.0 * variance)
 }
 
@@ -166,7 +179,8 @@ mod tests {
         let mut rr = Vec::new();
         let mut t = 0.0;
         while t < secs {
-            let ms = 900.0 + lf_amp * (2.0 * PI * 0.10 * t).sin() + hf_amp * (2.0 * PI * 0.25 * t).sin();
+            let ms =
+                900.0 + lf_amp * (2.0 * PI * 0.10 * t).sin() + hf_amp * (2.0 * PI * 0.25 * t).sin();
             let v = ms.round() as u16;
             rr.push(v);
             t += v as f64 / 1000.0;
@@ -175,7 +189,13 @@ mod tests {
     }
 
     /// `(lf_amp, hf_amp)` pairs planting LF/HF ratios of 1, 4, 1/4, 16 and 1/16 over a 600 s tachogram.
-    const TONE_PAIRS: [(f64, f64); 5] = [(40.0, 40.0), (60.0, 30.0), (30.0, 60.0), (80.0, 20.0), (20.0, 80.0)];
+    const TONE_PAIRS: [(f64, f64); 5] = [
+        (40.0, 40.0),
+        (60.0, 30.0),
+        (30.0, 60.0),
+        (80.0, 20.0),
+        (20.0, 80.0),
+    ];
     /// Worst measured relative error over `TONE_PAIRS` is 5.50%, at the planted ratio of 16.
     const LFHF_REL_TOL: f64 = 0.08;
 
@@ -196,7 +216,11 @@ mod tests {
     /// Lomb-Scargle normalisation cancels out of, so it is comparable to a planted truth.
     #[test]
     fn lfhf_recovers_a_planted_power_ratio() {
-        assert!(ratio_misses(&freq_domain).is_empty(), "{:?}", ratio_misses(&freq_domain));
+        assert!(
+            ratio_misses(&freq_domain).is_empty(),
+            "{:?}",
+            ratio_misses(&freq_domain)
+        );
     }
 
     /// The null arm. A scorer that keeps the shipped span/beat gating but returns fixed magnitudes
@@ -219,10 +243,21 @@ mod tests {
         // And it recovers nothing.
         assert_eq!(ratio_misses(&gated_constant).len(), TONE_PAIRS.len());
         for lfhf in [0.0625f64, 0.25, 1.0, 4.0, 16.0] {
-            let c = HrvBands { lf: Some(lfhf), hf: 1.0, lfhf: Some(lfhf), total_power: 2.0 + lfhf };
-            assert!(!ratio_misses(&|_| Some(c)).is_empty(), "constant lfhf {lfhf} passed");
+            let c = HrvBands {
+                lf: Some(lfhf),
+                hf: 1.0,
+                lfhf: Some(lfhf),
+                total_power: 2.0 + lfhf,
+            };
+            assert!(
+                !ratio_misses(&|_| Some(c)).is_empty(),
+                "constant lfhf {lfhf} passed"
+            );
         }
-        assert!(!ratio_misses(&|_| None).is_empty(), "a refusing scorer passed the ratio sweep");
+        assert!(
+            !ratio_misses(&|_| None).is_empty(),
+            "a refusing scorer passed the ratio sweep"
+        );
     }
 
     /// A tone in one band stays in that band: a lone LF tone leaves HF three orders down, and the
@@ -230,9 +265,15 @@ mod tests {
     #[test]
     fn a_lone_tone_lands_in_its_own_band() {
         let lf_only = freq_domain(&two_tone(600.0, 40.0, 0.0)).unwrap();
-        assert!(lf_only.lf.unwrap() / lf_only.hf > 1000.0, "lf-only leaked: {lf_only:?}");
+        assert!(
+            lf_only.lf.unwrap() / lf_only.hf > 1000.0,
+            "lf-only leaked: {lf_only:?}"
+        );
         let hf_only = freq_domain(&two_tone(600.0, 0.0, 40.0)).unwrap();
-        assert!(hf_only.hf / hf_only.lf.unwrap() > 1000.0, "hf-only leaked: {hf_only:?}");
+        assert!(
+            hf_only.hf / hf_only.lf.unwrap() > 1000.0,
+            "hf-only leaked: {hf_only:?}"
+        );
     }
 
     /// Recorded defect, not a desired property: the band integrals are normalised Lomb-Scargle power,
@@ -241,9 +282,16 @@ mod tests {
     fn band_powers_scale_with_record_length_and_are_not_ms_squared() {
         let short = freq_domain(&two_tone(600.0, 40.0, 40.0)).unwrap();
         let long = freq_domain(&two_tone(1200.0, 40.0, 40.0)).unwrap();
-        assert!((long.total_power / short.total_power - 2.0).abs() < 1e-3, "{short:?} vs {long:?}");
+        assert!(
+            (long.total_power / short.total_power - 2.0).abs() < 1e-3,
+            "{short:?} vs {long:?}"
+        );
         // A 40 ms tone carries 800 ms^2; the reported HF is ~1000x below that.
-        assert!(short.hf < 1.0 && 800.0 / short.hf > 900.0, "hf {} is not ~1000x under 800", short.hf);
+        assert!(
+            short.hf < 1.0 && 800.0 / short.hf > 900.0,
+            "hf {} is not ~1000x under 800",
+            short.hf
+        );
         // The ratio is unaffected, which is why the gate above can use it.
         assert!((long.lfhf.unwrap() / short.lfhf.unwrap() - 1.0).abs() < 0.01);
     }

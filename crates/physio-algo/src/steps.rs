@@ -35,7 +35,6 @@ pub fn steps_in_window(samples: &[StepSample]) -> Option<u32> {
     if total > 0 { Some(total) } else { None }
 }
 
-
 // ── One steps model, both families ────────────────────────────────────────────────────────────────
 //
 // A 5.0/MG counts motion TICKS and a 4.0 has no counter at all, only movement volume. Both map to
@@ -68,9 +67,15 @@ pub struct StepsCfg {
 
 impl StepsCfg {
     /// Gravity-delta volume: a day must move at least one whole unit to say anything.
-    pub const GEN4: StepsCfg = StepsCfg { min_raw_for_fit: 1.0, max_daily_steps: 60_000 };
+    pub const GEN4: StepsCfg = StepsCfg {
+        min_raw_for_fit: 1.0,
+        max_daily_steps: 60_000,
+    };
     /// Motion ticks. One tick is already a movement event, so the floor is one tick.
-    pub const GEN5: StepsCfg = StepsCfg { min_raw_for_fit: 1.0, max_daily_steps: 60_000 };
+    pub const GEN5: StepsCfg = StepsCfg {
+        min_raw_for_fit: 1.0,
+        max_daily_steps: 60_000,
+    };
 }
 
 /// Fewest days carrying both a raw signal and a reference count before an auto-fit is offered. ONE:
@@ -80,7 +85,6 @@ pub const MIN_CALIBRATION_DAYS: usize = 1;
 /// Day count at which confidence saturates toward 1.
 pub const GOOD_CALIBRATION_DAYS: f64 = 14.0;
 
-
 /// Where a steps figure's `k` came from, as numbers only. The frontend words it; nothing here is a
 /// string, so a locale change can never move a coefficient.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,7 +92,11 @@ pub enum StepsState {
     /// The user asserted `k` by hand.
     Manual { coefficient: f64 },
     /// Fitted from `days` days that carried both a raw signal and a reference count.
-    Fitted { coefficient: f64, days: u32, confidence: f64 },
+    Fitted {
+        coefficient: f64,
+        days: u32,
+        confidence: f64,
+    },
     /// Nothing usable to fit from yet. `have` is the count of usable days seen.
     Uncalibrated { have: u32, need: u32 },
 }
@@ -97,7 +105,9 @@ impl StepsState {
     /// The `k` in force, or `None` when uncalibrated.
     pub fn coefficient(&self) -> Option<f64> {
         match self {
-            StepsState::Manual { coefficient } | StepsState::Fitted { coefficient, .. } => Some(*coefficient),
+            StepsState::Manual { coefficient } | StepsState::Fitted { coefficient, .. } => {
+                Some(*coefficient)
+            }
             StepsState::Uncalibrated { .. } => None,
         }
     }
@@ -115,7 +125,9 @@ impl StepsState {
 /// The calibration state for a strap, from its overlapping days and any hand-set `k`.
 pub fn state(points: &[StepsPoint], manual: Option<f64>, cfg: StepsCfg) -> StepsState {
     match calibrate(points, manual, cfg) {
-        Some(c) if c.manual => StepsState::Manual { coefficient: c.coefficient },
+        Some(c) if c.manual => StepsState::Manual {
+            coefficient: c.coefficient,
+        },
         Some(c) => StepsState::Fitted {
             coefficient: c.coefficient,
             days: c.sample_days,
@@ -130,12 +142,19 @@ pub fn state(points: &[StepsPoint], manual: Option<f64>, cfg: StepsCfg) -> Steps
 
 /// Days that could enter a fit: enough movement to be worth reading, and a reference count to fit to.
 pub fn usable_days(points: &[StepsPoint], cfg: StepsCfg) -> u32 {
-    points.iter().filter(|p| p.raw >= cfg.min_raw_for_fit && p.steps > 0.0).count() as u32
+    points
+        .iter()
+        .filter(|p| p.raw >= cfg.min_raw_for_fit && p.steps > 0.0)
+        .count() as u32
 }
 
 /// Fit `k` as a raw-weighted median of per-day `steps / raw` ratios, so one odd day cannot drag it
 /// and a busy day votes harder than a near-still one. A positive `manual` short-circuits the fit.
-pub fn calibrate(points: &[StepsPoint], manual: Option<f64>, cfg: StepsCfg) -> Option<StepsCalibration> {
+pub fn calibrate(
+    points: &[StepsPoint],
+    manual: Option<f64>,
+    cfg: StepsCfg,
+) -> Option<StepsCalibration> {
     if let Some(k) = manual {
         if k > 0.0 {
             return Some(StepsCalibration {
@@ -199,7 +218,11 @@ pub fn weighted_median(xs: &[f64], weights: &[f64]) -> f64 {
         return crate::stats::median(xs);
     }
     let mut order: Vec<usize> = (0..xs.len()).collect();
-    order.sort_by(|a, b| xs[*a].partial_cmp(&xs[*b]).unwrap_or(std::cmp::Ordering::Equal));
+    order.sort_by(|a, b| {
+        xs[*a]
+            .partial_cmp(&xs[*b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let half = total / 2.0;
     let mut cum = 0.0;
     for pos in 0..order.len() {
@@ -209,7 +232,11 @@ pub fn weighted_median(xs: &[f64], weights: &[f64]) -> f64 {
             return xs[idx];
         }
         if cum == half {
-            let next = if pos + 1 < order.len() { order[pos + 1] } else { idx };
+            let next = if pos + 1 < order.len() {
+                order[pos + 1]
+            } else {
+                idx
+            };
             return (xs[idx] + xs[next]) / 2.0;
         }
     }
@@ -221,17 +248,27 @@ mod tests {
     use super::*;
 
     fn step(ts: i64, counter: u16) -> StepSample {
-        StepSample { ts, counter, activity_class: None }
+        StepSample {
+            ts,
+            counter,
+            activity_class: None,
+        }
     }
 
     #[test]
     fn sums_positive_consecutive_tick_deltas() {
-        assert_eq!(steps_in_window(&[step(0, 100), step(60, 150), step(120, 220)]), Some(120));
+        assert_eq!(
+            steps_in_window(&[step(0, 100), step(60, 150), step(120, 220)]),
+            Some(120)
+        );
     }
 
     #[test]
     fn sorts_unordered_input() {
-        assert_eq!(steps_in_window(&[step(120, 220), step(0, 100), step(60, 150)]), Some(120));
+        assert_eq!(
+            steps_in_window(&[step(120, 220), step(0, 100), step(60, 150)]),
+            Some(120)
+        );
     }
 
     /// Two stand-ins a bare "returns 120" gate would accept: counting samples, and subtracting the
@@ -241,19 +278,33 @@ mod tests {
     fn a_sample_count_and_a_first_to_last_subtraction_both_fail_the_real_series() {
         let clean = [step(0, 100), step(60, 150), step(120, 220)];
         let wrapped = [step(0, 65_500), step(60, 20), step(120, 80)];
-        let rebooted = [step(0, 100), step(60, 140), step(120, 5000), step(180, 5030)];
+        let rebooted = [
+            step(0, 100),
+            step(60, 140),
+            step(120, 5000),
+            step(180, 5030),
+        ];
 
         let count_scorer = |s: &[StepSample]| Some(s.len() as u32);
-        let span_scorer = |s: &[StepSample]| Some(s[s.len() - 1].counter.wrapping_sub(s[0].counter) as u32);
+        let span_scorer =
+            |s: &[StepSample]| Some(s[s.len() - 1].counter.wrapping_sub(s[0].counter) as u32);
 
         for series in [clean.as_slice(), wrapped.as_slice(), rebooted.as_slice()] {
-            assert_ne!(steps_in_window(series), count_scorer(series), "a sample count is not a tick total");
+            assert_ne!(
+                steps_in_window(series),
+                count_scorer(series),
+                "a sample count is not a tick total"
+            );
         }
         // The span scorer only survives while nothing crosses a boundary.
         assert_eq!(steps_in_window(&clean), span_scorer(&clean));
         assert_eq!(steps_in_window(&wrapped), span_scorer(&wrapped));
         assert_eq!(steps_in_window(&rebooted), Some(70));
-        assert_eq!(span_scorer(&rebooted), Some(4930), "a reboot jump billed as motion");
+        assert_eq!(
+            span_scorer(&rebooted),
+            Some(4930),
+            "a reboot jump billed as motion"
+        );
     }
 
     /// What this module does NOT measure: the caller's `stepTicksPerStep` divisor. Every figure here
@@ -261,7 +312,10 @@ mod tests {
     #[test]
     fn nothing_here_converts_ticks_to_steps() {
         let ticks = steps_in_window(&[step(0, 0), step(60, 400), step(120, 800)]).unwrap();
-        assert_eq!(ticks, 800, "the return value is ticks, before any per-user calibration");
+        assert_eq!(
+            ticks, 800,
+            "the return value is ticks, before any per-user calibration"
+        );
         // Two plausible divisors give two step counts from the same ticks; neither is checked here.
         assert_eq!(ticks / 2, 400);
         assert_eq!(ticks / 4, 200);
@@ -270,7 +324,10 @@ mod tests {
     #[test]
     fn handles_u16_wraparound() {
         // 65500 -> 20 wraps: wrapping_sub = 56; then 20 -> 80 => 60. Total 116.
-        assert_eq!(steps_in_window(&[step(0, 65500), step(60, 20), step(120, 80)]), Some(116));
+        assert_eq!(
+            steps_in_window(&[step(0, 65500), step(60, 20), step(120, 80)]),
+            Some(116)
+        );
     }
 
     #[test]
@@ -281,12 +338,23 @@ mod tests {
 
     #[test]
     fn no_forward_movement_is_null() {
-        assert_eq!(steps_in_window(&[step(0, 500), step(60, 500), step(120, 500)]), None);
+        assert_eq!(
+            steps_in_window(&[step(0, 500), step(60, 500), step(120, 500)]),
+            None
+        );
     }
 
     #[test]
     fn drops_big_gap_delta_as_boundary() {
-        assert_eq!(steps_in_window(&[step(0, 100), step(60, 140), step(120, 5000), step(180, 5030)]), Some(70));
+        assert_eq!(
+            steps_in_window(&[
+                step(0, 100),
+                step(60, 140),
+                step(120, 5000),
+                step(180, 5030)
+            ]),
+            Some(70)
+        );
     }
 
     #[test]
@@ -328,8 +396,15 @@ mod tests {
         let cal = calibrate(&one, None, StepsCfg::GEN4).unwrap();
         assert_eq!(cal.coefficient, 5.0);
         assert_eq!(cal.sample_days, 1);
-        assert!((0.5..0.6).contains(&cal.confidence), "one day: {}", cal.confidence);
-        assert!(calibrate(&[], None, StepsCfg::GEN4).is_none(), "no days fits nothing");
+        assert!(
+            (0.5..0.6).contains(&cal.confidence),
+            "one day: {}",
+            cal.confidence
+        );
+        assert!(
+            calibrate(&[], None, StepsCfg::GEN4).is_none(),
+            "no days fits nothing"
+        );
     }
 
     #[test]
@@ -339,7 +414,9 @@ mod tests {
             StepsState::Manual { coefficient: 7.5 },
         );
         match state(&[pt(100.0, 500.0)], None, StepsCfg::GEN4) {
-            StepsState::Fitted { coefficient, days, .. } => {
+            StepsState::Fitted {
+                coefficient, days, ..
+            } => {
                 assert_eq!((coefficient, days), (5.0, 1));
             }
             other => panic!("expected Fitted, got {other:?}"),
@@ -358,23 +435,41 @@ mod tests {
     fn the_fit_is_weighted_by_raw_so_a_still_day_cannot_drag_it() {
         let points = [pt(10.0, 100.0), pt(1000.0, 5000.0), pt(1000.0, 5000.0)];
         let cal = calibrate(&points, None, StepsCfg::GEN4).unwrap();
-        assert_eq!(cal.coefficient, 5.0, "the two busy days at 5.0 outweigh the still day at 10.0");
+        assert_eq!(
+            cal.coefficient, 5.0,
+            "the two busy days at 5.0 outweigh the still day at 10.0"
+        );
     }
 
     #[test]
     fn a_day_below_the_family_floor_never_enters_the_fit_or_produces_an_estimate() {
-        let points = [pt(0.5, 900.0), pt(100.0, 500.0), pt(200.0, 1000.0), pt(300.0, 1500.0)];
+        let points = [
+            pt(0.5, 900.0),
+            pt(100.0, 500.0),
+            pt(200.0, 1000.0),
+            pt(300.0, 1500.0),
+        ];
         let cal = calibrate(&points, None, StepsCfg::GEN4).unwrap();
         assert_eq!(cal.sample_days, 3, "the sub-floor day is excluded");
         assert_eq!(cal.coefficient, 5.0);
-        assert_eq!(estimate(0.5, &cal, StepsCfg::GEN4), None, "too still to say, not zero");
+        assert_eq!(
+            estimate(0.5, &cal, StepsCfg::GEN4),
+            None,
+            "too still to say, not zero"
+        );
     }
 
     #[test]
     fn confidence_rises_with_days_and_falls_with_spread() {
-        let tight: Vec<StepsPoint> = (1..=14).map(|i| pt(100.0 * i as f64, 500.0 * i as f64)).collect();
+        let tight: Vec<StepsPoint> = (1..=14)
+            .map(|i| pt(100.0 * i as f64, 500.0 * i as f64))
+            .collect();
         let tight_cal = calibrate(&tight, None, StepsCfg::GEN4).unwrap();
-        assert!(tight_cal.confidence > 0.99, "14 days on an exact line: {}", tight_cal.confidence);
+        assert!(
+            tight_cal.confidence > 0.99,
+            "14 days on an exact line: {}",
+            tight_cal.confidence
+        );
 
         let noisy = [pt(100.0, 200.0), pt(100.0, 500.0), pt(100.0, 1500.0)];
         let noisy_cal = calibrate(&noisy, None, StepsCfg::GEN4).unwrap();
@@ -383,9 +478,17 @@ mod tests {
 
     #[test]
     fn an_estimate_is_the_line_through_the_origin_and_is_clamped() {
-        let cal = StepsCalibration { coefficient: 5.0, sample_days: 5, confidence: 1.0, manual: false };
+        let cal = StepsCalibration {
+            coefficient: 5.0,
+            sample_days: 5,
+            confidence: 1.0,
+            manual: false,
+        };
         assert_eq!(estimate(1000.0, &cal, StepsCfg::GEN4), Some(5000));
-        assert_eq!(estimate(1_000_000.0, &cal, StepsCfg::GEN4), Some(StepsCfg::GEN4.max_daily_steps));
+        assert_eq!(
+            estimate(1_000_000.0, &cal, StepsCfg::GEN4),
+            Some(StepsCfg::GEN4.max_daily_steps)
+        );
     }
 
     /// The reason this module is shared: a 5.0's ticks and a 4.0's motion volume run the SAME line.
@@ -396,7 +499,10 @@ mod tests {
         let g4 = calibrate(&points, None, StepsCfg::GEN4).unwrap();
         let g5 = calibrate(&points, None, StepsCfg::GEN5).unwrap();
         assert_eq!(g4.coefficient, g5.coefficient);
-        assert_eq!(estimate(1500.0, &g4, StepsCfg::GEN4), estimate(1500.0, &g5, StepsCfg::GEN5));
+        assert_eq!(
+            estimate(1500.0, &g4, StepsCfg::GEN4),
+            estimate(1500.0, &g5, StepsCfg::GEN5)
+        );
     }
 
     /// A 5.0 whose divisor is the shipped 1.0 default reads its raw tick count as its step count.
@@ -410,7 +516,11 @@ mod tests {
     #[test]
     fn weighted_median_matches_the_plain_median_at_equal_weights() {
         let xs = [1.0, 2.0, 3.0, 4.0];
-        assert_eq!(weighted_median(&xs, &[1.0; 4]), 2.5, "even count averages the middle pair");
+        assert_eq!(
+            weighted_median(&xs, &[1.0; 4]),
+            2.5,
+            "even count averages the middle pair"
+        );
         let odd = [1.0, 2.0, 3.0];
         assert_eq!(weighted_median(&odd, &[1.0; 3]), 2.0);
     }

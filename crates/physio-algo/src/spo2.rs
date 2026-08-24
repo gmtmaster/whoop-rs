@@ -76,7 +76,10 @@ impl Spo2 {
     /// (`[start, end]` inclusive, unix seconds). A sample counts when its `ts` lies inside any span; the
     /// means truncate toward zero (sum/kept). `None` when either input is empty or no sample landed in-span.
     /// Raw ADC only, never a calibrated percent.
-    pub fn nightly_raw_means(spans: &[(i64, i64)], samples: &[(i64, i32, i32)]) -> Option<(i32, i32)> {
+    pub fn nightly_raw_means(
+        spans: &[(i64, i64)],
+        samples: &[(i64, i32, i32)],
+    ) -> Option<(i32, i32)> {
         if spans.is_empty() || samples.is_empty() {
             return None;
         }
@@ -106,13 +109,19 @@ impl Spo2 {
             recent_nightly
         };
         if window.len() < MIN_NIGHTS {
-            return RollingReading { pct: None, calibrating_nights: Some(window.len()) };
+            return RollingReading {
+                pct: None,
+                calibrating_nights: Some(window.len()),
+            };
         }
         let offset = ANCHOR - median(window);
         let recent_count = RECENT_NIGHTS.min(window.len());
         let recent = median(&window[window.len() - recent_count..]);
         let clamped = (recent + offset).clamp(ROLLING_CLAMP_LOW, ROLLING_CLAMP_HIGH);
-        RollingReading { pct: Some((clamped + 0.5).floor()), calibrating_nights: None }
+        RollingReading {
+            pct: Some((clamped + 0.5).floor()),
+            calibrating_nights: None,
+        }
     }
 }
 
@@ -159,7 +168,11 @@ mod tests {
             red[i] += (i % 3) as f64;
             ir[i] += (i % 2) as f64;
         }
-        assert_eq!(Spo2::from_paired(&red, &ir), None, "a baseline channel must not yield a percent");
+        assert_eq!(
+            Spo2::from_paired(&red, &ir),
+            None,
+            "a baseline channel must not yield a percent"
+        );
     }
 
     /// Fraction of the eligible 30 s windows that carry enough AC to score - what
@@ -194,9 +207,16 @@ mod tests {
                 red.push(520.0 + 6.0 * beat);
                 ir.push(590.0 + 12.0 * beat);
             }
-            assert_eq!(pulsatile_fraction(&red, &ir), (60, 60), "{bpm} bpm lost windows");
+            assert_eq!(
+                pulsatile_fraction(&red, &ir),
+                (60, 60),
+                "{bpm} bpm lost windows"
+            );
             let v = Spo2::from_paired(&red, &ir).unwrap_or_else(|| panic!("{bpm} bpm must score"));
-            assert!((v - expected).abs() < 1e-9, "{bpm} bpm got {v}, want {expected}");
+            assert!(
+                (v - expected).abs() < 1e-9,
+                "{bpm} bpm got {v}, want {expected}"
+            );
         }
     }
 
@@ -216,13 +236,22 @@ mod tests {
         let (survived, eligible) = pulsatile_fraction(&red, &ir);
         assert_eq!((survived, eligible), (102, 1420));
         let frac = survived as f64 / eligible as f64;
-        assert!(frac < MIN_PULSATILE_FRACTION, "{frac} is not under the gate");
-        assert_eq!(Spo2::from_paired(&red, &ir), None, "a slow level channel must not yield a percent");
+        assert!(
+            frac < MIN_PULSATILE_FRACTION,
+            "{frac} is not under the gate"
+        );
+        assert_eq!(
+            Spo2::from_paired(&red, &ir),
+            None,
+            "a slow level channel must not yield a percent"
+        );
     }
 
     /// A 20-sample window with DC = `dc` and p95−p5 amplitude ≈ `ac` (half low, half high).
     fn win(dc: f64, ac: f64) -> Vec<f64> {
-        std::iter::repeat_n(dc - ac / 2.0, 10).chain(std::iter::repeat_n(dc + ac / 2.0, 10)).collect()
+        std::iter::repeat_n(dc - ac / 2.0, 10)
+            .chain(std::iter::repeat_n(dc + ac / 2.0, 10))
+            .collect()
     }
 
     /// A window at ratio-of-ratios `r`, with both DC at 100 and the IR AC/DC pinned at 0.04.
@@ -232,8 +261,14 @@ mod tests {
 
     /// `(R, percent)` walking the whole unclamped span of the curve. Two points already fix a line, so
     /// these are literals, not `CURVE_A - CURVE_B * r` recomputed, so a moved constant must fail here.
-    const CURVE_POINTS: [(f64, f64); 6] =
-        [(0.6, 95.0), (0.8, 90.0), (1.0, 85.0), (1.2, 80.0), (1.4, 75.0), (1.6, 70.0)];
+    const CURVE_POINTS: [(f64, f64); 6] = [
+        (0.6, 95.0),
+        (0.8, 90.0),
+        (1.0, 85.0),
+        (1.2, 80.0),
+        (1.4, 75.0),
+        (1.6, 70.0),
+    ];
 
     /// Points of the walk a scorer of R misses. Empty = it reproduces the whole curve.
     fn walk_misses(scorer: &dyn Fn(f64) -> Option<f64>) -> Vec<(f64, Option<f64>)> {
@@ -249,7 +284,11 @@ mod tests {
     /// The curve is a line of intercept 110 and slope -25 in R, walked at six ratios rather than one.
     #[test]
     fn the_ratio_of_ratios_curve_is_walked_end_to_end() {
-        assert!(walk_misses(&at_ratio).is_empty(), "{:?}", walk_misses(&at_ratio));
+        assert!(
+            walk_misses(&at_ratio).is_empty(),
+            "{:?}",
+            walk_misses(&at_ratio)
+        );
         // The two constants, recovered from the walk rather than read from the module.
         let ((r0, v0), (r1, v1)) = (CURVE_POINTS[0], CURVE_POINTS[5]);
         let slope = (v1 - v0) / (r1 - r0);
@@ -263,12 +302,21 @@ mod tests {
         let bent = |k: f64| move |r: f64| Some(CURVE_A - CURVE_B * r + k * (r - 0.5) * (r - 1.0));
         for k in [0.5f64, 2.0, 20.0] {
             let f = bent(k);
-            assert!((f(1.0).unwrap() - 85.0).abs() < 1e-9, "bend {k} moved the R=1 anchor");
-            assert!((f(0.5).unwrap() - 97.5).abs() < 1e-9, "bend {k} moved the R=0.5 anchor");
+            assert!(
+                (f(1.0).unwrap() - 85.0).abs() < 1e-9,
+                "bend {k} moved the R=1 anchor"
+            );
+            assert!(
+                (f(0.5).unwrap() - 97.5).abs() < 1e-9,
+                "bend {k} moved the R=0.5 anchor"
+            );
             assert!(!walk_misses(&f).is_empty(), "bend {k} walked the curve");
         }
         for c in [70.0f64, 85.0, 95.0, 97.0, 97.5, 100.0] {
-            assert!(!walk_misses(&|_| Some(c)).is_empty(), "constant {c} walked the curve");
+            assert!(
+                !walk_misses(&|_| Some(c)).is_empty(),
+                "constant {c} walked the curve"
+            );
         }
         assert_eq!(walk_misses(&|_| None).len(), CURVE_POINTS.len());
     }
@@ -293,17 +341,30 @@ mod tests {
     fn nightly_raw_means_truncates_in_span() {
         let spans = [(1000i64, 2000i64)];
         // red mean 30000, ir mean 20000; one out-of-span sample is dropped.
-        let mut samples: Vec<(i64, i32, i32)> =
-            (0..20).map(|i| (1000 + i, if i % 2 == 0 { 29000 } else { 31000 }, if i % 2 == 0 { 19000 } else { 21000 })).collect();
+        let mut samples: Vec<(i64, i32, i32)> = (0..20)
+            .map(|i| {
+                (
+                    1000 + i,
+                    if i % 2 == 0 { 29000 } else { 31000 },
+                    if i % 2 == 0 { 19000 } else { 21000 },
+                )
+            })
+            .collect();
         samples.push((5000, 99999, 99999));
-        assert_eq!(Spo2::nightly_raw_means(&spans, &samples), Some((30000, 20000)));
+        assert_eq!(
+            Spo2::nightly_raw_means(&spans, &samples),
+            Some((30000, 20000))
+        );
     }
 
     #[test]
     fn nightly_raw_means_empty_or_no_in_span_is_none() {
         assert_eq!(Spo2::nightly_raw_means(&[], &[(1000, 1, 1)]), None);
         assert_eq!(Spo2::nightly_raw_means(&[(1000, 2000)], &[]), None);
-        assert_eq!(Spo2::nightly_raw_means(&[(1000, 2000)], &[(5000, 1, 1)]), None);
+        assert_eq!(
+            Spo2::nightly_raw_means(&[(1000, 2000)], &[(5000, 1, 1)]),
+            None
+        );
     }
 
     /// Thirty nights whose recent week sits below the month, so `median(30) != median(7)`.
@@ -318,8 +379,16 @@ mod tests {
         assert_eq!(Spo2::rolling_reading(&[]).calibrating_nights, Some(0));
         // A constant window cancels `offset` against `recent`, so these pin the ANCHOR, not the value.
         for night in [70.0, 96.0, 100.0] {
-            assert_eq!(Spo2::rolling_reading(&[night]).pct, Some(97.0), "one night at {night}");
-            assert_eq!(Spo2::rolling_reading(&[night; 30]).pct, Some(97.0), "30 nights at {night}");
+            assert_eq!(
+                Spo2::rolling_reading(&[night]).pct,
+                Some(97.0),
+                "one night at {night}"
+            );
+            assert_eq!(
+                Spo2::rolling_reading(&[night; 30]).pct,
+                Some(97.0),
+                "30 nights at {night}"
+            );
         }
     }
 

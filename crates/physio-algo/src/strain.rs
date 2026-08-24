@@ -34,7 +34,11 @@ pub const EFFORT_TO_WHOOP_DAY_STRAIN: f64 = WHOOP_DAY_STRAIN_MAX / MAX_STRAIN;
 /// An Effort score on the axis the reader chose: Day Strain when `whoop_axis`, else the native
 /// 0–[`MAX_STRAIN`] value unchanged.
 pub fn effort_on_axis(value: f64, whoop_axis: bool) -> f64 {
-    if whoop_axis { value * EFFORT_TO_WHOOP_DAY_STRAIN } else { value }
+    if whoop_axis {
+        value * EFFORT_TO_WHOOP_DAY_STRAIN
+    } else {
+        value
+    }
 }
 
 /// Edwards cut-offs as (%HRR threshold, weight), highest-first.
@@ -83,7 +87,11 @@ pub const FALLBACK_HRMAX: f64 = 220.0;
 /// The one HRmax any displayed number is scored against: caller → observed peak → Tanaka(age) →
 /// [`FALLBACK_HRMAX`], with the source that won ("caller"/"observed"/"tanaka"/"fallback"). Callers that
 /// must distinguish "no HRmax at all" read [`estimate_hrmax`] instead, which reports `unknown`.
-pub fn resolve_hrmax(caller: Option<f64>, hr_history: &[f64], age: Option<f64>) -> (f64, &'static str) {
+pub fn resolve_hrmax(
+    caller: Option<f64>,
+    hr_history: &[f64],
+    age: Option<f64>,
+) -> (f64, &'static str) {
     if let Some(m) = caller {
         return (m, "caller");
     }
@@ -141,7 +149,13 @@ pub fn sample_duration_minutes(hr: &[HrSample]) -> f64 {
     }
 }
 
-pub fn banister_trimp(hr: &[HrSample], resting_hr: f64, hr_reserve: f64, sample_dur_min: f64, b: f64) -> f64 {
+pub fn banister_trimp(
+    hr: &[HrSample],
+    resting_hr: f64,
+    hr_reserve: f64,
+    sample_dur_min: f64,
+    b: f64,
+) -> f64 {
     let mut acc = 0.0;
     for s in hr {
         let x = pct_hrr(s.bpm as f64, resting_hr, hr_reserve) / 100.0;
@@ -161,7 +175,11 @@ pub fn edwards_trimp_interval(hr: &[HrSample], resting_hr: f64, hr_reserve: f64)
 
 /// [`edwards_trimp_interval`] plus the provenance of the seconds it billed, so a caller can tell how
 /// much of the load rests on bridged rather than measured time.
-pub fn edwards_trimp_accounted(hr: &[HrSample], resting_hr: f64, hr_reserve: f64) -> (f64, GapAccounting) {
+pub fn edwards_trimp_accounted(
+    hr: &[HrSample],
+    resting_hr: f64,
+    hr_reserve: f64,
+) -> (f64, GapAccounting) {
     let n = hr.len();
     let mut acct = GapAccounting::default();
     if n == 0 {
@@ -179,7 +197,8 @@ pub fn edwards_trimp_accounted(hr: &[HrSample], resting_hr: f64, hr_reserve: f64
             half(fwd, GapPosition::Interior, &mut acct) + half(fwd, GapPosition::Leading, &mut acct)
         } else if i == n - 1 {
             let bwd = gap(i, i - 1);
-            half(bwd, GapPosition::Interior, &mut acct) + half(bwd, GapPosition::Trailing, &mut acct)
+            half(bwd, GapPosition::Interior, &mut acct)
+                + half(bwd, GapPosition::Trailing, &mut acct)
         } else {
             half(gap(i + 1, i), GapPosition::Interior, &mut acct)
                 + half(gap(i, i - 1), GapPosition::Interior, &mut acct)
@@ -219,7 +238,11 @@ pub fn trimp_to_strain(trimp: f64, denominator: f64) -> f64 {
 /// Calibrate D from (TRIMP, reference_strain) pairs via the through-origin least-squares line:
 /// ln(D) = maxStrain × Σ(x²) / Σ(xy), x = ln(TRIMP+1). Reference strains are on the 0–100 scale.
 pub fn fit_strain_denominator(pairs: &[(f64, f64)]) -> Result<f64, StrainError> {
-    let usable: Vec<(f64, f64)> = pairs.iter().copied().filter(|(t, s)| *t > 0.0 && *s > 0.0).collect();
+    let usable: Vec<(f64, f64)> = pairs
+        .iter()
+        .copied()
+        .filter(|(t, s)| *t > 0.0 && *s > 0.0)
+        .collect();
     if usable.len() < 2 {
         return Err(StrainError::TooFewPairs);
     }
@@ -264,7 +287,11 @@ pub fn strain(
     let trimp = match method {
         Method::Banister => {
             let sample_dur = sample_duration_minutes(hr);
-            let b = if sex.to_lowercase().starts_with('f') { BANISTER_B_WOMEN } else { BANISTER_B_MEN };
+            let b = if sex.to_lowercase().starts_with('f') {
+                BANISTER_B_WOMEN
+            } else {
+                BANISTER_B_MEN
+            };
             banister_trimp(hr, resting_hr, hr_reserve, sample_dur, b)
         }
         Method::Edwards => edwards_trimp_interval(hr, resting_hr, hr_reserve),
@@ -283,11 +310,23 @@ mod tests {
     }
 
     fn hr_every(bpm: i32, n: usize, step_s: i64) -> Vec<HrSample> {
-        (0..n).map(|i| HrSample { ts: i as i64 * step_s, bpm }).collect()
+        (0..n)
+            .map(|i| HrSample {
+                ts: i as i64 * step_s,
+                bpm,
+            })
+            .collect()
     }
 
     fn eff(hr: &[HrSample], max_hr: f64, resting_hr: f64) -> Option<f64> {
-        strain(hr, Some(max_hr), resting_hr, Method::Edwards, "male", STRAIN_DENOMINATOR)
+        strain(
+            hr,
+            Some(max_hr),
+            resting_hr,
+            Method::Edwards,
+            "male",
+            STRAIN_DENOMINATOR,
+        )
     }
 
     /// The published values, then the same values rebuilt from the closed form, then the two shapes
@@ -306,7 +345,10 @@ mod tests {
         for trimp in [100.0f64, 500.0, 1000.0, 3600.0, 7200.0] {
             let closed = MAX_STRAIN * (trimp + 1.0).ln() / STRAIN_DENOMINATOR.ln();
             let got = trimp_to_strain(trimp, STRAIN_DENOMINATOR);
-            assert!((got - (closed * 100.0).round() / 100.0).abs() < 1e-9, "{trimp}: {got} vs {closed}");
+            assert!(
+                (got - (closed * 100.0).round() / 100.0).abs() < 1e-9,
+                "{trimp}: {got} vs {closed}"
+            );
         }
 
         // A constant scorer holding the 100-TRIMP answer is 40 points out at the top of the range.
@@ -314,7 +356,10 @@ mod tests {
         assert!((trimp_to_strain(7200.0, STRAIN_DENOMINATOR) - constant).abs() > 40.0);
         // A straight line through (0,0) and (7200,100) reads 1.39 where the log map reads 51.96.
         let linear = 100.0 * 100.0 / 7200.0;
-        assert!((constant - linear).abs() > 45.0, "the map is logarithmic, not linear");
+        assert!(
+            (constant - linear).abs() > 45.0,
+            "the map is logarithmic, not linear"
+        );
     }
 
     /// rest 60, max 160 → HRR 100, so %HRR = bpm − 60. 600 samples 1 s apart bill 1 s each, giving
@@ -332,13 +377,19 @@ mod tests {
             assert_eq!(zone_weight(bpm as f64, 60.0, 100.0), weight as i64);
             let expected = trimp_to_strain(10.0 * weight, STRAIN_DENOMINATOR);
             let got = eff(&hr_constant(bpm, 600), 160.0, 60.0).unwrap();
-            assert!((got - expected).abs() < 1e-9, "{bpm}bpm: {got} vs rebuilt {expected}");
+            assert!(
+                (got - expected).abs() < 1e-9,
+                "{bpm}bpm: {got} vs rebuilt {expected}"
+            );
         }
 
         // Null: a scorer that ignores HR reads the resting series, which is an honest 0 — so a
         // constant scorer cannot sit anywhere that satisfies all three goldens at once.
         assert_eq!(eff(&hr_constant(60, 600), 160.0, 60.0).unwrap(), 0.0);
-        assert!(v155 > v135 && v135 > v115, "strain must rise with intensity");
+        assert!(
+            v155 > v135 && v135 > v115,
+            "strain must rise with intensity"
+        );
     }
 
     #[test]
@@ -347,7 +398,10 @@ mod tests {
         let mut hr = Vec::new();
         hr.push(HrSample { ts: 0, bpm: 135 });
         for i in 1..600 {
-            hr.push(HrSample { ts: 30 + i as i64 - 1, bpm: 135 });
+            hr.push(HrSample {
+                ts: 30 + i as i64 - 1,
+                bpm: 135,
+            });
         }
         let v = eff(&hr, 160.0, 60.0).unwrap();
         // Each sample gets its own interval (1s for most, 30s for first). Sum of gaps ≈ 30+599*1=629s.
@@ -361,14 +415,28 @@ mod tests {
         // Two clusters with a 1-hour gap: past the 1800 s interior ceiling, so neither bracketing
         // sample bills any of it and the hour is recorded as refused, not credited.
         let mut hr = Vec::new();
-        for i in 0..600 { hr.push(HrSample { ts: i as i64, bpm: 135 }); }
+        for i in 0..600 {
+            hr.push(HrSample {
+                ts: i as i64,
+                bpm: 135,
+            });
+        }
         let gap_start = 3600i64;
-        for i in 0..600 { hr.push(HrSample { ts: gap_start + i as i64, bpm: 135 }); }
+        for i in 0..600 {
+            hr.push(HrSample {
+                ts: gap_start + i as i64,
+                bpm: 135,
+            });
+        }
         let v = eff(&hr, 160.0, 60.0).unwrap();
         assert!(v > 0.0, "gapped day still scores");
         let (_, acct) = edwards_trimp_accounted(&hr, 60.0, 100.0);
         // 3001 s gap, split as two half-shares, both refused.
-        assert!((acct.refused_seconds - 3001.0).abs() < 1e-9, "got {}", acct.refused_seconds);
+        assert!(
+            (acct.refused_seconds - 3001.0).abs() < 1e-9,
+            "got {}",
+            acct.refused_seconds
+        );
         assert_eq!(acct.bridged_seconds, 0.0);
     }
 
@@ -389,9 +457,18 @@ mod tests {
         // weight 1 at 55 %HRR, so TRIMP is billed seconds / 60.
         let lead_trimp = edwards_trimp_interval(&lead, 60.0, 100.0);
         let trail_trimp = edwards_trimp_interval(&trail, 60.0, 100.0);
-        assert!((lead_trimp - 676.5 / 60.0).abs() < 1e-9, "lead {lead_trimp}");
-        assert!((trail_trimp - 451.5 / 60.0).abs() < 1e-9, "trail {trail_trimp}");
-        assert!(trail_trimp < lead_trimp, "a trailing gap must be trusted less than a leading one");
+        assert!(
+            (lead_trimp - 676.5 / 60.0).abs() < 1e-9,
+            "lead {lead_trimp}"
+        );
+        assert!(
+            (trail_trimp - 451.5 / 60.0).abs() < 1e-9,
+            "trail {trail_trimp}"
+        );
+        assert!(
+            trail_trimp < lead_trimp,
+            "a trailing gap must be trusted less than a leading one"
+        );
     }
 
     #[test]
@@ -411,7 +488,11 @@ mod tests {
         let (_, acct) = edwards_trimp_accounted(&hr_constant(135, 600), 60.0, 100.0);
         assert_eq!(acct.bridged_seconds, 0.0);
         assert_eq!(acct.refused_seconds, 0.0);
-        assert!((acct.measured_seconds - 600.0).abs() < 1e-9, "got {}", acct.measured_seconds);
+        assert!(
+            (acct.measured_seconds - 600.0).abs() < 1e-9,
+            "got {}",
+            acct.measured_seconds
+        );
     }
 
     #[test]
@@ -459,44 +540,121 @@ mod tests {
     #[test]
     fn banister_reproduces_its_exponential_form_and_reads_the_sex_coefficient() {
         assert!((BANISTER_SCALE - 0.64).abs() < 1e-9, "shipped scale");
-        assert!((BANISTER_B_MEN - 1.92).abs() < 1e-9, "shipped male exponent");
-        assert!((BANISTER_B_WOMEN - 1.67).abs() < 1e-9, "shipped female exponent");
+        assert!(
+            (BANISTER_B_MEN - 1.92).abs() < 1e-9,
+            "shipped male exponent"
+        );
+        assert!(
+            (BANISTER_B_WOMEN - 1.67).abs() < 1e-9,
+            "shipped female exponent"
+        );
 
         // 600 samples 1 s apart at 150 bpm against (60, 190): x = 90/130 %HRR as a fraction.
         let series = hr_constant(150, 600);
         let (rest, reserve) = (60.0f64, 130.0f64);
         let x = pct_hrr(150.0, rest, reserve) / 100.0;
         let dur_min = sample_duration_minutes(&series);
-        assert!((dur_min - 1.0 / 60.0).abs() < 1e-12, "1 Hz series bills a 60th of a minute");
+        assert!(
+            (dur_min - 1.0 / 60.0).abs() < 1e-12,
+            "1 Hz series bills a 60th of a minute"
+        );
 
         let closed = 600.0 * dur_min * x * BANISTER_SCALE * (BANISTER_B_MEN * x).exp();
         let measured = banister_trimp(&series, rest, reserve, dur_min, BANISTER_B_MEN);
-        assert!((measured - 16.740_048_787_290_35).abs() < 1e-9, "male TRIMP {measured}");
-        assert!((measured - closed).abs() < 1e-9, "TRIMP {measured} vs closed form {closed}");
+        assert!(
+            (measured - 16.740_048_787_290_35).abs() < 1e-9,
+            "male TRIMP {measured}"
+        );
+        assert!(
+            (measured - closed).abs() < 1e-9,
+            "TRIMP {measured} vs closed form {closed}"
+        );
 
-        let male = strain(&series, Some(190.0), rest, Method::Banister, "male", STRAIN_DENOMINATOR).unwrap();
-        let female = strain(&series, Some(190.0), rest, Method::Banister, "female", STRAIN_DENOMINATOR).unwrap();
+        let male = strain(
+            &series,
+            Some(190.0),
+            rest,
+            Method::Banister,
+            "male",
+            STRAIN_DENOMINATOR,
+        )
+        .unwrap();
+        let female = strain(
+            &series,
+            Some(190.0),
+            rest,
+            Method::Banister,
+            "female",
+            STRAIN_DENOMINATOR,
+        )
+        .unwrap();
         assert!((male - 32.38).abs() < EPS, "male {male}");
         assert!((female - 30.55).abs() < EPS, "female {female}");
-        assert!(female < male, "the lower female exponent must lower the score");
         assert!(
-            (female - trimp_to_strain(
-                banister_trimp(&series, rest, reserve, dur_min, BANISTER_B_WOMEN), STRAIN_DENOMINATOR)).abs() < 1e-9
+            female < male,
+            "the lower female exponent must lower the score"
+        );
+        assert!(
+            (female
+                - trimp_to_strain(
+                    banister_trimp(&series, rest, reserve, dur_min, BANISTER_B_WOMEN),
+                    STRAIN_DENOMINATOR
+                ))
+            .abs()
+                < 1e-9
         );
 
         // Null: routing Banister to Edwards would read 34.28 on this same series.
-        let edwards = strain(&series, Some(190.0), rest, Method::Edwards, "male", STRAIN_DENOMINATOR).unwrap();
+        let edwards = strain(
+            &series,
+            Some(190.0),
+            rest,
+            Method::Edwards,
+            "male",
+            STRAIN_DENOMINATOR,
+        )
+        .unwrap();
         assert!((edwards - 34.28).abs() < EPS, "edwards {edwards}");
-        assert!((edwards - male).abs() > 1.5, "Banister must not be Edwards under another name");
+        assert!(
+            (edwards - male).abs() > 1.5,
+            "Banister must not be Edwards under another name"
+        );
 
         // Null: a series pinned at the resting value carries no load under either exponent.
         let flat = hr_constant(60, 600);
-        assert_eq!(banister_trimp(&flat, rest, reserve, dur_min, BANISTER_B_MEN), 0.0);
-        assert_eq!(strain(&flat, Some(190.0), rest, Method::Banister, "male", STRAIN_DENOMINATOR), Some(0.0));
+        assert_eq!(
+            banister_trimp(&flat, rest, reserve, dur_min, BANISTER_B_MEN),
+            0.0
+        );
+        assert_eq!(
+            strain(
+                &flat,
+                Some(190.0),
+                rest,
+                Method::Banister,
+                "male",
+                STRAIN_DENOMINATOR
+            ),
+            Some(0.0)
+        );
 
         // Monotonic in intensity, which is the only thing the old gate checked.
-        let low = strain(&hr_constant(120, 600), Some(184.0), 60.0, Method::Banister, "male", STRAIN_DENOMINATOR);
-        let high = strain(&hr_constant(175, 600), Some(184.0), 60.0, Method::Banister, "male", STRAIN_DENOMINATOR);
+        let low = strain(
+            &hr_constant(120, 600),
+            Some(184.0),
+            60.0,
+            Method::Banister,
+            "male",
+            STRAIN_DENOMINATOR,
+        );
+        let high = strain(
+            &hr_constant(175, 600),
+            Some(184.0),
+            60.0,
+            Method::Banister,
+            "male",
+            STRAIN_DENOMINATOR,
+        );
         assert!(high.unwrap() > low.unwrap());
     }
 
@@ -519,13 +677,28 @@ mod tests {
     #[test]
     fn resolve_hrmax_always_answers_so_no_caller_needs_its_own_fallback() {
         assert_eq!(resolve_hrmax(Some(184.0), &[], None), (184.0, "caller"));
-        assert_eq!(resolve_hrmax(Some(184.0), &vec![200.0; HRMAX_MIN_SAMPLES], Some(35.0)).1, "caller");
-        assert_eq!(resolve_hrmax(None, &[], Some(40.0)), (tanaka_hrmax(40.0), "tanaka"));
-        assert_eq!(resolve_hrmax(None, &vec![200.0; HRMAX_MIN_SAMPLES], None), (200.0, "observed"));
+        assert_eq!(
+            resolve_hrmax(Some(184.0), &vec![200.0; HRMAX_MIN_SAMPLES], Some(35.0)).1,
+            "caller"
+        );
+        assert_eq!(
+            resolve_hrmax(None, &[], Some(40.0)),
+            (tanaka_hrmax(40.0), "tanaka")
+        );
+        assert_eq!(
+            resolve_hrmax(None, &vec![200.0; HRMAX_MIN_SAMPLES], None),
+            (200.0, "observed")
+        );
         // Nothing known at all still resolves, and to the ONE constant.
         assert_eq!(resolve_hrmax(None, &[], None), (FALLBACK_HRMAX, "fallback"));
-        assert!((FALLBACK_HRMAX - 220.0).abs() < 1e-9, "shipped last-resort HRmax");
-        assert!(estimate_hrmax(&[], None).0 == 0.0, "the chain under it still reports 'no HRmax'");
+        assert!(
+            (FALLBACK_HRMAX - 220.0).abs() < 1e-9,
+            "shipped last-resort HRmax"
+        );
+        assert!(
+            estimate_hrmax(&[], None).0 == 0.0,
+            "the chain under it still reports 'no HRmax'"
+        );
     }
 
     /// `low` bpm for all but the last `peak_n` of `n` samples, which sit at `peak`.
@@ -564,7 +737,10 @@ mod tests {
         let spikes = hr_history(600, 120.0, 3, 220.0);
         let (bpm, src) = estimate_hrmax(&spikes, None);
         assert_eq!(src, "observed");
-        assert!((bpm - 120.5).abs() < EPS, "an artefact must not become HRmax; got {bpm}");
+        assert!(
+            (bpm - 120.5).abs() < EPS,
+            "an artefact must not become HRmax; got {bpm}"
+        );
 
         // One sample under the floor and the branch is off, however high the history runs.
         let short = hr_history(599, 120.0, 599, 190.0);
@@ -577,7 +753,10 @@ mod tests {
     /// function, so a green run says nothing about any number a wearer sees.
     #[test]
     fn unused_denominator_fit_recovers_its_seed_and_refuses_uninformative_pairs() {
-        assert!((STRAIN_DENOMINATOR - 7201.0).abs() < 1e-9, "the denominator every shipped score uses");
+        assert!(
+            (STRAIN_DENOMINATOR - 7201.0).abs() < 1e-9,
+            "the denominator every shipped score uses"
+        );
 
         // Round-trip: strains generated from D=7201 refit back to ~7201 (through-origin fit).
         let pairs: Vec<(f64, f64)> = [100.0, 500.0, 1000.0, 3600.0]
@@ -585,15 +764,30 @@ mod tests {
             .map(|&t| (t, trimp_to_strain(t, STRAIN_DENOMINATOR)))
             .collect();
         let d = fit_strain_denominator(&pairs).unwrap();
-        assert!((d - STRAIN_DENOMINATOR).abs() / STRAIN_DENOMINATOR < 0.01, "got {d}");
-        assert_eq!(fit_strain_denominator(&[(100.0, 50.0)]), Err(StrainError::TooFewPairs));
+        assert!(
+            (d - STRAIN_DENOMINATOR).abs() / STRAIN_DENOMINATOR < 0.01,
+            "got {d}"
+        );
+        assert_eq!(
+            fit_strain_denominator(&[(100.0, 50.0)]),
+            Err(StrainError::TooFewPairs)
+        );
 
         // Null: reference strains that carry no information still return an Ok denominator, 99x the
         // seed. The fit does not refuse it, so a caller must never read Ok as "calibrated".
-        let flat: Vec<(f64, f64)> = [100.0, 500.0, 1000.0, 3600.0].iter().map(|&t| (t, 50.0)).collect();
+        let flat: Vec<(f64, f64)> = [100.0, 500.0, 1000.0, 3600.0]
+            .iter()
+            .map(|&t| (t, 50.0))
+            .collect();
         let flat_d = fit_strain_denominator(&flat).unwrap();
-        assert!((flat_d - 713_381.98).abs() < 0.1, "uninformative fit {flat_d}");
-        assert!(flat_d > STRAIN_DENOMINATOR * 50.0, "and it is nowhere near the seed");
+        assert!(
+            (flat_d - 713_381.98).abs() < 0.1,
+            "uninformative fit {flat_d}"
+        );
+        assert!(
+            flat_d > STRAIN_DENOMINATOR * 50.0,
+            "and it is nowhere near the seed"
+        );
 
         // Null: the pairing shuffled. Same TRIMPs, same strains, wrong correspondence.
         let shuffled = [
@@ -601,7 +795,10 @@ mod tests {
             (3600.0, trimp_to_strain(100.0, STRAIN_DENOMINATOR)),
         ];
         let shuffled_d = fit_strain_denominator(&shuffled).unwrap();
-        assert!((shuffled_d - 32_297.586_246).abs() < 1e-3, "shuffled fit {shuffled_d}");
+        assert!(
+            (shuffled_d - 32_297.586_246).abs() < 1e-3,
+            "shuffled fit {shuffled_d}"
+        );
         assert!(shuffled_d > STRAIN_DENOMINATOR * 4.0);
     }
 
@@ -612,7 +809,10 @@ mod tests {
         assert_eq!(WHOOP_DAY_STRAIN_TO_EFFORT, 4.761904761904762);
         assert_eq!(WHOOP_DAY_STRAIN_TO_EFFORT * EFFORT_TO_WHOOP_DAY_STRAIN, 1.0);
         assert_eq!(1.0 / WHOOP_DAY_STRAIN_TO_EFFORT, EFFORT_TO_WHOOP_DAY_STRAIN);
-        assert_eq!(MAX_STRAIN * EFFORT_TO_WHOOP_DAY_STRAIN, WHOOP_DAY_STRAIN_MAX);
+        assert_eq!(
+            MAX_STRAIN * EFFORT_TO_WHOOP_DAY_STRAIN,
+            WHOOP_DAY_STRAIN_MAX
+        );
     }
 
     /// Multiplying by the ratio and dividing by its inverse are different operations; only the
@@ -620,7 +820,10 @@ mod tests {
     #[test]
     fn effort_on_axis_multiplies_and_leaves_the_native_scale_alone() {
         assert_eq!(effort_on_axis(76.193, true), 16.000_529_999_999_998);
-        assert_ne!(76.193 * EFFORT_TO_WHOOP_DAY_STRAIN, 76.193 / WHOOP_DAY_STRAIN_TO_EFFORT);
+        assert_ne!(
+            76.193 * EFFORT_TO_WHOOP_DAY_STRAIN,
+            76.193 / WHOOP_DAY_STRAIN_TO_EFFORT
+        );
         assert_eq!(effort_on_axis(50.0, true), 10.5);
         assert_eq!(effort_on_axis(12.3, true), 2.583);
         assert_eq!(effort_on_axis(0.0, true), 0.0);

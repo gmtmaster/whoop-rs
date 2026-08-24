@@ -19,8 +19,8 @@
 //! The removal reuses `hrv`'s Malik rejection, which the indices themselves deliberately never apply.
 //! Here it is the point: applying it and re-measuring is the discriminator.
 
-use crate::hrv::{HrvReadiness, ECTOPIC_THRESHOLD};
-use crate::rr_irregularity::cosen::{cosen, sample_entropy, COSEN_M, COSEN_R_MS};
+use crate::hrv::{ECTOPIC_THRESHOLD, HrvReadiness};
+use crate::rr_irregularity::cosen::{COSEN_M, COSEN_R_MS, cosen, sample_entropy};
 
 /// Beat-to-beat change treated as no change at all — the same 50 ms boundary pNN50 is defined on.
 pub const ORIGIN_MS: f64 = 50.0;
@@ -64,21 +64,31 @@ pub fn profile(rr_ms: &[u16]) -> Option<EctopyProfile> {
     if rr_ms.len() < PROFILE_MIN_BEATS {
         return None;
     }
-    let d: Vec<f64> = rr_ms.windows(2).map(|w| f64::from(w[1]) - f64::from(w[0])).collect();
+    let d: Vec<f64> = rr_ms
+        .windows(2)
+        .map(|w| f64::from(w[1]) - f64::from(w[0]))
+        .collect();
     let origin = d.iter().filter(|v| v.abs() <= ORIGIN_MS).count() as f64 / d.len() as f64;
 
-    let big: Vec<usize> = (0..d.len()).filter(|&i| d[i].abs() > EXCURSION_MS).collect();
+    let big: Vec<usize> = (0..d.len())
+        .filter(|&i| d[i].abs() > EXCURSION_MS)
+        .collect();
     let paired = big
         .iter()
         .filter(|&&i| {
             let matched = |j: usize| {
-                d[i] * d[j] < 0.0 && d[i].abs().min(d[j].abs()) >= PAIR_MATCH * d[i].abs().max(d[j].abs())
+                d[i] * d[j] < 0.0
+                    && d[i].abs().min(d[j].abs()) >= PAIR_MATCH * d[i].abs().max(d[j].abs())
             };
             (i > 0 && d[i - 1].abs() > EXCURSION_MS && matched(i - 1))
                 || (i + 1 < d.len() && d[i + 1].abs() > EXCURSION_MS && matched(i + 1))
         })
         .count();
-    let alternation = if big.is_empty() { 0.0 } else { paired as f64 / big.len() as f64 };
+    let alternation = if big.is_empty() {
+        0.0
+    } else {
+        paired as f64 / big.len() as f64
+    };
 
     let clean = HrvReadiness::clean_rr(rr_ms);
     Some(EctopyProfile {
@@ -116,7 +126,9 @@ mod tests {
         let mut x = seed;
         (0..n)
             .map(|_| {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 lo + ((x >> 33) % span) as u16
             })
             .collect()
@@ -126,7 +138,11 @@ mod tests {
     fn isolated_ectopy_keeps_a_steady_background_and_a_scattered_rhythm_does_not() {
         let e = profile(&ectopic(64, 800, 8, 250)).unwrap();
         let s = profile(&scattered(64, 500, 700, 99)).unwrap();
-        assert!(e.origin_fraction > 0.6, "ectopy must keep a steady background, got {}", e.origin_fraction);
+        assert!(
+            e.origin_fraction > 0.6,
+            "ectopy must keep a steady background, got {}",
+            e.origin_fraction
+        );
         // A wide independent draw still lands two beats within 50 ms of each other now and then, so the
         // claim is the gap, not a floor near zero.
         assert!(
@@ -141,17 +157,34 @@ mod tests {
     fn bigeminy_is_matched_alternation_and_scatter_is_not() {
         // Every other beat premature: the pure alternating case, which has no steady background at all.
         let b = profile(&ectopic(64, 800, 2, 250)).unwrap();
-        assert!(b.origin_fraction < 0.1, "bigeminy has no steady background: {}", b.origin_fraction);
-        assert_eq!(b.alternation_fraction, 1.0, "every excursion is half a matched pair");
+        assert!(
+            b.origin_fraction < 0.1,
+            "bigeminy has no steady background: {}",
+            b.origin_fraction
+        );
+        assert_eq!(
+            b.alternation_fraction, 1.0,
+            "every excursion is half a matched pair"
+        );
         let s = profile(&scattered(64, 500, 700, 7)).unwrap();
-        assert!(s.alternation_fraction < b.alternation_fraction, "scatter {s:?} vs bigeminy {b:?}");
+        assert!(
+            s.alternation_fraction < b.alternation_fraction,
+            "scatter {s:?} vs bigeminy {b:?}"
+        );
     }
 
     #[test]
     fn removing_the_premature_beats_collapses_ectopy_and_leaves_scatter_alone() {
         let e = profile(&ectopic(64, 800, 8, 250)).unwrap();
-        assert!(e.ectopic_fraction > 0.0, "the premature beats must be found");
-        assert_eq!(e.residual_sample_entropy, Some(0.0), "what is left is a metronome");
+        assert!(
+            e.ectopic_fraction > 0.0,
+            "the premature beats must be found"
+        );
+        assert_eq!(
+            e.residual_sample_entropy,
+            Some(0.0),
+            "what is left is a metronome"
+        );
         let s = profile(&scattered(64, 500, 700, 31)).unwrap();
         assert!(
             s.residual_sample_entropy.unwrap() > 1.0,
@@ -165,7 +198,10 @@ mod tests {
         assert_eq!(profile(&[]), None);
         assert_eq!(profile(&[800u16; PROFILE_MIN_BEATS - 1]), None);
         let flat = profile(&[800u16; 40]).unwrap();
-        assert_eq!((flat.origin_fraction, flat.alternation_fraction), (1.0, 0.0));
+        assert_eq!(
+            (flat.origin_fraction, flat.alternation_fraction),
+            (1.0, 0.0)
+        );
         assert_eq!(flat.ectopic_fraction, 0.0);
     }
 }

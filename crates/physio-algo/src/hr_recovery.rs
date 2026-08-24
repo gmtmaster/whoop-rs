@@ -32,7 +32,12 @@ const MAXIMUM_CONTINUOUS_GAP_SECONDS: i64 = 10;
 
 /// HR recovery for a bout `[workout_start, workout_end]` against `max_hr`. `None` when the bout is
 /// invalid, was not a sustained high-intensity effort, or has too few samples around the readings.
-pub fn calculate(samples: &[HrSample], workout_start: i64, workout_end: i64, max_hr: f64) -> Option<HrRecovery> {
+pub fn calculate(
+    samples: &[HrSample],
+    workout_start: i64,
+    workout_end: i64,
+    max_hr: f64,
+) -> Option<HrRecovery> {
     if workout_start <= 0 || workout_end <= workout_start || max_hr <= 0.0 {
         return None;
     }
@@ -49,7 +54,11 @@ pub fn calculate(samples: &[HrSample], workout_start: i64, workout_end: i64, max
         return None;
     }
 
-    let before_end: Vec<HrSample> = sorted.iter().copied().filter(|s| s.ts <= workout_end).collect();
+    let before_end: Vec<HrSample> = sorted
+        .iter()
+        .copied()
+        .filter(|s| s.ts <= workout_end)
+        .collect();
     let threshold = max_hr * ELIGIBILITY_FRACTION_OF_MAX_HR;
     if sustained_seconds(threshold, &before_end) < MINIMUM_HIGH_INTENSITY_SECONDS {
         return None;
@@ -96,7 +105,8 @@ fn sustained_seconds(threshold: f64, samples: &[HrSample]) -> i64 {
     let mut seconds = 0i64;
     for i in 0..samples.len() - 1 {
         let gap = samples[i + 1].ts - samples[i].ts;
-        if (1..=MAXIMUM_CONTINUOUS_GAP_SECONDS).contains(&gap) && samples[i].bpm as f64 >= threshold {
+        if (1..=MAXIMUM_CONTINUOUS_GAP_SECONDS).contains(&gap) && samples[i].bpm as f64 >= threshold
+        {
             seconds += gap;
         }
     }
@@ -131,7 +141,9 @@ mod tests {
     /// Dense 1 Hz coverage over the 5-min lookback: 145 bpm (above the 140 threshold at max 200), then
     /// the last 30s at `end_hr` (the cessation reading).
     fn dense_eligible(end_hr: i32) -> Vec<HrSample> {
-        (END - 300..=END).map(|ts| s(ts, if ts >= END - 30 { end_hr } else { 145 })).collect()
+        (END - 300..=END)
+            .map(|ts| s(ts, if ts >= END - 30 { end_hr } else { 145 }))
+            .collect()
     }
 
     /// A cluster of `values` centred on `END + minutes*60`, one per second.
@@ -157,7 +169,12 @@ mod tests {
             window(5, &[112, 112, 112]),
         ]);
         assert_eq!(
-            Some(HrRecovery { end_hr: 170, after_1min: Some(24), after_2min: Some(38), after_5min: Some(58) }),
+            Some(HrRecovery {
+                end_hr: 170,
+                after_1min: Some(24),
+                after_2min: Some(38),
+                after_5min: Some(58)
+            }),
             calculate(&samples, END - 300, END, 200.0),
         );
     }
@@ -185,9 +202,18 @@ mod tests {
 
     #[test]
     fn returns_only_measurements_with_real_coverage() {
-        let samples = concat(&[dense_eligible(170), window(1, &[150, 150, 150]), window(5, &[110, 110])]);
+        let samples = concat(&[
+            dense_eligible(170),
+            window(1, &[150, 150, 150]),
+            window(5, &[110, 110]),
+        ]);
         assert_eq!(
-            Some(HrRecovery { end_hr: 170, after_1min: Some(20), after_2min: None, after_5min: None }),
+            Some(HrRecovery {
+                end_hr: 170,
+                after_1min: Some(20),
+                after_2min: None,
+                after_5min: None
+            }),
             calculate(&samples, END - 300, END, 200.0),
         );
     }

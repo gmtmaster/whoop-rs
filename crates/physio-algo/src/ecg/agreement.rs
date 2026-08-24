@@ -71,9 +71,21 @@ pub fn beat_agreement(
     let only_b = b.len() - matched;
     let f1 = f1_of(matched as f64, a.len() as f64, b.len() as f64);
     let union = matched + only_a + only_b;
-    let jaccard = if union == 0 { 0.0 } else { matched as f64 / union as f64 };
+    let jaccard = if union == 0 {
+        0.0
+    } else {
+        matched as f64 / union as f64
+    };
     let chance_f1 = chance_f1(a.len(), b.len(), span_samples, tolerance);
-    Agreement { matched, only_a, only_b, f1, jaccard, chance_f1, excess: (f1 - chance_f1).max(0.0) }
+    Agreement {
+        matched,
+        only_a,
+        only_b,
+        f1,
+        jaccard,
+        chance_f1,
+        excess: (f1 - chance_f1).max(0.0),
+    }
 }
 
 /// The one-to-one pairing itself, as `(index into a, index into b)`.
@@ -180,10 +192,16 @@ mod tests {
         assert_eq!(ab.matched, ba.matched);
         assert!((ab.f1 - ba.f1).abs() < 1e-12);
         assert!((ab.chance_f1 - ba.chance_f1).abs() < 1e-12);
-        assert_eq!(beat_agreement(&a, &b, SPAN, 10.0, DEFAULT_MATCH_WINDOW_MS).f1, 0.0);
+        assert_eq!(
+            beat_agreement(&a, &b, SPAN, 10.0, DEFAULT_MATCH_WINDOW_MS).f1,
+            0.0
+        );
         assert_eq!(beat_agreement(&a, &b, SPAN, FS, 0.0).f1, 0.0);
         assert_eq!(beat_agreement(&a, &b, SPAN, FS, f64::NAN).f1, 0.0);
-        assert_eq!(beat_agreement(&a, &b, 0, FS, DEFAULT_MATCH_WINDOW_MS).f1, 0.0);
+        assert_eq!(
+            beat_agreement(&a, &b, 0, FS, DEFAULT_MATCH_WINDOW_MS).f1,
+            0.0
+        );
     }
 
     #[test]
@@ -202,15 +220,30 @@ mod tests {
         // 30 beats in 30 s: a peak covers 41 of 6000 samples, so coincidence explains almost nothing.
         let sparse: Vec<usize> = (0..30).map(|k| 100 + k * 200).collect();
         let g = agree(&sparse, &sparse);
-        assert!(g.chance_f1 < 0.25, "sparse chance floor {} too high", g.chance_f1);
-        assert!(g.excess > 0.75, "a real match must clear the floor by a lot");
+        assert!(
+            g.chance_f1 < 0.25,
+            "sparse chance floor {} too high",
+            g.chance_f1
+        );
+        assert!(
+            g.excess > 0.75,
+            "a real match must clear the floor by a lot"
+        );
 
         // 120 peaks in the same 30 s is 240 bpm - past physiology, and now over half of a perfect score
         // is coincidence. An index that did not say so would report noise as good agreement.
         let dense: Vec<usize> = (0..120).map(|k| 25 + k * 50).collect();
         let d = agree(&dense, &dense);
-        assert!(d.f1 == 1.0 && d.chance_f1 > 0.7, "dense: f1 {} chance {}", d.f1, d.chance_f1);
-        assert!(d.excess < g.excess, "the dense case must not look better than the sparse one");
+        assert!(
+            d.f1 == 1.0 && d.chance_f1 > 0.7,
+            "dense: f1 {} chance {}",
+            d.f1,
+            d.chance_f1
+        );
+        assert!(
+            d.excess < g.excess,
+            "the dense case must not look better than the sparse one"
+        );
     }
 
     #[test]
@@ -219,6 +252,10 @@ mod tests {
         let all: Vec<usize> = (0..300).map(|k| k * 20).collect();
         let g = agree(&all, &all);
         assert!(g.chance_f1 <= 1.0 && g.excess >= 0.0);
-        assert!(g.excess < 0.05, "saturated density must leave no excess, got {}", g.excess);
+        assert!(
+            g.excess < 0.05,
+            "saturated density must leave no excess, got {}",
+            g.excess
+        );
     }
 }

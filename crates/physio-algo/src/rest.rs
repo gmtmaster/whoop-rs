@@ -31,7 +31,9 @@ pub fn rest(
         return None;
     }
     let asleep_hours = asleep_seconds / 3600.0;
-    let need_hours = sleep_need_hours.unwrap_or(DEFAULT_SLEEP_NEED_HOURS).max(1e-9);
+    let need_hours = sleep_need_hours
+        .unwrap_or(DEFAULT_SLEEP_NEED_HOURS)
+        .max(1e-9);
 
     let duration_score = (asleep_hours / need_hours * 100.0).min(100.0);
     let efficiency_score = (efficiency * 100.0).clamp(0.0, 100.0);
@@ -39,9 +41,11 @@ pub fn rest(
     let restorative_target_seconds = need_hours * 3600.0 * RESTORATIVE_TARGET_SHARE;
     let deep_adequacy = ((deep_seconds / asleep_seconds) / DEEP_SHARE_TARGET).clamp(0.0, 1.0);
     let deep_factor = DEEP_FLOOR_FACTOR + (1.0 - DEEP_FLOOR_FACTOR) * deep_adequacy;
-    let restorative_score =
-        ((deep_seconds + rem_seconds) / restorative_target_seconds * 100.0).min(100.0) * deep_factor;
-    let consistency_score = ((consistency.unwrap_or(NEUTRAL_CONSISTENCY)) * 100.0).clamp(0.0, 100.0);
+    let restorative_score = ((deep_seconds + rem_seconds) / restorative_target_seconds * 100.0)
+        .min(100.0)
+        * deep_factor;
+    let consistency_score =
+        ((consistency.unwrap_or(NEUTRAL_CONSISTENCY)) * 100.0).clamp(0.0, 100.0);
 
     let weighted = W_DURATION * duration_score
         + W_EFFICIENCY * efficiency_score
@@ -108,7 +112,10 @@ mod tests {
     #[test]
     fn personal_need_averages_worn_nights_only_and_floors_at_seven_and_a_half() {
         assert_eq!(personal_sleep_need_hours(&[]), MIN_SLEEP_NEED_HOURS);
-        assert_eq!(personal_sleep_need_hours(&[6.0, 0.0, 6.5]), MIN_SLEEP_NEED_HOURS); // mean 6.25 < floor
+        assert_eq!(
+            personal_sleep_need_hours(&[6.0, 0.0, 6.5]),
+            MIN_SLEEP_NEED_HOURS
+        ); // mean 6.25 < floor
         assert!((personal_sleep_need_hours(&[8.0, 9.0, 8.5]) - 8.5).abs() < 1e-9); // mean above the floor
         assert!((personal_sleep_need_hours(&[9.0, 0.0, 9.0]) - 9.0).abs() < 1e-9); // the blank is not a night
 
@@ -140,7 +147,15 @@ mod tests {
     #[test]
     fn the_personal_need_enters_rest_through_duration_and_restorative() {
         let night = |need: f64| {
-            rest(8.0 * 3600.0, 0.95, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(need), Some(1.0)).unwrap()
+            rest(
+                8.0 * 3600.0,
+                0.95,
+                0.30 * 8.0 * 3600.0,
+                0.25 * 8.0 * 3600.0,
+                Some(need),
+                Some(1.0),
+            )
+            .unwrap()
         };
         let at_need = personal_sleep_need_hours(&[9.0, 0.0, 9.0]); // 9.0 h
         let floored = personal_sleep_need_hours(&[6.0, 0.0, 6.5]); // 7.5 h, so duration saturates at 100
@@ -153,31 +168,89 @@ mod tests {
         assert!((night(floored) - night(at_need) - moved).abs() < 0.01);
         // Duration alone no longer accounts for it: that is the change.
         assert!((night(floored) - night(at_need) - W_DURATION * duration_delta).abs() > 0.1);
-        assert!(night(floored) > night(at_need), "a lower need cannot score a night worse");
+        assert!(
+            night(floored) > night(at_need),
+            "a lower need cannot score a night worse"
+        );
     }
 
     /// Rest is exactly the four weighted terms. The perfect night is 99.0 = 0.5*100 + 0.2*95 + 0.2*100 +
     /// 0.1*100, and moving one input moves the total by that weight times the term it changed.
     #[test]
     fn each_rest_weight_moves_the_composite_by_its_own_share() {
-        let perfect = rest(8.0 * 3600.0, 0.95, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
+        let perfect = rest(
+            8.0 * 3600.0,
+            0.95,
+            0.30 * 8.0 * 3600.0,
+            0.25 * 8.0 * 3600.0,
+            Some(8.0),
+            Some(1.0),
+        )
+        .unwrap();
         assert_eq!(99.0, perfect);
         // Six hours against the same eight-hour need. Duration 100 -> 75, AND restorative 100 -> 82.5,
         // because 3.3 h of deep+REM no longer clears the need's 4 h target. A short night loses on both,
         // which is the whole point of scoring restorative in minutes rather than as a share.
-        let short = rest(6.0 * 3600.0, 0.95, 0.30 * 6.0 * 3600.0, 0.25 * 6.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
+        let short = rest(
+            6.0 * 3600.0,
+            0.95,
+            0.30 * 6.0 * 3600.0,
+            0.25 * 6.0 * 3600.0,
+            Some(8.0),
+            Some(1.0),
+        )
+        .unwrap();
         let short_moved = W_DURATION * 25.0 + W_RESTORATIVE * (100.0 - 82.5);
-        assert!((perfect - short - short_moved).abs() < 1e-9, "short night, got {short}");
-        assert!(short < perfect - W_DURATION * 25.0, "a short night must lose more than duration alone");
+        assert!(
+            (perfect - short - short_moved).abs() < 1e-9,
+            "short night, got {short}"
+        );
+        assert!(
+            short < perfect - W_DURATION * 25.0,
+            "a short night must lose more than duration alone"
+        );
         // Efficiency 95 -> 85.
-        let leaky = rest(8.0 * 3600.0, 0.85, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
-        assert!((perfect - leaky - W_EFFICIENCY * 10.0).abs() < 1e-9, "efficiency weight, got {leaky}");
+        let leaky = rest(
+            8.0 * 3600.0,
+            0.85,
+            0.30 * 8.0 * 3600.0,
+            0.25 * 8.0 * 3600.0,
+            Some(8.0),
+            Some(1.0),
+        )
+        .unwrap();
+        assert!(
+            (perfect - leaky - W_EFFICIENCY * 10.0).abs() < 1e-9,
+            "efficiency weight, got {leaky}"
+        );
         // Restorative 100 -> 50: a 0.25 deep+REM share against the 0.50 target, deep still at its own.
-        let thin = rest(8.0 * 3600.0, 0.95, 0.13 * 8.0 * 3600.0, 0.12 * 8.0 * 3600.0, Some(8.0), Some(1.0)).unwrap();
-        assert!((perfect - thin - W_RESTORATIVE * 50.0).abs() < 1e-9, "restorative weight, got {thin}");
+        let thin = rest(
+            8.0 * 3600.0,
+            0.95,
+            0.13 * 8.0 * 3600.0,
+            0.12 * 8.0 * 3600.0,
+            Some(8.0),
+            Some(1.0),
+        )
+        .unwrap();
+        assert!(
+            (perfect - thin - W_RESTORATIVE * 50.0).abs() < 1e-9,
+            "restorative weight, got {thin}"
+        );
         // Consistency 100 -> 0.
-        let erratic = rest(8.0 * 3600.0, 0.95, 0.30 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(0.0)).unwrap();
-        assert!((perfect - erratic - W_CONSISTENCY * 100.0).abs() < 1e-9, "consistency weight, got {erratic}");
+        let erratic = rest(
+            8.0 * 3600.0,
+            0.95,
+            0.30 * 8.0 * 3600.0,
+            0.25 * 8.0 * 3600.0,
+            Some(8.0),
+            Some(0.0),
+        )
+        .unwrap();
+        assert!(
+            (perfect - erratic - W_CONSISTENCY * 100.0).abs() < 1e-9,
+            "consistency weight, got {erratic}"
+        );
 
         assert!((1.0 - (W_DURATION + W_EFFICIENCY + W_RESTORATIVE + W_CONSISTENCY)).abs() < 1e-12);
         // No constant scorer reproduces the five nights. The thin and erratic ones both land on 89.0, so
@@ -190,14 +263,24 @@ mod tests {
             d.len()
         });
         for c in all {
-            assert!(all.iter().any(|v| (v - c).abs() > 1e-9), "the constant {c} would satisfy every night");
+            assert!(
+                all.iter().any(|v| (v - c).abs() > 1e-9),
+                "the constant {c} would satisfy every night"
+            );
         }
     }
 
     #[test]
     fn short_night_scores_low() {
         // 4h asleep, 80% efficiency, same stage proportions
-        let r = rest(4.0 * 3600.0, 0.80, 0.30 * 4.0 * 3600.0, 0.25 * 4.0 * 3600.0, Some(8.0), Some(0.5));
+        let r = rest(
+            4.0 * 3600.0,
+            0.80,
+            0.30 * 4.0 * 3600.0,
+            0.25 * 4.0 * 3600.0,
+            Some(8.0),
+            Some(0.5),
+        );
         let v = r.unwrap();
         assert!(v < 70.0 && v > 30.0, "got {v}");
     }
@@ -205,8 +288,22 @@ mod tests {
     #[test]
     fn zero_deep_halves_restorative() {
         // No deep sleep → deepFactor = 0.5 → restorative term halved
-        let normal = rest(8.0 * 3600.0, 0.90, 0.25 * 8.0 * 3600.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(1.0));
-        let no_deep = rest(8.0 * 3600.0, 0.90, 0.0, 0.25 * 8.0 * 3600.0, Some(8.0), Some(1.0));
+        let normal = rest(
+            8.0 * 3600.0,
+            0.90,
+            0.25 * 8.0 * 3600.0,
+            0.25 * 8.0 * 3600.0,
+            Some(8.0),
+            Some(1.0),
+        );
+        let no_deep = rest(
+            8.0 * 3600.0,
+            0.90,
+            0.0,
+            0.25 * 8.0 * 3600.0,
+            Some(8.0),
+            Some(1.0),
+        );
         assert!(normal.unwrap() > no_deep.unwrap());
     }
 
@@ -233,7 +330,11 @@ mod tests {
         assert_eq!(driver_tier(66.0), 1);
         assert_eq!(driver_tier(67.0), 2);
         assert_eq!(driver_tier(100.0), 2);
-        assert_eq!(driver_tier(140.0), 2, "above the scale still reads as the top tier");
+        assert_eq!(
+            driver_tier(140.0),
+            2,
+            "above the scale still reads as the top tier"
+        );
     }
 
     /// A percent that is negative or not a number reads as the bottom tier, never as a panic or a
@@ -263,6 +364,10 @@ mod tests {
         assert_eq!(driver_tier_position(0), 0.0);
         assert_eq!(driver_tier_position(1), 0.5);
         assert_eq!(driver_tier_position(2), 1.0);
-        assert_eq!(driver_tier_position(99), 1.0, "a tier past the top clamps rather than overshoots");
+        assert_eq!(
+            driver_tier_position(99),
+            1.0,
+            "a tier past the top clamps rather than overshoots"
+        );
     }
 }

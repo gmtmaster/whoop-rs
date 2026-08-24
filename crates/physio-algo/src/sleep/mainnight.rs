@@ -48,7 +48,11 @@ impl ScoredNightBlock {
     /// A block read off the clock alone: asleep and in-bed are both its span.
     fn from_span(b: &NightBlock) -> Self {
         let d = b.duration_s() as f64;
-        ScoredNightBlock { onset: b.start, asleep_s: d, in_bed_s: d }
+        ScoredNightBlock {
+            onset: b.start,
+            asleep_s: d,
+            in_bed_s: d,
+        }
     }
     fn midpoint_sec(&self) -> i64 {
         self.onset + (self.in_bed_s / 2.0) as i64
@@ -106,7 +110,8 @@ fn circular_distance_sec(a: i64, b: i64) -> i64 {
 /// The cold-start anchor: the center of the overnight band, as a time-of-day in seconds (03:30).
 fn cold_start_anchor_sec() -> i64 {
     let start_sec = OVERNIGHT_START_HOUR * 3_600;
-    let span = ((OVERNIGHT_END_HOUR - OVERNIGHT_START_HOUR) * 3_600 + SECONDS_PER_DAY) % SECONDS_PER_DAY;
+    let span =
+        ((OVERNIGHT_END_HOUR - OVERNIGHT_START_HOUR) * 3_600 + SECONDS_PER_DAY) % SECONDS_PER_DAY;
     (start_sec + span / 2) % SECONDS_PER_DAY
 }
 
@@ -119,7 +124,8 @@ fn alignment_bonus_minutes(block_mid_sec: i64, target_mid_sec: i64) -> f64 {
     if d >= ALIGNMENT_ZERO_SEC {
         return 0.0;
     }
-    let frac = (ALIGNMENT_ZERO_SEC - d) as f64 / (ALIGNMENT_ZERO_SEC - ALIGNMENT_FULL_WINDOW_SEC) as f64;
+    let frac =
+        (ALIGNMENT_ZERO_SEC - d) as f64 / (ALIGNMENT_ZERO_SEC - ALIGNMENT_FULL_WINDOW_SEC) as f64;
     ALIGNMENT_BONUS_MIN * frac
 }
 
@@ -137,10 +143,15 @@ pub fn bridge_adjacent(blocks: &[NightBlock]) -> Vec<NightBlock> {
     let bridge_s = GAP_BRIDGE_MAX_MIN * 60;
     let mut out = vec![sorted[0]];
     for b in &sorted[1..] {
-        let last = *out.last().expect("out is seeded from sorted[0]; never empty");
+        let last = *out
+            .last()
+            .expect("out is seeded from sorted[0]; never empty");
         let gap = b.start - last.end;
         if (0..bridge_s).contains(&gap) {
-            *out.last_mut().expect("out non-empty: seeded + only grows") = NightBlock { start: last.start, end: last.end.max(b.end) };
+            *out.last_mut().expect("out non-empty: seeded + only grows") = NightBlock {
+                start: last.start,
+                end: last.end.max(b.end),
+            };
         } else {
             out.push(*b);
         }
@@ -173,10 +184,20 @@ pub fn bridged_night_groups(blocks: &[NightBlock], offset_s: i64) -> Vec<Bridged
                 && (gap < bridge_s || (gap < night_tail_bridge_s && substantial_night_tail));
             if bridges {
                 if gap > 0 {
-                    gaps.last_mut().expect("gaps non-empty: built from |indices|-1 merge steps").push((last.end, b.start));
+                    gaps.last_mut()
+                        .expect("gaps non-empty: built from |indices|-1 merge steps")
+                        .push((last.end, b.start));
                 }
-                *bridged.last_mut().expect("bridged non-empty: seeded before merge loop") = NightBlock { start: last.start, end: last.end.max(b.end) };
-                groups.last_mut().expect("groups non-empty: seeded before merge loop").push(idx);
+                *bridged
+                    .last_mut()
+                    .expect("bridged non-empty: seeded before merge loop") = NightBlock {
+                    start: last.start,
+                    end: last.end.max(b.end),
+                };
+                groups
+                    .last_mut()
+                    .expect("groups non-empty: seeded before merge loop")
+                    .push(idx);
                 continue;
             }
         }
@@ -189,7 +210,10 @@ pub fn bridged_night_groups(blocks: &[NightBlock], offset_s: i64) -> Vec<Bridged
         .zip(gaps)
         .map(|(mut g, gp)| {
             g.sort_unstable();
-            BridgedNightGroup { indices: g, gaps: gp }
+            BridgedNightGroup {
+                indices: g,
+                gaps: gp,
+            }
         })
         .collect()
 }
@@ -197,7 +221,11 @@ pub fn bridged_night_groups(blocks: &[NightBlock], offset_s: i64) -> Vec<Bridged
 /// Index of the day's main night by the learned-timing score (asleep minutes + alignment bonus). Highest
 /// wins; exact ties break toward the earlier onset. `None` only for an empty list. Reads a block off the
 /// clock alone — [`main_night_index_scored`] is the same score over decoded stage time.
-pub fn main_night_index(blocks: &[NightBlock], offset_s: i64, habitual_midsleep_sec: Option<i64>) -> Option<usize> {
+pub fn main_night_index(
+    blocks: &[NightBlock],
+    offset_s: i64,
+    habitual_midsleep_sec: Option<i64>,
+) -> Option<usize> {
     let scored: Vec<ScoredNightBlock> = blocks.iter().map(ScoredNightBlock::from_span).collect();
     main_night_index_scored(&scored, offset_s, habitual_midsleep_sec)
 }
@@ -214,12 +242,17 @@ pub fn main_night_index_scored(
     }
     let target = target_midsleep_sec(habitual_midsleep_sec);
     let score = |b: &ScoredNightBlock| -> f64 {
-        b.asleep_s / 60.0 + alignment_bonus_minutes(local_sec_of_day(b.midpoint_sec(), offset_s), target)
+        b.asleep_s / 60.0
+            + alignment_bonus_minutes(local_sec_of_day(b.midpoint_sec(), offset_s), target)
     };
     let mut best = 0usize;
     for i in 1..blocks.len() {
         let (cs, bs) = (score(&blocks[i]), score(&blocks[best]));
-        let wins = if cs != bs { cs > bs } else { blocks[i].onset < blocks[best].onset };
+        let wins = if cs != bs {
+            cs > bs
+        } else {
+            blocks[i].onset < blocks[best].onset
+        };
         if wins {
             best = i;
         }
@@ -241,8 +274,18 @@ pub fn main_night_group_indices(
     let bridged_spans: Vec<NightBlock> = all
         .iter()
         .map(|g| NightBlock {
-            start: g.indices.iter().map(|&i| blocks[i].start).min().expect("group indices non-empty: built from block groups"),
-            end: g.indices.iter().map(|&i| blocks[i].end).max().expect("group indices non-empty: built from block groups"),
+            start: g
+                .indices
+                .iter()
+                .map(|&i| blocks[i].start)
+                .min()
+                .expect("group indices non-empty: built from block groups"),
+            end: g
+                .indices
+                .iter()
+                .map(|&i| blocks[i].end)
+                .max()
+                .expect("group indices non-empty: built from block groups"),
         })
         .collect();
     let winner = main_night_index(&bridged_spans, offset_s, habitual_midsleep_sec)?;
@@ -262,13 +305,21 @@ pub fn main_night_group_indices_scored(
     }
     let spans: Vec<NightBlock> = blocks
         .iter()
-        .map(|b| NightBlock { start: b.onset, end: b.onset + b.in_bed_s as i64 })
+        .map(|b| NightBlock {
+            start: b.onset,
+            end: b.onset + b.in_bed_s as i64,
+        })
         .collect();
     let all = bridged_night_groups(&spans, offset_s);
     let summed: Vec<ScoredNightBlock> = all
         .iter()
         .map(|g| ScoredNightBlock {
-            onset: g.indices.iter().map(|&i| blocks[i].onset).min().expect("group indices non-empty: built from block groups"),
+            onset: g
+                .indices
+                .iter()
+                .map(|&i| blocks[i].onset)
+                .min()
+                .expect("group indices non-empty: built from block groups"),
             asleep_s: g.indices.iter().map(|&i| blocks[i].asleep_s).sum(),
             in_bed_s: g.indices.iter().map(|&i| blocks[i].in_bed_s).sum(),
         })
@@ -304,13 +355,18 @@ pub fn main_night_selection_scored(
         let mut dur_idx = 0usize;
         for i in 1..blocks.len() {
             let (c, b) = (blocks[i], blocks[dur_idx]);
-            let wins = if c.asleep_s != b.asleep_s { c.asleep_s > b.asleep_s } else { c.onset < b.onset };
+            let wins = if c.asleep_s != b.asleep_s {
+                c.asleep_s > b.asleep_s
+            } else {
+                c.onset < b.onset
+            };
             if wins {
                 dur_idx = i;
             }
         }
         let target = target_midsleep_sec(habitual_midsleep_sec);
-        let chosen_bonus = alignment_bonus_minutes(local_sec_of_day(chosen.midpoint_sec(), offset_s), target);
+        let chosen_bonus =
+            alignment_bonus_minutes(local_sec_of_day(chosen.midpoint_sec(), offset_s), target);
         if idx != dur_idx {
             MainNightReason::AlignedToUsual
         } else if habitual_midsleep_sec.is_some() && chosen_bonus > MEANINGFUL_BONUS_EPSILON {
@@ -319,7 +375,11 @@ pub fn main_night_selection_scored(
             MainNightReason::Longest
         }
     };
-    Some(MainNightSelection { index: idx, reason, asleep_sec })
+    Some(MainNightSelection {
+        index: idx,
+        reason,
+        asleep_sec,
+    })
 }
 
 /// Midpoint unix second of a history block.
@@ -348,13 +408,19 @@ fn longest_by_day(history: &[HistoryBlock]) -> std::collections::HashMap<&str, &
 
 /// The user's habitual midsleep (local time-of-day seconds), or `None` on too little history. The circular
 /// mean of the midpoint time-of-day of the longest block per local day (selection-independent).
-pub fn habitual_midsleep_sec(history: &[HistoryBlock], offset_s: i64, min_days: usize) -> Option<i64> {
+pub fn habitual_midsleep_sec(
+    history: &[HistoryBlock],
+    offset_s: i64,
+    min_days: usize,
+) -> Option<i64> {
     let longest = longest_by_day(history);
     if longest.len() < min_days {
         return None;
     }
-    let mid_secs: Vec<i64> =
-        longest.values().map(|b| local_sec_of_day(history_midpoint(b), offset_s)).collect();
+    let mid_secs: Vec<i64> = longest
+        .values()
+        .map(|b| local_sec_of_day(history_midpoint(b), offset_s))
+        .collect();
     circular_mean_sec(&mid_secs)
 }
 
@@ -372,7 +438,11 @@ pub fn habitual_midsleep_series(
         .iter()
         .map(|(k, b)| {
             let mid = history_midpoint(b);
-            (local_day_index(mid, offset_s), *k, local_sec_of_day(mid, offset_s))
+            (
+                local_day_index(mid, offset_s),
+                *k,
+                local_sec_of_day(mid, offset_s),
+            )
         })
         .collect();
     days.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
@@ -384,7 +454,11 @@ pub fn habitual_midsleep_series(
             lo += 1;
         }
         let mids: Vec<i64> = days[lo..=i].iter().map(|d| d.2).collect();
-        let mean = if mids.len() < min_days { None } else { circular_mean_sec(&mids) };
+        let mean = if mids.len() < min_days {
+            None
+        } else {
+            circular_mean_sec(&mids)
+        };
         out.push((day.1.to_string(), mean));
     }
     out
@@ -437,9 +511,13 @@ mod tests {
     fn alignment_bonus_full_then_decays_to_zero() {
         let t = 12_600; // 03:30
         assert_eq!(alignment_bonus_minutes(t, t), ALIGNMENT_BONUS_MIN);
-        assert_eq!(alignment_bonus_minutes(t + ALIGNMENT_FULL_WINDOW_SEC, t), ALIGNMENT_BONUS_MIN);
+        assert_eq!(
+            alignment_bonus_minutes(t + ALIGNMENT_FULL_WINDOW_SEC, t),
+            ALIGNMENT_BONUS_MIN
+        );
         assert_eq!(alignment_bonus_minutes(t + ALIGNMENT_ZERO_SEC, t), 0.0);
-        let mid = alignment_bonus_minutes(t + (ALIGNMENT_FULL_WINDOW_SEC + ALIGNMENT_ZERO_SEC) / 2, t);
+        let mid =
+            alignment_bonus_minutes(t + (ALIGNMENT_FULL_WINDOW_SEC + ALIGNMENT_ZERO_SEC) / 2, t);
         assert!(mid > 0.0 && mid < ALIGNMENT_BONUS_MIN);
     }
 
@@ -529,7 +607,13 @@ mod tests {
     /// answer 0. The pairing count is asserted so the figure quoted for this gate stays checkable.
     #[test]
     fn realistic_nap_never_beats_real_night_cold_start_whichever_order_they_arrive_in() {
-        let night_starts = [at_hour(20) - 86_400, at_hour(22) - 86_400, at_hour(23) - 86_400, at_hour(0), at_hour(1)];
+        let night_starts = [
+            at_hour(20) - 86_400,
+            at_hour(22) - 86_400,
+            at_hour(23) - 86_400,
+            at_hour(0),
+            at_hour(1),
+        ];
         let nap_starts = [
             at_hour(6),
             at_hour(8),
@@ -549,21 +633,35 @@ mod tests {
                 for &ps in &nap_starts {
                     for pm in nap_minutes {
                         let (nap, night) = (nb(ps, ps + pm * 60), nb(ns, ns + nh * 3600));
-                        assert_eq!(main_night_index(&[nap, night], 0, None), Some(1), "nap {pm}min vs night {nh}h");
-                        assert_eq!(main_night_index(&[night, nap], 0, None), Some(0), "night {nh}h vs nap {pm}min");
+                        assert_eq!(
+                            main_night_index(&[nap, night], 0, None),
+                            Some(1),
+                            "nap {pm}min vs night {nh}h"
+                        );
+                        assert_eq!(
+                            main_night_index(&[night, nap], 0, None),
+                            Some(0),
+                            "night {nh}h vs nap {pm}min"
+                        );
                         pairings += 1;
                     }
                 }
             }
         }
         assert_eq!(2_160, pairings);
-        assert_eq!(night_starts.len() * night_hours.len() * nap_starts.len() * nap_minutes.len(), pairings);
+        assert_eq!(
+            night_starts.len() * night_hours.len() * nap_starts.len() * nap_minutes.len(),
+            pairings
+        );
     }
 
     #[test]
     fn ambiguous_long_daytime_beats_short_night_by_design() {
         let (night, day_long) = (at_hour(23) - 86_400, at_hour(12)); // 4h(+75 bonus=315) vs 6h(+0=360)
-        let blocks = [nb(night, night + 4 * 3600), nb(day_long, day_long + 6 * 3600)];
+        let blocks = [
+            nb(night, night + 4 * 3600),
+            nb(day_long, day_long + 6 * 3600),
+        ];
         assert_eq!(main_night_index(&blocks, 0, None), Some(1));
     }
 
@@ -580,19 +678,42 @@ mod tests {
     fn group_indices_long_gap_night_tail_and_daytime_nap() {
         let a = at_hour(23) - 86_400;
         let b = a + 5 * 3600 + 5 * 3600; // 5h gap
-        assert_eq!(main_night_group_indices(&[nb(a, a + 5 * 3600), nb(b, b + 2 * 3600)], 0, None), Some(vec![0]));
+        assert_eq!(
+            main_night_group_indices(&[nb(a, a + 5 * 3600), nb(b, b + 2 * 3600)], 0, None),
+            Some(vec![0])
+        );
         let c = at_min(23, 30) - 86_400;
         let d = c + 3 * 3600 + 2 * 3600; // 2-hour overnight interruption remains one opportunity
-        assert_eq!(main_night_group_indices(&[nb(c, c + 3 * 3600), nb(d, d + 4 * 3600)], 0, None), Some(vec![0, 1]));
-        assert_eq!(bridge_adjacent(&[nb(c, c + 3 * 3600), nb(d, d + 4 * 3600)]).len(), 2); // <60 contract unchanged
+        assert_eq!(
+            main_night_group_indices(&[nb(c, c + 3 * 3600), nb(d, d + 4 * 3600)], 0, None),
+            Some(vec![0, 1])
+        );
+        assert_eq!(
+            bridge_adjacent(&[nb(c, c + 3 * 3600), nb(d, d + 4 * 3600)]).len(),
+            2
+        ); // <60 contract unchanged
         let (night, nap) = (at_hour(0), at_hour(13)); // daytime nap onset -> never a night-tail
-        assert_eq!(main_night_group_indices(&[nb(night, night + 6 * 3600), nb(nap, nap + 90 * 60)], 0, None), Some(vec![0]));
+        assert_eq!(
+            main_night_group_indices(
+                &[nb(night, night + 6 * 3600), nb(nap, nap + 90 * 60)],
+                0,
+                None
+            ),
+            Some(vec![0])
+        );
         let e = at_hour(23) - 86_400;
         let f = e + 3 * 3600 + 4 * 3600; // the four-hour ceiling is exclusive
-        assert_eq!(main_night_group_indices(&[nb(e, e + 3 * 3600), nb(f, f + 4 * 3600)], 0, None), Some(vec![1]));
+        assert_eq!(
+            main_night_group_indices(&[nb(e, e + 3 * 3600), nb(f, f + 4 * 3600)], 0, None),
+            Some(vec![1])
+        );
         let short_nap = e + 3 * 3600 + 3 * 3600;
         assert_eq!(
-            main_night_group_indices(&[nb(e, e + 3 * 3600), nb(short_nap, short_nap + 90 * 60)], 0, None),
+            main_night_group_indices(
+                &[nb(e, e + 3 * 3600), nb(short_nap, short_nap + 90 * 60)],
+                0,
+                None
+            ),
             Some(vec![0])
         );
     }
@@ -601,21 +722,45 @@ mod tests {
     fn selection_reasons() {
         let n = at_hour(23) - 86_400;
         let only = main_night_selection(&[nb(n, n + 7 * 3600 + 12 * 60)], 0, None).unwrap();
-        assert_eq!((only.reason, only.asleep_sec), (MainNightReason::OnlyBlock, 7 * 3600 + 12 * 60));
+        assert_eq!(
+            (only.reason, only.asleep_sec),
+            (MainNightReason::OnlyBlock, 7 * 3600 + 12 * 60)
+        );
         let (a, b) = (at_hour(22) - 86_400, at_hour(23) - 86_400 + 1800);
-        let cold = main_night_selection(&[nb(a, a + 3 * 3600), nb(b, b + 6 * 3600)], 0, None).unwrap();
+        let cold =
+            main_night_selection(&[nb(a, a + 3 * 3600), nb(b, b + 6 * 3600)], 0, None).unwrap();
         assert_eq!((cold.index, cold.reason), (1, MainNightReason::Longest)); // cold-start -> longest
         let hab = sod(3, 0);
         let (night, nap) = (at_hour(23) - 86_400, at_hour(15)); // longest AND bonus-aligned
-        let lnu = main_night_selection(&[nb(nap, nap + 3600), nb(night, night + 6 * 3600)], 0, Some(hab)).unwrap();
-        assert_eq!((lnu.index, lnu.reason), (1, MainNightReason::LongestNearUsual));
+        let lnu = main_night_selection(
+            &[nb(nap, nap + 3600), nb(night, night + 6 * 3600)],
+            0,
+            Some(hab),
+        )
+        .unwrap();
+        assert_eq!(
+            (lnu.index, lnu.reason),
+            (1, MainNightReason::LongestNearUsual)
+        );
         let (afternoon, n2) = (at_hour(13), at_hour(1)); // 5h(300) vs 4h+90 bonus(330) -> timing flips
-        let atu = main_night_selection(&[nb(afternoon, afternoon + 5 * 3600), nb(n2, n2 + 4 * 3600)], 0, Some(hab)).unwrap();
-        assert_eq!((atu.index, atu.reason, atu.asleep_sec), (1, MainNightReason::AlignedToUsual, 4 * 3600));
+        let atu = main_night_selection(
+            &[nb(afternoon, afternoon + 5 * 3600), nb(n2, n2 + 4 * 3600)],
+            0,
+            Some(hab),
+        )
+        .unwrap();
+        assert_eq!(
+            (atu.index, atu.reason, atu.asleep_sec),
+            (1, MainNightReason::AlignedToUsual, 4 * 3600)
+        );
     }
 
     fn snb(onset: i64, asleep_s: f64, in_bed_s: f64) -> ScoredNightBlock {
-        ScoredNightBlock { onset, asleep_s, in_bed_s }
+        ScoredNightBlock {
+            onset,
+            asleep_s,
+            in_bed_s,
+        }
     }
 
     /// The clock reading is the scored one with asleep = in-bed = the span, so a block staged as pure
@@ -626,8 +771,8 @@ mod tests {
         let clock = [nb(empty, empty + 8 * 3600), nb(real, real + 5 * 3600)];
         assert_eq!(main_night_index(&clock, 0, None), Some(0)); // 480 min of clock beats 300
         let staged = [
-            snb(empty, 0.0, 8.0 * 3600.0),          // eight hours, all of it wake
-            snb(real, 4.5 * 3600.0, 5.0 * 3600.0),  // five hours holding 4.5 h of sleep
+            snb(empty, 0.0, 8.0 * 3600.0),         // eight hours, all of it wake
+            snb(real, 4.5 * 3600.0, 5.0 * 3600.0), // five hours holding 4.5 h of sleep
         ];
         assert_eq!(main_night_index_scored(&staged, 0, None), Some(1));
     }
@@ -644,7 +789,10 @@ mod tests {
             snb(f2, 3.4 * 3600.0, 3.5 * 3600.0),
             snb(nap, 1.9 * 3600.0, 2.0 * 3600.0),
         ];
-        assert_eq!(main_night_group_indices_scored(&blocks, 0, None), Some(vec![0, 1]));
+        assert_eq!(
+            main_night_group_indices_scored(&blocks, 0, None),
+            Some(vec![0, 1])
+        );
         // The bare pick reports the winning FRAGMENT's own sleep; grouping is the caller's, above.
         let sel = main_night_selection_scored(&blocks, 0, None).unwrap();
         assert_eq!((sel.index, sel.asleep_sec), (1, (3.4 * 3600.0) as i64));
@@ -656,15 +804,33 @@ mod tests {
         let mut hist = Vec::new();
         for d in 0..20i64 {
             let onset = at_hour(23) - 86_400 + d * 86_400; // 7h night, mid 02:30
-            hist.push(HistoryBlock { start: onset, end: onset + 7 * 3600, day_key: format!("n{d}") });
+            hist.push(HistoryBlock {
+                start: onset,
+                end: onset + 7 * 3600,
+                day_key: format!("n{d}"),
+            });
             let nap = onset - 8 * 3600; // same-day nap, excluded by longest-per-day
-            hist.push(HistoryBlock { start: nap, end: nap + 3600, day_key: format!("n{d}") });
+            hist.push(HistoryBlock {
+                start: nap,
+                end: nap + 3600,
+                day_key: format!("n{d}"),
+            });
         }
-        assert!((habitual_midsleep_sec(&hist, 0, HABITUAL_MIN_DAYS).unwrap() - sod(2, 30)).abs() <= 1);
+        assert!(
+            (habitual_midsleep_sec(&hist, 0, HABITUAL_MIN_DAYS).unwrap() - sod(2, 30)).abs() <= 1
+        );
         let mut anti = Vec::new();
         for d in 0..16i64 {
-            let onset = if d % 2 == 0 { at_min(20, 30) - 86_400 } else { at_min(8, 30) } + d * 86_400; // mids 00:00 / 12:00
-            anti.push(HistoryBlock { start: onset, end: onset + 7 * 3600, day_key: format!("a{d}") });
+            let onset = if d % 2 == 0 {
+                at_min(20, 30) - 86_400
+            } else {
+                at_min(8, 30)
+            } + d * 86_400; // mids 00:00 / 12:00
+            anti.push(HistoryBlock {
+                start: onset,
+                end: onset + 7 * 3600,
+                day_key: format!("a{d}"),
+            });
         }
         assert_eq!(habitual_midsleep_sec(&anti, 0, HABITUAL_MIN_DAYS), None); // antipodal -> cold-start fallback
     }
@@ -673,7 +839,11 @@ mod tests {
     fn nightly(days: std::ops::Range<i64>, skew_sec: impl Fn(i64) -> i64) -> Vec<HistoryBlock> {
         days.map(|d| {
             let onset = at_hour(23) - 86_400 + d * 86_400 + skew_sec(d);
-            HistoryBlock { start: onset, end: onset + 7 * 3600, day_key: format!("n{d:02}") }
+            HistoryBlock {
+                start: onset,
+                end: onset + 7 * 3600,
+                day_key: format!("n{d:02}"),
+            }
         })
         .collect()
     }
@@ -687,26 +857,44 @@ mod tests {
         let hist = nightly(0..40, |_| 0);
         let series = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
         assert_eq!(series.len(), 40);
-        assert!(series[..HABITUAL_MIN_DAYS - 1].iter().all(|(_, v)| v.is_none())); // cold start
+        assert!(
+            series[..HABITUAL_MIN_DAYS - 1]
+                .iter()
+                .all(|(_, v)| v.is_none())
+        ); // cold start
         let vals = defined(&series);
         assert_eq!(vals.len(), 40 - (HABITUAL_MIN_DAYS - 1));
-        assert!(vals.iter().all(|&v| (v - sod(2, 30)).abs() <= 1), "an unchanging habit must not drift");
+        assert!(
+            vals.iter().all(|&v| (v - sod(2, 30)).abs() <= 1),
+            "an unchanging habit must not drift"
+        );
     }
 
     #[test]
     fn habitual_series_is_none_under_the_day_floor() {
-        let series = habitual_midsleep_series(&nightly(0..10, |_| 0), 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        let series = habitual_midsleep_series(
+            &nightly(0..10, |_| 0),
+            0,
+            HABITUAL_MIN_DAYS,
+            HABITUAL_WINDOW_DAYS,
+        );
         assert_eq!(series.len(), 10);
         assert!(series.iter().all(|(_, v)| v.is_none()));
-        assert!(habitual_midsleep_series(&[], 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS).is_empty());
+        assert!(
+            habitual_midsleep_series(&[], 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS).is_empty()
+        );
     }
 
     /// The slack between the window span and the day floor is what keeps a few unworn nights from
     /// blanking the band: the same history under a window equal to the floor loses days it holds here.
     #[test]
     fn habitual_series_survives_a_few_unworn_nights() {
-        let hist: Vec<HistoryBlock> =
-            nightly(0..40, |_| 0).into_iter().enumerate().filter(|(d, _)| !(20..24).contains(d)).map(|(_, b)| b).collect();
+        let hist: Vec<HistoryBlock> = nightly(0..40, |_| 0)
+            .into_iter()
+            .enumerate()
+            .filter(|(d, _)| !(20..24).contains(d))
+            .map(|(_, b)| b)
+            .collect();
         assert_eq!(hist.len(), 36);
         let series = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
         assert!(series.last().expect("36 days in").1.is_some());
@@ -718,11 +906,21 @@ mod tests {
     fn habitual_series_drifts_with_a_walking_bedtime() {
         const DAYS: i64 = 30;
         const STEP_SEC: i64 = 2 * 3600 / DAYS; // 2 h of walk spread across the month
-        let series =
-            habitual_midsleep_series(&nightly(0..DAYS, |d| d * STEP_SEC), 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
+        let series = habitual_midsleep_series(
+            &nightly(0..DAYS, |d| d * STEP_SEC),
+            0,
+            HABITUAL_MIN_DAYS,
+            HABITUAL_WINDOW_DAYS,
+        );
         let vals = defined(&series);
-        assert!(vals.windows(2).all(|w| w[1] >= w[0]), "a one-way walk must never reverse");
-        assert!(vals[vals.len() - 1] - vals[0] > 30 * 60, "the trailing mean must carry the walk");
+        assert!(
+            vals.windows(2).all(|w| w[1] >= w[0]),
+            "a one-way walk must never reverse"
+        );
+        assert!(
+            vals[vals.len() - 1] - vals[0] > 30 * 60,
+            "the trailing mean must carry the walk"
+        );
         // Slightly: no one night moves the window mean by more than a few minutes.
         assert!(vals.windows(2).all(|w| w[1] - w[0] <= 5 * 60));
     }
@@ -742,19 +940,37 @@ mod tests {
                 }
             })
             .collect();
-        let vals = defined(&habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS));
-        assert!(vals.windows(2).all(|w| circular_distance_sec(w[1], w[0]) <= 5 * 60), "no 24 h jump");
-        assert!(vals.windows(2).any(|w| (w[1] - w[0]).abs() > 12 * 3600), "the window must actually wrap");
+        let vals = defined(&habitual_midsleep_series(
+            &hist,
+            0,
+            HABITUAL_MIN_DAYS,
+            HABITUAL_WINDOW_DAYS,
+        ));
+        assert!(
+            vals.windows(2)
+                .all(|w| circular_distance_sec(w[1], w[0]) <= 5 * 60),
+            "no 24 h jump"
+        );
+        assert!(
+            vals.windows(2).any(|w| (w[1] - w[0]).abs() > 12 * 3600),
+            "the window must actually wrap"
+        );
     }
 
     #[test]
     fn habitual_series_last_day_matches_the_scalar_over_the_same_window() {
         let hist = nightly(0..40, |d| (d % 5) * 900);
         let series = habitual_midsleep_series(&hist, 0, HABITUAL_MIN_DAYS, HABITUAL_WINDOW_DAYS);
-        let last = hist.iter().map(|b| local_day_index(history_midpoint(b), 0)).max().expect("40 days in");
+        let last = hist
+            .iter()
+            .map(|b| local_day_index(history_midpoint(b), 0))
+            .max()
+            .expect("40 days in");
         let tail: Vec<HistoryBlock> = hist
             .iter()
-            .filter(|b| local_day_index(history_midpoint(b), 0) > last - HABITUAL_WINDOW_DAYS as i64)
+            .filter(|b| {
+                local_day_index(history_midpoint(b), 0) > last - HABITUAL_WINDOW_DAYS as i64
+            })
             .cloned()
             .collect();
         let scalar = habitual_midsleep_sec(&tail, 0, HABITUAL_MIN_DAYS);

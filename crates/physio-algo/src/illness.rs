@@ -29,7 +29,11 @@ pub fn baseline_window(i: usize) -> std::ops::Range<usize> {
 pub fn baseline_z_at(values: &[Option<f64>], i: usize) -> Option<f64> {
     let value = *values.get(i)?.as_ref()?;
     let r = baseline_window(i);
-    let xs: Vec<f64> = values[r.start..r.end.min(values.len())].iter().flatten().copied().collect();
+    let xs: Vec<f64> = values[r.start..r.end.min(values.len())]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
     if xs.len() < MIN_BASELINE_NIGHTS {
         return None;
     }
@@ -39,7 +43,9 @@ pub fn baseline_z_at(values: &[Option<f64>], i: usize) -> Option<f64> {
 
 /// [`baseline_z_at`] for every day of a chronological (oldest first) series.
 pub fn baseline_z_series(values: &[Option<f64>]) -> Vec<Option<f64>> {
-    (0..values.len()).map(|i| baseline_z_at(values, i)).collect()
+    (0..values.len())
+        .map(|i| baseline_z_at(values, i))
+        .collect()
 }
 
 #[cfg(test)]
@@ -69,14 +75,20 @@ mod tests {
     #[test]
     fn multi_day_rise_clears_the_fire_threshold_only_with_the_gap() {
         // 52 calm nights (55 ± 1 alternating), then an 8-night rise to 62.
-        let mut vs: Vec<Option<f64>> = (0..52).map(|i| Some(if i % 2 == 0 { 54.0 } else { 56.0 })).collect();
+        let mut vs: Vec<Option<f64>> = (0..52)
+            .map(|i| Some(if i % 2 == 0 { 54.0 } else { 56.0 }))
+            .collect();
         vs.extend((0..8).map(|_| Some(62.0)));
         let i = vs.len() - 1;
         let z = baseline_z_at(&vs, i).unwrap();
         assert!(z > 2.0, "gapped z was {z}");
 
         // Same day against the gapless window: three more ill nights in the baseline, and it goes quiet.
-        let gapless: Vec<f64> = vs[i - BASELINE_WINDOW_NIGHTS..i].iter().flatten().copied().collect();
+        let gapless: Vec<f64> = vs[i - BASELINE_WINDOW_NIGHTS..i]
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         let z0 = (62.0 - stats::mean(&gapless)) / stats::sample_sd(&gapless).max(SD_FLOOR);
         assert!(z0 < 2.0, "gapless z was {z0}");
     }
@@ -84,7 +96,9 @@ mod tests {
     /// Missing nights are skipped, never zero-filled, and the trust gate counts usable ones only.
     #[test]
     fn missing_nights_are_skipped_not_zero_filled() {
-        let mut vs: Vec<Option<f64>> = (0..48).map(|i| Some(if i % 2 == 0 { 54.0 } else { 56.0 })).collect();
+        let mut vs: Vec<Option<f64>> = (0..48)
+            .map(|i| Some(if i % 2 == 0 { 54.0 } else { 56.0 }))
+            .collect();
         let i = vs.len() - 1;
         vs[i] = Some(60.0);
         let full = baseline_z_at(&vs, i).unwrap();

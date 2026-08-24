@@ -115,7 +115,14 @@ pub struct BeatTemplate {
 /// Beat-template correlation over the default QRS-and-T window, `-`[`TEMPLATE_PRE_MS`] to
 /// `+`[`TEMPLATE_POST_MS`] around each R peak, windows as sampled.
 pub fn beat_template(samples: &[f64], fs_hz: f64, peaks: &[usize]) -> Option<BeatTemplate> {
-    beat_template_window(samples, fs_hz, peaks, -TEMPLATE_PRE_MS, TEMPLATE_POST_MS, WindowBaseline::AsIs)
+    beat_template_window(
+        samples,
+        fs_hz,
+        peaks,
+        -TEMPLATE_PRE_MS,
+        TEMPLATE_POST_MS,
+        WindowBaseline::AsIs,
+    )
 }
 
 /// Beat-template correlation over an arbitrary window `lo_ms..=hi_ms` relative to each R peak, in ms;
@@ -147,7 +154,8 @@ pub fn beat_template_window(
         .iter()
         .filter_map(|&p| {
             let (s, e) = (p as isize + lo, p as isize + hi);
-            (s >= 0 && e < x.len() as isize).then(|| levelled(&x[s as usize..=e as usize], baseline))
+            (s >= 0 && e < x.len() as isize)
+                .then(|| levelled(&x[s as usize..=e as usize], baseline))
         })
         .collect();
     if beats.len() < TEMPLATE_MIN_BEATS {
@@ -166,7 +174,11 @@ pub fn beat_template_window(
     let mut rs = Vec::with_capacity(beats.len());
     let mut residual = Vec::with_capacity(beats.len() * width);
     for b in &beats {
-        let others: Vec<f64> = sum.iter().zip(b.iter()).map(|(s, v)| (s - v) / (n - 1.0)).collect();
+        let others: Vec<f64> = sum
+            .iter()
+            .zip(b.iter())
+            .map(|(s, v)| (s - v) / (n - 1.0))
+            .collect();
         if let Some(r) = pearson(b, &others) {
             rs.push(r);
         }
@@ -187,7 +199,11 @@ fn levelled(window: &[f64], baseline: WindowBaseline) -> Vec<f64> {
         WindowBaseline::AsIs => window.to_vec(),
         WindowBaseline::Detrended => {
             let (slope, intercept) = least_squares_line(window);
-            window.iter().enumerate().map(|(i, &v)| v - (slope * i as f64 + intercept)).collect()
+            window
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| v - (slope * i as f64 + intercept))
+                .collect()
         }
     }
 }
@@ -201,18 +217,27 @@ mod tests {
     fn gaussian(n: usize, seed: u64) -> Vec<f64> {
         let mut s = seed;
         let mut next = || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (s >> 11) as f64 / (1u64 << 53) as f64
         };
-        (0..n).map(|_| (0..12).map(|_| next()).sum::<f64>() - 6.0).collect()
+        (0..n)
+            .map(|_| (0..12).map(|_| next()).sum::<f64>() - 6.0)
+            .collect()
     }
 
     #[test]
     fn kurtosis_separates_gaussian_noise_from_a_spiky_train() {
         let noise = k_sqi(&gaussian(4000, 7)).unwrap();
-        assert!((noise - 3.0).abs() < 0.5, "gaussian kurtosis must sit near 3, got {noise}");
+        assert!(
+            (noise - 3.0).abs() < 0.5,
+            "gaussian kurtosis must sit near 3, got {noise}"
+        );
         // One spike every 200 samples: sharply peaked, so kurtosis climbs far above 3.
-        let spiky: Vec<f64> = (0..4000).map(|i| if i % 200 == 0 { 10.0 } else { 0.0 }).collect();
+        let spiky: Vec<f64> = (0..4000)
+            .map(|i| if i % 200 == 0 { 10.0 } else { 0.0 })
+            .collect();
         assert!(k_sqi(&spiky).unwrap() > 20.0);
         assert!(k_sqi(&[1.0, 1.0, 1.0, 1.0]).is_none()); // constant has no scale
         assert!(k_sqi(&[1.0, 2.0]).is_none());
@@ -222,7 +247,9 @@ mod tests {
     fn p_sqi_moves_with_where_the_power_is() {
         let fs = 200.0;
         let tone = |hz: f64| -> Vec<f64> {
-            (0..2000).map(|i| (2.0 * PI * hz * i as f64 / fs).sin()).collect()
+            (0..2000)
+                .map(|i| (2.0 * PI * hz * i as f64 / fs).sin())
+                .collect()
         };
         let inside = p_sqi(&Periodogram::new(&tone(10.0)), fs).unwrap();
         let outside = p_sqi(&Periodogram::new(&tone(30.0)), fs).unwrap();
@@ -235,7 +262,9 @@ mod tests {
     #[test]
     fn bas_sqi_falls_when_baseline_wander_is_added() {
         let fs = 200.0;
-        let clean: Vec<f64> = (0..4000).map(|i| (2.0 * PI * 10.0 * i as f64 / fs).sin()).collect();
+        let clean: Vec<f64> = (0..4000)
+            .map(|i| (2.0 * PI * 10.0 * i as f64 / fs).sin())
+            .collect();
         let drifted: Vec<f64> = clean
             .iter()
             .enumerate()
@@ -252,7 +281,9 @@ mod tests {
     fn template_correlation_is_high_for_repeats_and_low_for_noise() {
         let fs = 200.0;
         let width = 61usize; // one arbitrary but repeated shape
-        let shape: Vec<f64> = (0..width).map(|i| (PI * i as f64 / width as f64).sin().powi(3)).collect();
+        let shape: Vec<f64> = (0..width)
+            .map(|i| (PI * i as f64 / width as f64).sin().powi(3))
+            .collect();
         let (mut real, mut peaks) = (vec![0.0; 4000], Vec::new());
         for k in 0..15 {
             let start = 100 + k * 200;
@@ -262,13 +293,21 @@ mod tests {
             peaks.push(start + width / 2);
         }
         let t = beat_template(&real, fs, &peaks).unwrap();
-        assert!(t.correlation > 0.99, "identical beats must correlate, got {}", t.correlation);
+        assert!(
+            t.correlation > 0.99,
+            "identical beats must correlate, got {}",
+            t.correlation
+        );
         assert_eq!(t.beats, 15);
 
         // Same peak positions over noise: no stable shape, so the leave-one-out template collapses.
         let noise = gaussian(4000, 11);
         let n = beat_template(&noise, fs, &peaks).unwrap();
-        assert!(n.correlation < 0.3, "noise must not build a template, got {}", n.correlation);
+        assert!(
+            n.correlation < 0.3,
+            "noise must not build a template, got {}",
+            n.correlation
+        );
     }
 
     #[test]
@@ -282,21 +321,42 @@ mod tests {
                 x[p - 25 - 10 + j] += (std::f64::consts::PI * j as f64 / 20.0).sin();
             }
         }
-        let ahead = beat_template_window(&x, fs, &peaks, -250.0, -50.0, WindowBaseline::AsIs).unwrap();
+        let ahead =
+            beat_template_window(&x, fs, &peaks, -250.0, -50.0, WindowBaseline::AsIs).unwrap();
         assert_eq!(ahead.template.len(), 41, "200 ms at 200 Hz is 40 steps");
         assert!(ahead.template.iter().fold(0.0f64, |a, &v| a.max(v.abs())) > 0.9);
-        assert!(ahead.residual_sigma < 1e-12, "identical beats leave no residual");
+        assert!(
+            ahead.residual_sigma < 1e-12,
+            "identical beats leave no residual"
+        );
 
         // A steep shared ramp with independent noise on it: undetrended the windows correlate almost
         // perfectly on the slope alone, which is a drift agreeing with itself, not a repeating feature.
         let noise = gaussian(4000, 21);
-        let ramp: Vec<f64> = noise.iter().enumerate().map(|(i, v)| i as f64 * 2.0 + v).collect();
-        let sloped = beat_template_window(&ramp, fs, &peaks, -250.0, -50.0, WindowBaseline::AsIs).unwrap();
-        let flat = beat_template_window(&ramp, fs, &peaks, -250.0, -50.0, WindowBaseline::Detrended).unwrap();
-        assert!(sloped.correlation > 0.99, "the slope alone must inflate it, got {}", sloped.correlation);
-        assert!(flat.correlation.abs() < 0.3, "detrended, only the noise is left, got {}", flat.correlation);
+        let ramp: Vec<f64> = noise
+            .iter()
+            .enumerate()
+            .map(|(i, v)| i as f64 * 2.0 + v)
+            .collect();
+        let sloped =
+            beat_template_window(&ramp, fs, &peaks, -250.0, -50.0, WindowBaseline::AsIs).unwrap();
+        let flat =
+            beat_template_window(&ramp, fs, &peaks, -250.0, -50.0, WindowBaseline::Detrended)
+                .unwrap();
+        assert!(
+            sloped.correlation > 0.99,
+            "the slope alone must inflate it, got {}",
+            sloped.correlation
+        );
+        assert!(
+            flat.correlation.abs() < 0.3,
+            "detrended, only the noise is left, got {}",
+            flat.correlation
+        );
         // An inverted window and one too narrow to correlate over are refused, not guessed at.
-        assert!(beat_template_window(&x, fs, &peaks, -50.0, -250.0, WindowBaseline::AsIs).is_none());
+        assert!(
+            beat_template_window(&x, fs, &peaks, -50.0, -250.0, WindowBaseline::AsIs).is_none()
+        );
         assert!(beat_template_window(&x, fs, &peaks, -60.0, -50.0, WindowBaseline::AsIs).is_none());
     }
 

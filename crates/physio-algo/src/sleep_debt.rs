@@ -60,18 +60,33 @@ pub fn severity(balance_min: f64) -> DebtSeverity {
 /// Round to 1 dp, half-away-from-zero.
 fn round1(v: f64) -> f64 {
     let scaled = v * 10.0;
-    let rounded = if scaled < 0.0 { (scaled - 0.5).ceil() } else { (scaled + 0.5).floor() };
+    let rounded = if scaled < 0.0 {
+        (scaled - 0.5).ceil()
+    } else {
+        (scaled + 0.5).floor()
+    };
     rounded / 10.0
 }
 
 /// Build the ledger from a chronological series of `(day, total_sleep_min?)` rows.
 /// Rows with `None` or `≤0` sleep are skipped. The window caps the most-recent COUNTED nights.
-pub fn ledger(series: &[(String, Option<f64>)], need_hours: Option<f64>, window: Option<usize>) -> DebtLedger {
+pub fn ledger(
+    series: &[(String, Option<f64>)],
+    need_hours: Option<f64>,
+    window: Option<usize>,
+) -> DebtLedger {
     let need_min = need_hours.unwrap_or(DEFAULT_NEED_HOURS).max(0.0) * 60.0;
     let cap = window.unwrap_or(DEFAULT_WINDOW_NIGHTS).max(1);
 
-    let usable: Vec<&(String, Option<f64>)> = series.iter().filter(|(_, s)| s.unwrap_or(0.0) > 0.0).collect();
-    let windowed = if usable.len() > cap { &usable[usable.len() - cap..] } else { &usable[..] };
+    let usable: Vec<&(String, Option<f64>)> = series
+        .iter()
+        .filter(|(_, s)| s.unwrap_or(0.0) > 0.0)
+        .collect();
+    let windowed = if usable.len() > cap {
+        &usable[usable.len() - cap..]
+    } else {
+        &usable[..]
+    };
 
     let mut nights = Vec::with_capacity(windowed.len());
     let mut balance = 0.0;
@@ -79,9 +94,17 @@ pub fn ledger(series: &[(String, Option<f64>)], need_hours: Option<f64>, window:
         let slept_min = slept.unwrap_or(0.0);
         let delta = slept_min - need_min;
         balance += delta;
-        nights.push(DebtNight { day: day.clone(), slept_min, delta_min: delta });
+        nights.push(DebtNight {
+            day: day.clone(),
+            slept_min,
+            delta_min: delta,
+        });
     }
-    DebtLedger { balance_min: round1(balance), nights, need_min }
+    DebtLedger {
+        balance_min: round1(balance),
+        nights,
+        need_min,
+    }
 }
 
 #[cfg(test)]
@@ -93,7 +116,10 @@ mod tests {
     }
 
     fn nights_of(mins: &[Option<f64>]) -> Vec<(String, Option<f64>)> {
-        mins.iter().enumerate().map(|(i, m)| (format!("d{i}"), *m)).collect()
+        mins.iter()
+            .enumerate()
+            .map(|(i, m)| (format!("d{i}"), *m))
+            .collect()
     }
 
     /// One row of the truth table: an input, and the balance and counted-night total it must yield.
@@ -114,24 +140,63 @@ mod tests {
         balance: f64,
         count: usize,
     ) -> Row {
-        Row { name, series: nights_of(mins), need, window, balance, count }
+        Row {
+            name,
+            series: nights_of(mins),
+            need,
+            window,
+            balance,
+            count,
+        }
     }
 
     /// A ledger is exact arithmetic, not physiology, so every figure below is computed, not observed.
     fn table() -> Vec<Row> {
         vec![
             row("nothing reported", &[], None, None, 0.0, 0),
-            row("a surplus cancels an equal deficit", &[Some(360.0), Some(600.0)], Some(8.0), Some(14), 0.0, 2),
-            row("two short nights", &[Some(360.0), Some(360.0)], Some(8.0), Some(14), -240.0, 2),
-            row("two long nights", &[Some(600.0), Some(600.0)], Some(8.0), Some(14), 240.0, 2),
+            row(
+                "a surplus cancels an equal deficit",
+                &[Some(360.0), Some(600.0)],
+                Some(8.0),
+                Some(14),
+                0.0,
+                2,
+            ),
+            row(
+                "two short nights",
+                &[Some(360.0), Some(360.0)],
+                Some(8.0),
+                Some(14),
+                -240.0,
+                2,
+            ),
+            row(
+                "two long nights",
+                &[Some(600.0), Some(600.0)],
+                Some(8.0),
+                Some(14),
+                240.0,
+                2,
+            ),
             row("the default need", &[Some(420.0)], None, None, -60.0, 1),
-            row("a night with no data", &[None, Some(240.0)], Some(8.0), Some(14), -240.0, 1),
+            row(
+                "a night with no data",
+                &[None, Some(240.0)],
+                Some(8.0),
+                Some(14),
+                -240.0,
+                1,
+            ),
             row("a shorter need", &[Some(420.0)], Some(6.0), None, 60.0, 1),
         ]
     }
 
-    fn reproduces(scorer: impl Fn(&[(String, Option<f64>)], Option<f64>, Option<usize>) -> (f64, usize)) -> bool {
-        table().into_iter().all(|r| scorer(&r.series, r.need, r.window) == (r.balance, r.count))
+    fn reproduces(
+        scorer: impl Fn(&[(String, Option<f64>)], Option<f64>, Option<usize>) -> (f64, usize),
+    ) -> bool {
+        table()
+            .into_iter()
+            .all(|r| scorer(&r.series, r.need, r.window) == (r.balance, r.count))
     }
 
     #[test]
@@ -149,18 +214,26 @@ mod tests {
         // zero-fills the nights that reported nothing. Each must miss at least one row.
         type Null = fn(&[(String, Option<f64>)], Option<f64>, Option<usize>) -> (f64, usize);
         let nulls: [(&str, Null); 3] = [
-            ("always level", |se, _, _| (0.0, se.iter().filter(|(_, m)| m.is_some()).count())),
+            ("always level", |se, _, _| {
+                (0.0, se.iter().filter(|(_, m)| m.is_some()).count())
+            }),
             ("never subtracts the need", |se, _, _| {
                 let u: Vec<f64> = se.iter().filter_map(|(_, m)| *m).collect();
                 (u.iter().sum(), u.len())
             }),
             ("zero-fills the missing nights", |se, n, _| {
                 let need = n.unwrap_or(DEFAULT_NEED_HOURS) * 60.0;
-                (se.iter().map(|(_, m)| m.unwrap_or(0.0) - need).sum(), se.len())
+                (
+                    se.iter().map(|(_, m)| m.unwrap_or(0.0) - need).sum(),
+                    se.len(),
+                )
             }),
         ];
         for (name, null) in nulls {
-            assert!(!reproduces(null), "{name} reproduced every row; the table cannot tell it apart");
+            assert!(
+                !reproduces(null),
+                "{name} reproduced every row; the table cannot tell it apart"
+            );
         }
     }
 
@@ -182,8 +255,14 @@ mod tests {
         assert_eq!(l.nights[0].delta_min, -120.0);
         assert_eq!(l.nights[1].delta_min, 120.0);
         assert_eq!(l.balance_min, 0.0, "a surplus cancels an equal deficit");
-        assert_eq!(ledger(&[s("d1", 360.0), s("d2", 360.0)], Some(8.0), Some(14)).balance_min, -240.0);
-        assert_eq!(ledger(&[s("d1", 600.0), s("d2", 600.0)], Some(8.0), Some(14)).balance_min, 240.0);
+        assert_eq!(
+            ledger(&[s("d1", 360.0), s("d2", 360.0)], Some(8.0), Some(14)).balance_min,
+            -240.0
+        );
+        assert_eq!(
+            ledger(&[s("d1", 600.0), s("d2", 600.0)], Some(8.0), Some(14)).balance_min,
+            240.0
+        );
     }
 
     #[test]
@@ -197,7 +276,10 @@ mod tests {
     #[test]
     fn the_balance_rounds_to_one_decimal_half_away_from_zero() {
         assert_eq!(ledger(&[s("d1", 480.25)], Some(8.0), None).balance_min, 0.3);
-        assert_eq!(ledger(&[s("d1", 479.75)], Some(8.0), None).balance_min, -0.3);
+        assert_eq!(
+            ledger(&[s("d1", 479.75)], Some(8.0), None).balance_min,
+            -0.3
+        );
     }
 
     #[test]
@@ -211,12 +293,16 @@ mod tests {
         let l = ledger(&series, Some(8.0), Some(14));
         assert_eq!(l.night_count(), 1, "only d4 reported usable sleep");
         assert_eq!(l.nights[0].day, "d4");
-        assert_eq!(l.balance_min, -240.0, "zero-filling the other three would read -1920");
+        assert_eq!(
+            l.balance_min, -240.0,
+            "zero-filling the other three would read -1920"
+        );
     }
 
     #[test]
     fn the_window_caps_counted_nights_not_calendar_nights() {
-        let all: Vec<(String, Option<f64>)> = (0..20).map(|i| (format!("d{i}"), Some(500.0))).collect();
+        let all: Vec<(String, Option<f64>)> =
+            (0..20).map(|i| (format!("d{i}"), Some(500.0))).collect();
         let l = ledger(&all, Some(8.0), Some(14));
         assert_eq!(l.night_count(), 14);
         assert_eq!(l.nights[0].day, "d6");
@@ -224,8 +310,9 @@ mod tests {
         assert_eq!(l.balance_min, 280.0, "14 nights 20 min over the need");
 
         // Nights that reported nothing are dropped first, so they never consume a window slot.
-        let mixed: Vec<(String, Option<f64>)> =
-            (0..20).map(|i| (format!("d{i}"), (i % 2 == 0).then_some(500.0))).collect();
+        let mixed: Vec<(String, Option<f64>)> = (0..20)
+            .map(|i| (format!("d{i}"), (i % 2 == 0).then_some(500.0)))
+            .collect();
         let m = ledger(&mixed, Some(8.0), Some(14));
         assert_eq!(m.night_count(), 10, "only the ten reporting nights count");
         assert_eq!(m.nights[0].day, "d0");
@@ -239,21 +326,42 @@ mod tests {
     #[test]
     fn the_on_target_band_is_thirty_minutes_either_side_of_level() {
         assert_eq!(ON_TARGET_BAND_MIN, 30.0);
-        assert!(ledger(&[s("d1", 450.1)], Some(8.0), None).is_on_target(), "29.9 min short is on target");
+        assert!(
+            ledger(&[s("d1", 450.1)], Some(8.0), None).is_on_target(),
+            "29.9 min short is on target"
+        );
         assert!(ledger(&[s("d1", 509.9)], Some(8.0), None).is_on_target());
-        assert!(!ledger(&[s("d1", 450.0)], Some(8.0), None).is_on_target(), "the band is exclusive at 30");
+        assert!(
+            !ledger(&[s("d1", 450.0)], Some(8.0), None).is_on_target(),
+            "the band is exclusive at 30"
+        );
         assert!(!ledger(&[s("d1", 510.0)], Some(8.0), None).is_on_target());
-        assert!(ledger(&[], None, None).is_on_target(), "an empty ledger is level, not off target");
+        assert!(
+            ledger(&[], None, None).is_on_target(),
+            "an empty ledger is level, not off target"
+        );
     }
 
     /// The exact band the Android balance row coloured by before the two cut points moved here.
     #[test]
     fn severity_reads_sign_first_then_the_two_cut_points() {
         assert_eq!(severity(0.0), DebtSeverity::OnTarget);
-        assert_eq!(severity(-29.9), DebtSeverity::OnTarget, "inside the on-target deadband");
-        assert_eq!(severity(-30.0), DebtSeverity::Moderate, "the deadband is exclusive at 30");
+        assert_eq!(
+            severity(-29.9),
+            DebtSeverity::OnTarget,
+            "inside the on-target deadband"
+        );
+        assert_eq!(
+            severity(-30.0),
+            DebtSeverity::Moderate,
+            "the deadband is exclusive at 30"
+        );
         assert_eq!(severity(-179.9), DebtSeverity::Moderate);
-        assert_eq!(severity(-180.0), DebtSeverity::Heavy, "the heavy cut is inclusive at 180");
+        assert_eq!(
+            severity(-180.0),
+            DebtSeverity::Heavy,
+            "the heavy cut is inclusive at 180"
+        );
         assert_eq!(severity(-600.0), DebtSeverity::Heavy);
     }
 
@@ -261,8 +369,16 @@ mod tests {
     #[test]
     fn any_surplus_reads_on_target() {
         for surplus in [1.0, 29.0, 180.0, 5_000.0] {
-            assert_eq!(severity(surplus), DebtSeverity::OnTarget, "surplus of {surplus} min");
+            assert_eq!(
+                severity(surplus),
+                DebtSeverity::OnTarget,
+                "surplus of {surplus} min"
+            );
         }
-        assert_eq!(severity(f64::NAN), DebtSeverity::OnTarget, "a non-number is not a debt");
+        assert_eq!(
+            severity(f64::NAN),
+            DebtSeverity::OnTarget,
+            "a non-number is not a debt"
+        );
     }
 }

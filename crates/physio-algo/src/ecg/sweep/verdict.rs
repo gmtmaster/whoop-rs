@@ -6,22 +6,26 @@
 //! anchors, a coincidence that would read as confirmation, a margin too thin to be a result, or an answer
 //! that did not survive every window each stop the sweep on its own.
 
+use crate::ecg::MainsConfig;
 use crate::ecg::mains;
 use crate::ecg::sweep::layout::LayoutShape;
 use crate::ecg::sweep::ppg::suspected_unit_error;
 use crate::ecg::sweep::search::{attribution, sweep_window};
 use crate::ecg::sweep::{
-    Acceptance, Anchors, Attribution, Candidate, StallReason, SweepConfig, SweepOutcome, SweepReport,
-    WindowInput, WindowReport,
+    Acceptance, Anchors, Attribution, Candidate, StallReason, SweepConfig, SweepOutcome,
+    SweepReport, WindowInput, WindowReport,
 };
-use crate::ecg::MainsConfig;
 
 /// Search consecutive windows and decide. Convergence needs all three acceptance conditions and both
 /// rate anchors to be consistent; every one of those numbers is in the report whether it was met or not.
 pub fn sweep(windows: &[WindowInput], cfg: &SweepConfig) -> SweepReport {
-    let reports: Vec<WindowReport> =
-        windows.iter().map(|w| sweep_window(w.bytes, w.ppg_beats_ms, cfg)).collect();
-    let attribution = reports.first().map_or(Attribution::Unknown, |r| r.attribution);
+    let reports: Vec<WindowReport> = windows
+        .iter()
+        .map(|w| sweep_window(w.bytes, w.ppg_beats_ms, cfg))
+        .collect();
+    let attribution = reports
+        .first()
+        .map_or(Attribution::Unknown, |r| r.attribution);
     if reports.is_empty() {
         return stalled(reports, StallReason::NoWindows, attribution);
     }
@@ -56,11 +60,15 @@ pub fn sweep(windows: &[WindowInput], cfg: &SweepConfig) -> SweepReport {
         .max_by(|a, b| {
             a.1.cmp(&b.1)
                 .then_with(|| a.2.total_cmp(&b.2))
-                .then_with(|| f64::from_bits(a.0 .1).total_cmp(&f64::from_bits(b.0 .1)))
+                .then_with(|| f64::from_bits(a.0.1).total_cmp(&f64::from_bits(b.0.1)))
         });
 
     let Some((key, agreed, _)) = best_key else {
-        let best = reports.iter().filter_map(|r| r.leaderboard.first()).map(|c| c.quality).fold(f64::NAN, f64::max);
+        let best = reports
+            .iter()
+            .filter_map(|r| r.leaderboard.first())
+            .map(|c| c.quality)
+            .fold(f64::NAN, f64::max);
         let mut out = stalled(reports, StallReason::NoCandidatePassed, attribution);
         out.outcome = SweepOutcome::Searching {
             reason: StallReason::NoCandidatePassed,
@@ -94,7 +102,9 @@ pub fn sweep(windows: &[WindowInput], cfg: &SweepConfig) -> SweepReport {
     let alias_shapes = alias_shapes(&reports[best_idx], &leader);
     let anchors = anchors(windows[best_idx].bytes, &leader, cfg);
     let stable = reports.len() >= 2 && agreed == reports.len();
-    let anchors_agree = anchors.relative_difference.is_none_or(|d| d <= cfg.rate_agreement_tolerance);
+    let anchors_agree = anchors
+        .relative_difference
+        .is_none_or(|d| d <= cfg.rate_agreement_tolerance);
     let conditions = Acceptance {
         scored: leader.passes && agreed == reports.len(),
         margin_ok: margin >= cfg.min_margin,
@@ -131,22 +141,38 @@ pub fn sweep_split(
     let n = windows.max(1);
     let chunk = bytes.len() / n;
     if chunk == 0 {
-        return stalled(Vec::new(), StallReason::NoWindows, attribution(ppg_beats_ms));
+        return stalled(
+            Vec::new(),
+            StallReason::NoWindows,
+            attribution(ppg_beats_ms),
+        );
     }
     let beats: Vec<Vec<f64>> = (0..n)
         .map(|k| {
-            let (t0, t1) = (capture_ms * k as f64 / n as f64, capture_ms * (k + 1) as f64 / n as f64);
-            ppg_beats_ms.iter().filter(|t| **t >= t0 && **t < t1).map(|t| t - t0).collect()
+            let (t0, t1) = (
+                capture_ms * k as f64 / n as f64,
+                capture_ms * (k + 1) as f64 / n as f64,
+            );
+            ppg_beats_ms
+                .iter()
+                .filter(|t| **t >= t0 && **t < t1)
+                .map(|t| t - t0)
+                .collect()
         })
         .collect();
     let inputs: Vec<WindowInput> = (0..n)
-        .map(|k| WindowInput { bytes: &bytes[k * chunk..(k + 1) * chunk], ppg_beats_ms: &beats[k] })
+        .map(|k| WindowInput {
+            bytes: &bytes[k * chunk..(k + 1) * chunk],
+            ppg_beats_ms: &beats[k],
+        })
         .collect();
     sweep(&inputs, cfg)
 }
 
 fn find<'a>(r: &'a WindowReport, key: &(LayoutShape, u64)) -> Option<&'a Candidate> {
-    r.leaderboard.iter().find(|c| c.layout.shape() == key.0 && c.fs_hz.to_bits() == key.1)
+    r.leaderboard
+        .iter()
+        .find(|c| c.layout.shape() == key.0 && c.fs_hz.to_bits() == key.1)
 }
 
 /// The best candidate in this window that is a genuinely different answer — a different waveform, or a
@@ -169,8 +195,19 @@ fn alias_shapes(r: &WindowReport, leader: &Candidate) -> Vec<LayoutShape> {
 
 fn anchors(bytes: &[u8], leader: &Candidate, cfg: &SweepConfig) -> Anchors {
     let x = leader.layout.decode(bytes);
-    let fs_max = cfg.rates_hz.iter().copied().fold(0.0f64, f64::max).max(crate::ecg::MAX_FS_HZ);
-    let m = mains::mains_anchor_with(&x, MainsConfig { fs_max_hz: fs_max, ..MainsConfig::default() });
+    let fs_max = cfg
+        .rates_hz
+        .iter()
+        .copied()
+        .fold(0.0f64, f64::max)
+        .max(crate::ecg::MAX_FS_HZ);
+    let m = mains::mains_anchor_with(
+        &x,
+        MainsConfig {
+            fs_max_hz: fs_max,
+            ..MainsConfig::default()
+        },
+    );
     let fix = m.fix();
     let ppg_fs = leader.fs_from_ppg;
     let diff = match (fix.map(|f| f.fs_hz), ppg_fs) {
@@ -182,7 +219,8 @@ fn anchors(bytes: &[u8], leader: &Candidate, cfg: &SweepConfig) -> Anchors {
         mains_confidence: fix.map(|f| f.confidence),
         ppg_fs_hz: ppg_fs,
         relative_difference: diff,
-        unit_error: ppg_fs.and_then(|f| suspected_unit_error(f, &cfg.rates_hz, cfg.unit_error_tolerance)),
+        unit_error: ppg_fs
+            .and_then(|f| suspected_unit_error(f, &cfg.rates_hz, cfg.unit_error_tolerance)),
     }
 }
 
@@ -191,7 +229,11 @@ fn anchors(bytes: &[u8], leader: &Candidate, cfg: &SweepConfig) -> Anchors {
 fn decide(c: &Acceptance, a: &Anchors, leader: &Candidate) -> SweepOutcome {
     if let (Some(m), Some(p), Some(d)) = (a.mains_fs_hz, a.ppg_fs_hz, a.relative_difference) {
         if !c.anchors_agree {
-            return SweepOutcome::Disagreement { mains_fs_hz: m, ppg_fs_hz: p, relative_difference: d };
+            return SweepOutcome::Disagreement {
+                mains_fs_hz: m,
+                ppg_fs_hz: p,
+                relative_difference: d,
+            };
         }
     }
     // The 1/1024 coincidence is only terminal when there is no second opinion. When the power-line
@@ -212,7 +254,10 @@ fn decide(c: &Acceptance, a: &Anchors, leader: &Candidate) -> SweepOutcome {
         None
     };
     match reason {
-        Some(reason) => SweepOutcome::Searching { reason, best_quality: Some(leader.quality) },
+        Some(reason) => SweepOutcome::Searching {
+            reason,
+            best_quality: Some(leader.quality),
+        },
         None => SweepOutcome::Converged {
             layout: leader.layout,
             shape: leader.layout.shape(),
@@ -221,7 +266,11 @@ fn decide(c: &Acceptance, a: &Anchors, leader: &Candidate) -> SweepOutcome {
     }
 }
 
-fn stalled(windows: Vec<WindowReport>, reason: StallReason, attribution: Attribution) -> SweepReport {
+fn stalled(
+    windows: Vec<WindowReport>,
+    reason: StallReason,
+    attribution: Attribution,
+) -> SweepReport {
     SweepReport {
         windows,
         leader: None,
@@ -230,9 +279,17 @@ fn stalled(windows: Vec<WindowReport>, reason: StallReason, attribution: Attribu
         windows_agreed: 0,
         windows_required: 0,
         alias_shapes: Vec::new(),
-        conditions: Acceptance { scored: false, margin_ok: false, stable: false, anchors_agree: true },
+        conditions: Acceptance {
+            scored: false,
+            margin_ok: false,
+            stable: false,
+            anchors_agree: true,
+        },
         anchors: Anchors::default(),
         attribution,
-        outcome: SweepOutcome::Searching { reason, best_quality: None },
+        outcome: SweepOutcome::Searching {
+            reason,
+            best_quality: None,
+        },
     }
 }

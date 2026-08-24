@@ -120,7 +120,10 @@ pub enum MainsUnavailable {
     /// Nothing in the search range stands far enough above its local floor — the filtered-stream case.
     NoPeak { best_prominence_db: f64 },
     /// Two or more candidates imply different rates and are too close to separate.
-    Ambiguous { candidates_fs_hz: Vec<f64>, margin_db: f64 },
+    Ambiguous {
+        candidates_fs_hz: Vec<f64>,
+        margin_db: f64,
+    },
 }
 
 /// A rate, or a named reason there is none.
@@ -148,7 +151,11 @@ pub fn mains_anchor(samples: &[f64]) -> MainsAnchor {
 /// peak returns [`MainsAnchor::Unavailable`] with the reason.
 pub fn mains_anchor_with(samples: &[f64], cfg: MainsConfig) -> MainsAnchor {
     use MainsUnavailable::*;
-    if !cfg.mains_hz.is_finite() || cfg.mains_hz <= 0.0 || cfg.fs_min_hz <= 2.0 * cfg.mains_hz || cfg.fs_max_hz <= cfg.fs_min_hz {
+    if !cfg.mains_hz.is_finite()
+        || cfg.mains_hz <= 0.0
+        || cfg.fs_min_hz <= 2.0 * cfg.mains_hz
+        || cfg.fs_max_hz <= cfg.fs_min_hz
+    {
         return MainsAnchor::Unavailable(TooFewSamples);
     }
     if samples.len() < MIN_MAINS_SAMPLES {
@@ -178,7 +185,12 @@ pub fn mains_anchor_with(samples: &[f64], cfg: MainsConfig) -> MainsAnchor {
     let peak_idx = find_peaks(&powers, FLOOR_GUARD, f64::NEG_INFINITY);
     let mut peaks: Vec<(f64, f64)> = peak_idx
         .iter()
-        .map(|&i| (refine(&scan, i, step), prominence_db(powers[i], local_floor(&powers, i))))
+        .map(|&i| {
+            (
+                refine(&scan, i, step),
+                prominence_db(powers[i], local_floor(&powers, i)),
+            )
+        })
         .collect();
     peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
@@ -189,11 +201,16 @@ pub fn mains_anchor_with(samples: &[f64], cfg: MainsConfig) -> MainsAnchor {
         .iter()
         .copied()
         .filter(|&(f, prom)| {
-            f >= cand_lo && f <= cand_hi && prom >= cfg.min_prominence_db && !is_harmonic_of(&peaks, f, cfg.min_prominence_db, bin)
+            f >= cand_lo
+                && f <= cand_hi
+                && prom >= cfg.min_prominence_db
+                && !is_harmonic_of(&peaks, f, cfg.min_prominence_db, bin)
         })
         .collect();
     if fundamentals.is_empty() {
-        return MainsAnchor::Unavailable(NoPeak { best_prominence_db: round3(best_overall) });
+        return MainsAnchor::Unavailable(NoPeak {
+            best_prominence_db: round3(best_overall),
+        });
     }
     fundamentals.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
 
@@ -218,9 +235,14 @@ pub fn mains_anchor_with(samples: &[f64], cfg: MainsConfig) -> MainsAnchor {
         }
     }
 
-    let harmonic_db =
-        [harmonic_prominence(&pg, f0, 2.0, step, bin), harmonic_prominence(&pg, f0, 3.0, step, bin)];
-    let confirmed = harmonic_db.iter().filter(|d| d.is_some_and(|v| v >= HARMONIC_CONFIRM_DB)).count();
+    let harmonic_db = [
+        harmonic_prominence(&pg, f0, 2.0, step, bin),
+        harmonic_prominence(&pg, f0, 3.0, step, bin),
+    ];
+    let confirmed = harmonic_db
+        .iter()
+        .filter(|d| d.is_some_and(|v| v >= HARMONIC_CONFIRM_DB))
+        .count();
     let resolvable = harmonic_db.iter().filter(|d| d.is_some()).count();
     MainsAnchor::Found(MainsFix {
         normalised_freq: f0,
@@ -342,7 +364,11 @@ fn harmonic_prominence(pg: &Periodogram, f0: f64, k: f64, step: f64, bin: f64) -
         .filter(|(lf, _)| (lf - f).abs() <= 3.0 * bin)
         .map(|(_, p)| *p)
         .fold(0.0f64, f64::max);
-    let floor: Vec<f64> = local.iter().filter(|(lf, _)| (lf - f).abs() > 3.0 * bin).map(|(_, p)| *p).collect();
+    let floor: Vec<f64> = local
+        .iter()
+        .filter(|(lf, _)| (lf - f).abs() > 3.0 * bin)
+        .map(|(_, p)| *p)
+        .collect();
     if floor.is_empty() {
         return None;
     }
@@ -383,7 +409,9 @@ mod tests {
     fn lcg(seed: u64) -> impl FnMut() -> f64 {
         let mut s = seed;
         move || {
-            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
         }
     }
@@ -407,10 +435,17 @@ mod tests {
     fn recovers_a_known_rate_from_injected_hum() {
         for fs in [200.0, 250.0, 256.0, 500.0, 512.0] {
             let x = hum(4096, fs, 50.0, 0.5, 3);
-            let fix = mains_anchor(&x).fix().cloned().unwrap_or_else(|| panic!("no fix at {fs} Hz"));
+            let fix = mains_anchor(&x)
+                .fix()
+                .cloned()
+                .unwrap_or_else(|| panic!("no fix at {fs} Hz"));
             let err = (fix.fs_hz - fs).abs();
             assert!(err < 0.5, "fs {fs}: got {} (err {err:.3} Hz)", fix.fs_hz);
-            assert!(fix.confidence > 0.5, "fs {fs}: confidence {}", fix.confidence);
+            assert!(
+                fix.confidence > 0.5,
+                "fs {fs}: confidence {}",
+                fix.confidence
+            );
         }
     }
 
@@ -430,7 +465,10 @@ mod tests {
         let notched: Vec<f64> = (0..4096)
             .map(|i| rnd() + 2.0 * (2.0 * PI * 10.0 * i as f64 / 200.0).sin())
             .collect();
-        assert!(mains_anchor(&notched).fix().is_none(), "a 10 Hz tone is not mains");
+        assert!(
+            mains_anchor(&notched).fix().is_none(),
+            "a 10 Hz tone is not mains"
+        );
     }
 
     #[test]
@@ -438,8 +476,14 @@ mod tests {
         // Both present at fs = 500. The 100 Hz peak sits at f = 0.2 and would read as fs = 250, which
         // is inside the search range, so the wrong answer is available and has to lose on merit.
         let fs = 500.0;
-        let fix = mains_anchor(&hum(4096, fs, 50.0, 0.5, 5)).fix().cloned().unwrap();
-        assert!((fix.fs_hz - fs).abs() < 1.0, "harmonic beat the fundamental: {fix:?}");
+        let fix = mains_anchor(&hum(4096, fs, 50.0, 0.5, 5))
+            .fix()
+            .cloned()
+            .unwrap();
+        assert!(
+            (fix.fs_hz - fs).abs() < 1.0,
+            "harmonic beat the fundamental: {fix:?}"
+        );
         assert_eq!(fix.harmonics_confirmed, 2);
     }
 
@@ -449,11 +493,19 @@ mod tests {
         // say whether this is the 2nd harmonic of 50 Hz at 500, or 50 Hz itself at 250 — the method's
         // premise is that the peak IS the fundamental, so it reads 250 and says so with no support.
         let mut rnd = lcg(5);
-        let only_2nd: Vec<f64> = (0..4096).map(|i| rnd() + 0.5 * (2.0 * PI * 100.0 * i as f64 / 500.0).sin()).collect();
+        let only_2nd: Vec<f64> = (0..4096)
+            .map(|i| rnd() + 0.5 * (2.0 * PI * 100.0 * i as f64 / 500.0).sin())
+            .collect();
         let fix = mains_anchor(&only_2nd).fix().cloned().unwrap();
         assert!((fix.fs_hz - 250.0).abs() < 1.0, "{fix:?}");
-        assert_eq!(fix.harmonics_confirmed, 0, "a lone tone must corroborate nothing: {fix:?}");
-        assert!(fix.confidence <= 0.6, "unconfirmed must be discounted: {fix:?}");
+        assert_eq!(
+            fix.harmonics_confirmed, 0,
+            "a lone tone must corroborate nothing: {fix:?}"
+        );
+        assert!(
+            fix.confidence <= 0.6,
+            "unconfirmed must be discounted: {fix:?}"
+        );
     }
 
     #[test]
@@ -468,23 +520,48 @@ mod tests {
         }
         // 50/100/150 Hz sampled at 80 Hz folds to 0.375 / 0.25 / 0.125 — a clean 1:2:3 ladder based at
         // 0.125, i.e. exactly what un-aliased mains at 400 Hz looks like.
-        let fix = mains_anchor(&hum(4096, 80.0, 50.0, 0.5, 4)).fix().cloned().unwrap();
-        assert!((fix.fs_hz - 400.0).abs() < 2.0, "expected the alias to read as 400 Hz: {fix:?}");
-        assert_eq!(fix.harmonics_confirmed, 2, "and to be fully corroborated: {fix:?}");
+        let fix = mains_anchor(&hum(4096, 80.0, 50.0, 0.5, 4))
+            .fix()
+            .cloned()
+            .unwrap();
+        assert!(
+            (fix.fs_hz - 400.0).abs() < 2.0,
+            "expected the alias to read as 400 Hz: {fix:?}"
+        );
+        assert_eq!(
+            fix.harmonics_confirmed, 2,
+            "and to be fully corroborated: {fix:?}"
+        );
         // Both harmonics confirm at 27 and 33 dB, above the 24 dB of the peak taken as fundamental —
         // the ladder is upside down, and nothing in the method looks at that.
         assert!(fix.confidence > 0.6, "and confident: {fix:?}");
-        assert!(!fix.alias_fs_hz.iter().any(|v| (v - 80.0).abs() < 0.5), "the ladder cannot recover 80 Hz either");
+        assert!(
+            !fix.alias_fs_hz.iter().any(|v| (v - 80.0).abs() < 0.5),
+            "the ladder cannot recover 80 Hz either"
+        );
         // The rate is only refused from outside: at 80 Hz sampling a QRS is not representable, so the
         // morphology indices are what close this hole.
-        assert!(!crate::ecg::score(&hum(4096, 80.0, 50.0, 0.5, 4), 400.0).verdict.accepted);
+        assert!(
+            !crate::ecg::score(&hum(4096, 80.0, 50.0, 0.5, 4), 400.0)
+                .verdict
+                .accepted
+        );
     }
 
     #[test]
     fn degenerate_inputs_are_named_reasons() {
-        assert_eq!(mains_anchor(&[]), MainsAnchor::Unavailable(MainsUnavailable::TooFewSamples));
-        assert_eq!(mains_anchor(&[1.0; 64]), MainsAnchor::Unavailable(MainsUnavailable::TooFewSamples));
-        let bad = MainsConfig { fs_min_hz: 90.0, ..MainsConfig::default() };
+        assert_eq!(
+            mains_anchor(&[]),
+            MainsAnchor::Unavailable(MainsUnavailable::TooFewSamples)
+        );
+        assert_eq!(
+            mains_anchor(&[1.0; 64]),
+            MainsAnchor::Unavailable(MainsUnavailable::TooFewSamples)
+        );
+        let bad = MainsConfig {
+            fs_min_hz: 90.0,
+            ..MainsConfig::default()
+        };
         assert_eq!(
             mains_anchor_with(&[0.0; 4096], bad),
             MainsAnchor::Unavailable(MainsUnavailable::TooFewSamples),

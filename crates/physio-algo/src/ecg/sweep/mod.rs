@@ -37,8 +37,8 @@ mod search;
 mod verdict;
 
 pub use layout::{BitOrder, Layout, LayoutShape};
-pub use ppg::{ppg_agreement, suspected_unit_error, PpgAgreement, UnitErrorSuspicion};
-pub use prune::{cluster, layout_stats, roughness, same_time_base, LayoutStats};
+pub use ppg::{PpgAgreement, UnitErrorSuspicion, ppg_agreement, suspected_unit_error};
+pub use prune::{LayoutStats, cluster, layout_stats, roughness, same_time_base};
 pub use search::sweep_window;
 pub use verdict::{sweep, sweep_split};
 
@@ -49,7 +49,9 @@ use crate::ecg::score::EcgScore;
 /// decimation chain (128/256/512/1024) and the decimal divisions of a 1 kHz base (200/250/400/500/1000).
 /// **500 Hz is one entry among nine, not a default.** It is in the list because it is plausible, and it
 /// wins only if the data says so.
-pub const DEFAULT_RATES_HZ: [f64; 9] = [128.0, 200.0, 250.0, 256.0, 400.0, 500.0, 512.0, 1000.0, 1024.0];
+pub const DEFAULT_RATES_HZ: [f64; 9] = [
+    128.0, 200.0, 250.0, 256.0, 400.0, 500.0, 512.0, 1000.0, 1024.0,
+];
 
 /// Rates that are plausible for the converter but outside the span the detectors support, recorded so
 /// their absence from [`DEFAULT_RATES_HZ`] is a stated limit rather than a silent one. Every window in

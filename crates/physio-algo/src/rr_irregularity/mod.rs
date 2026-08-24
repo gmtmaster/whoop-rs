@@ -23,14 +23,14 @@ pub mod poincare;
 pub mod quality;
 pub mod screen;
 
-pub use cosen::{cosen, sample_entropy, COSEN_M, COSEN_MIN_BEATS, COSEN_R_MS, SAMPEN_MAX_BEATS};
-pub use ectopy::{profile, EctopyProfile};
-pub use screen::{screen, Episode, EpisodeConfidence, ScreenRefusal, ScreenState};
+pub use cosen::{COSEN_M, COSEN_MIN_BEATS, COSEN_R_MS, SAMPEN_MAX_BEATS, cosen, sample_entropy};
+pub use ectopy::{EctopyProfile, profile};
 pub use indices::{
-    mean_rr_ms, rmssd_over_mean_rr, shannon_entropy_drr, turning_point_ratio, TPR_RANDOM_EXPECTED,
+    TPR_RANDOM_EXPECTED, mean_rr_ms, rmssd_over_mean_rr, shannon_entropy_drr, turning_point_ratio,
 };
-pub use poincare::{poincare, Poincare, POINCARE_CELL_MS};
-pub use quality::{rescaled_copy_fraction, RrQuality};
+pub use poincare::{POINCARE_CELL_MS, Poincare, poincare};
+pub use quality::{RrQuality, rescaled_copy_fraction};
+pub use screen::{Episode, EpisodeConfidence, ScreenRefusal, ScreenState, screen};
 
 /// Clean beats needed before [`assess`] computes anything. The shortest record COSEn is defined for; the
 /// longer indices report `None` on their own until their own floor is met.
@@ -80,7 +80,10 @@ pub struct IrregularityIndices {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IrregularityReading {
     /// The input cannot support an honest index. Carries what was measured, so the refusal is legible.
-    Inconclusive { reason: Refusal, quality: RrQuality },
+    Inconclusive {
+        reason: Refusal,
+        quality: RrQuality,
+    },
     Assessed(IrregularityIndices),
 }
 
@@ -94,7 +97,10 @@ pub fn assess(beats: &[(u32, u16)]) -> IrregularityReading {
     let refuse = |reason| IrregularityReading::Inconclusive { reason, quality };
 
     if ranged.len() < ASSESS_MIN_BEATS {
-        return refuse(Refusal::TooFewBeats { have: ranged.len(), need: ASSESS_MIN_BEATS });
+        return refuse(Refusal::TooFewBeats {
+            have: ranged.len(),
+            need: ASSESS_MIN_BEATS,
+        });
     }
     if beats.len() >= quality::MIN_QUALITY_BEATS {
         if quality.duplicate_fraction > quality::MAX_DUPLICATE_FRACTION {
@@ -128,7 +134,10 @@ pub fn assess(beats: &[(u32, u16)]) -> IrregularityReading {
 /// second in it. This is how a night is read: as a run of short segments, since every index here is
 /// defined over one. Nothing is returned for a zero-length request or an empty input; a trailing partial
 /// segment is assessed like any other and will refuse itself if it is too short.
-pub fn assess_segments(beats: &[(u32, u16)], segment_beats: usize) -> Vec<(u32, IrregularityReading)> {
+pub fn assess_segments(
+    beats: &[(u32, u16)],
+    segment_beats: usize,
+) -> Vec<(u32, IrregularityReading)> {
     if segment_beats == 0 {
         return Vec::new();
     }
@@ -158,7 +167,9 @@ mod tests {
         let mut out = Vec::new();
         let mut acc = 0.0f64;
         for _ in 0..n {
-            x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             let rr = 600 + ((x >> 33) % 800) as u16;
             acc += f64::from(rr) / 1000.0;
             out.push((acc as u32, rr));
@@ -177,12 +188,30 @@ mod tests {
     fn every_index_separates_a_regular_series_from_an_irregular_one() {
         let r = indices(&regular(120));
         let i = indices(&irregular(120, 4242));
-        assert!(i.rmssd_over_mean > r.rmssd_over_mean, "rmssd/mean {:?} vs {:?}", r.rmssd_over_mean, i.rmssd_over_mean);
-        assert!(i.shannon_entropy > r.shannon_entropy, "entropy {:?} vs {:?}", r.shannon_entropy, i.shannon_entropy);
+        assert!(
+            i.rmssd_over_mean > r.rmssd_over_mean,
+            "rmssd/mean {:?} vs {:?}",
+            r.rmssd_over_mean,
+            i.rmssd_over_mean
+        );
+        assert!(
+            i.shannon_entropy > r.shannon_entropy,
+            "entropy {:?} vs {:?}",
+            r.shannon_entropy,
+            i.shannon_entropy
+        );
         assert!(i.cosen > r.cosen, "cosen {:?} vs {:?}", r.cosen, i.cosen);
         let (rp, ip) = (r.poincare.unwrap(), i.poincare.unwrap());
-        assert!(ip.sd1 > rp.sd1 && ip.normalised_area > rp.normalised_area, "poincare {rp:?} vs {ip:?}");
-        assert!(ip.cell_occupancy > rp.cell_occupancy, "occupancy {} vs {}", rp.cell_occupancy, ip.cell_occupancy);
+        assert!(
+            ip.sd1 > rp.sd1 && ip.normalised_area > rp.normalised_area,
+            "poincare {rp:?} vs {ip:?}"
+        );
+        assert!(
+            ip.cell_occupancy > rp.cell_occupancy,
+            "occupancy {} vs {}",
+            rp.cell_occupancy,
+            ip.cell_occupancy
+        );
     }
 
     #[test]
@@ -190,18 +219,30 @@ mod tests {
         // Each beat stored twice on its own second — the shape that would read as pure irregularity.
         let doubled: Vec<(u32, u16)> = regular(120).into_iter().flat_map(|b| [b, b]).collect();
         match assess(&doubled) {
-            IrregularityReading::Inconclusive { reason: Refusal::RepeatedBeats, .. } => {}
+            IrregularityReading::Inconclusive {
+                reason: Refusal::RepeatedBeats,
+                ..
+            } => {}
             other => panic!("a repeated series must be refused, got {other:?}"),
         }
         // And the rescaled shape, which the exact-repeat count cannot see at all.
         let mut rescaled: Vec<(u32, u16)> = Vec::new();
         for (t, v) in regular(120) {
             rescaled.push((t, v));
-            rescaled.push((t + 1, (f64::from(v) * quality::RESCALE_RATIO).round() as u16));
+            rescaled.push((
+                t + 1,
+                (f64::from(v) * quality::RESCALE_RATIO).round() as u16,
+            ));
         }
         match assess(&rescaled) {
-            IrregularityReading::Inconclusive { reason: Refusal::RescaledCopies, quality } => {
-                assert_eq!(quality.duplicate_fraction, 0.0, "not one exact repeat, and still duplicated");
+            IrregularityReading::Inconclusive {
+                reason: Refusal::RescaledCopies,
+                quality,
+            } => {
+                assert_eq!(
+                    quality.duplicate_fraction, 0.0,
+                    "not one exact repeat, and still duplicated"
+                );
             }
             other => panic!("a rescaled series must be refused, got {other:?}"),
         }
@@ -211,20 +252,29 @@ mod tests {
     fn short_and_junk_input_is_inconclusive_never_a_number() {
         assert!(matches!(
             assess(&[]),
-            IrregularityReading::Inconclusive { reason: Refusal::TooFewBeats { have: 0, .. }, .. }
+            IrregularityReading::Inconclusive {
+                reason: Refusal::TooFewBeats { have: 0, .. },
+                ..
+            }
         ));
         // Every beat physiologically impossible: nothing survives the range filter.
         let junk: Vec<(u32, u16)> = (0..60).map(|i| (i, 5)).collect();
         assert!(matches!(
             assess(&junk),
-            IrregularityReading::Inconclusive { reason: Refusal::TooFewBeats { .. }, .. }
+            IrregularityReading::Inconclusive {
+                reason: Refusal::TooFewBeats { .. },
+                ..
+            }
         ));
         // Enough survivors to score, but a fifth of the input was out of range.
         let mut mixed: Vec<(u32, u16)> = (0..40u32).map(|i| (i, 1000u16)).collect();
         mixed.extend((40..55u32).map(|i| (i, 5u16)));
         assert!(matches!(
             assess(&mixed),
-            IrregularityReading::Inconclusive { reason: Refusal::TooManyOutOfRange, .. }
+            IrregularityReading::Inconclusive {
+                reason: Refusal::TooManyOutOfRange,
+                ..
+            }
         ));
     }
 
@@ -240,7 +290,10 @@ mod tests {
         let short_tail = assess_segments(&regular(133), SEGMENT_BEATS);
         assert!(matches!(
             short_tail[1].1,
-            IrregularityReading::Inconclusive { reason: Refusal::TooFewBeats { have: 5, .. }, .. }
+            IrregularityReading::Inconclusive {
+                reason: Refusal::TooFewBeats { have: 5, .. },
+                ..
+            }
         ));
         assert!(assess_segments(&regular(300), 0).is_empty());
         assert!(assess_segments(&[], SEGMENT_BEATS).is_empty());
@@ -260,19 +313,34 @@ mod tests {
         // The same gate `format_hr_watch` carries in the CLI, applied here to the Debug rendering, which
         // is the only text this crate produces and the text that reaches a log.
         let banned = [
-            "afib", "fibrillat", "arrhythm", "cardiac", "diagnos", "disease", "patient", "clinical",
-            "alarm", "emergency", "abnormal",
+            "afib",
+            "fibrillat",
+            "arrhythm",
+            "cardiac",
+            "diagnos",
+            "disease",
+            "patient",
+            "clinical",
+            "alarm",
+            "emergency",
+            "abnormal",
         ];
         let q = quality::measure(&regular(60));
         let mut renderings: Vec<String> = vec![format!("{:?}", assess(&regular(120)))];
         for reason in [
-            Refusal::TooFewBeats { have: 3, need: ASSESS_MIN_BEATS },
+            Refusal::TooFewBeats {
+                have: 3,
+                need: ASSESS_MIN_BEATS,
+            },
             Refusal::RepeatedBeats,
             Refusal::RescaledCopies,
             Refusal::ImpossibleCoverage,
             Refusal::TooManyOutOfRange,
         ] {
-            renderings.push(format!("{:?}", IrregularityReading::Inconclusive { reason, quality: q }));
+            renderings.push(format!(
+                "{:?}",
+                IrregularityReading::Inconclusive { reason, quality: q }
+            ));
         }
         for text in renderings {
             let low = text.to_lowercase();

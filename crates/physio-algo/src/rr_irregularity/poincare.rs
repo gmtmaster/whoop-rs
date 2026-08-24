@@ -70,7 +70,10 @@ fn cell_occupancy(values: &[f64]) -> f64 {
         return 0.0;
     }
     let cell = |v: f64| (v / POINCARE_CELL_MS).floor() as i64;
-    let mut seen: Vec<(i64, i64)> = values.windows(2).map(|w| (cell(w[0]), cell(w[1]))).collect();
+    let mut seen: Vec<(i64, i64)> = values
+        .windows(2)
+        .map(|w| (cell(w[0]), cell(w[1])))
+        .collect();
     seen.sort_unstable();
     seen.dedup();
     seen.len() as f64 / points as f64
@@ -85,7 +88,9 @@ mod tests {
         let mut x = seed;
         (0..n)
             .map(|_| {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 lo + ((x >> 33) % span) as u16
             })
             .collect()
@@ -95,14 +100,22 @@ mod tests {
     fn a_metronome_is_a_single_point() {
         let p = poincare(&[800u16; 40]).unwrap();
         assert_eq!((p.sd1, p.sd2, p.ellipse_area_ms2), (0.0, 0.0, 0.0));
-        assert_eq!(p.ratio, None, "a plot with no long axis has no ratio, not a division by zero");
-        assert!((p.cell_occupancy - 1.0 / 39.0).abs() < 1e-12, "39 points in one cell");
+        assert_eq!(
+            p.ratio, None,
+            "a plot with no long axis has no ratio, not a division by zero"
+        );
+        assert!(
+            (p.cell_occupancy - 1.0 / 39.0).abs() < 1e-12,
+            "39 points in one cell"
+        );
     }
 
     #[test]
     fn sd1_is_the_short_axis_of_an_alternating_series() {
         // +/-10 about 800: every successive difference is +/-20, so SDSD ~ 20 and SD1 ~ 20/sqrt(2).
-        let z: Vec<u16> = (0..60).map(|i| if i % 2 == 0 { 790u16 } else { 810 }).collect();
+        let z: Vec<u16> = (0..60)
+            .map(|i| if i % 2 == 0 { 790u16 } else { 810 })
+            .collect();
         let p = poincare(&z).unwrap();
         assert!((p.sd1 - 20.0 / 2f64.sqrt()).abs() < 0.5, "sd1 {}", p.sd1);
         // A pure alternation puts ALL of its variance across the identity line, so the long axis is
@@ -110,7 +123,9 @@ mod tests {
         assert!(p.sd2 < 1e-6, "sd2 {}", p.sd2);
         assert_eq!(p.ratio, None);
         // Add a slow drift underneath and the long axis appears; SD1 still dominates it.
-        let drifting: Vec<u16> = (0..60).map(|i| 790 + 20 * (i % 2) as u16 + (i / 4) as u16).collect();
+        let drifting: Vec<u16> = (0..60)
+            .map(|i| 790 + 20 * (i % 2) as u16 + (i / 4) as u16)
+            .collect();
         let d = poincare(&drifting).unwrap();
         assert!(d.sd2 > 0.0 && d.ratio.unwrap() > 1.0, "{d:?}");
     }
@@ -120,10 +135,16 @@ mod tests {
         // A ramp moves along the identity line: SD2 large, SD1 tiny, ratio far below 1.
         let ramp: Vec<u16> = (0..120).map(|i| 700 + i as u16 * 2).collect();
         let cigar = poincare(&ramp).unwrap();
-        assert!(cigar.ratio.unwrap() < 0.05, "a cigar must be long and thin: {cigar:?}");
+        assert!(
+            cigar.ratio.unwrap() < 0.05,
+            "a cigar must be long and thin: {cigar:?}"
+        );
 
         let cloud = poincare(&scatter(120, 600, 400, 987)).unwrap();
-        assert!(cloud.normalised_area > cigar.normalised_area * 10.0, "cloud {cloud:?} cigar {cigar:?}");
+        assert!(
+            cloud.normalised_area > cigar.normalised_area * 10.0,
+            "cloud {cloud:?} cigar {cigar:?}"
+        );
         assert!(
             cloud.cell_occupancy > cigar.cell_occupancy,
             "the cloud must occupy more cells: cloud {} cigar {}",

@@ -4,7 +4,7 @@
 //! never auto-writes a sleep session. Pure and deterministic. Approximate, non-clinical.
 
 use crate::hr_sample::HrSample;
-use crate::workout::{activity_series, smoothed_intensity, GravitySample};
+use crate::workout::{GravitySample, activity_series, smoothed_intensity};
 
 // Defaults.
 pub const DEFAULT_MIN_NAP_MIN: i32 = 20;
@@ -69,13 +69,21 @@ impl Default for NapConfig {
 
 /// Dense enough to judge? True only with >= `min_samples` rows AND a median inter-sample gap
 /// <= `max_median_gap_s`. A sparse window is [`NapVerdict::Inconclusive`], never `None`.
-pub fn is_window_dense(gravity: &[GravitySample], min_samples: usize, max_median_gap_s: i64) -> bool {
+pub fn is_window_dense(
+    gravity: &[GravitySample],
+    min_samples: usize,
+    max_median_gap_s: i64,
+) -> bool {
     if gravity.len() < min_samples {
         return false;
     }
     let mut ts: Vec<i64> = gravity.iter().map(|g| g.ts).collect();
     ts.sort_unstable();
-    let mut gaps: Vec<i64> = ts.windows(2).map(|w| w[1] - w[0]).filter(|&d| d >= 0).collect();
+    let mut gaps: Vec<i64> = ts
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|&d| d >= 0)
+        .collect();
     if gaps.is_empty() {
         return false;
     }
@@ -101,7 +109,11 @@ pub fn longest_quiet_run(
 
     let (mut best_start, mut best_end): (i64, i64) = (-1, -1);
     let mut run_start: i64 = -1;
-    let close_run = |end_idx: i64, ts: &[i64], best_start: &mut i64, best_end: &mut i64, run_start: &mut i64| {
+    let close_run = |end_idx: i64,
+                     ts: &[i64],
+                     best_start: &mut i64,
+                     best_end: &mut i64,
+                     run_start: &mut i64| {
         if *run_start >= 0 && *run_start <= end_idx {
             let s = ts[*run_start as usize];
             let e = ts[end_idx as usize];
@@ -114,15 +126,33 @@ pub fn longest_quiet_run(
     };
     for i in 0..n {
         if i > 0 && ts[i] - ts[i - 1] > MAX_GAP_S {
-            close_run(i as i64 - 1, &ts, &mut best_start, &mut best_end, &mut run_start); // data gap ends the run
+            close_run(
+                i as i64 - 1,
+                &ts,
+                &mut best_start,
+                &mut best_end,
+                &mut run_start,
+            ); // data gap ends the run
         }
         if smoothed[i] > still_threshold_g {
-            close_run(i as i64 - 1, &ts, &mut best_start, &mut best_end, &mut run_start); // movement ends the run
+            close_run(
+                i as i64 - 1,
+                &ts,
+                &mut best_start,
+                &mut best_end,
+                &mut run_start,
+            ); // movement ends the run
         } else if run_start < 0 {
             run_start = i as i64;
         }
     }
-    close_run(n as i64 - 1, &ts, &mut best_start, &mut best_end, &mut run_start);
+    close_run(
+        n as i64 - 1,
+        &ts,
+        &mut best_start,
+        &mut best_end,
+        &mut run_start,
+    );
     if best_start < 0 {
         None
     } else {
@@ -146,9 +176,15 @@ pub fn mean_hr_in(hr: &[HrSample], start: i64, end: i64) -> Option<i32> {
 
 /// 0..1 ordering confidence (not a probability). Longer + a known, well-settled HR band reads as more
 /// confident; an unknown HR band caps the total at the duration term.
-pub fn confidence_for(duration_min: f64, resting_hr: Option<i32>, mean_hr: Option<i32>, config: &NapConfig) -> f64 {
+pub fn confidence_for(
+    duration_min: f64,
+    resting_hr: Option<i32>,
+    mean_hr: Option<i32>,
+    config: &NapConfig,
+) -> f64 {
     let span = (config.max_nap_minutes - config.min_nap_minutes).max(1) as f64;
-    let dur_term = 0.4 + 0.45 * (((duration_min - config.min_nap_minutes as f64) / span).clamp(0.0, 1.0));
+    let dur_term =
+        0.4 + 0.45 * (((duration_min - config.min_nap_minutes as f64) / span).clamp(0.0, 1.0));
     let (Some(resting), Some(mean)) = (resting_hr, mean_hr) else {
         return dur_term.clamp(0.0, 0.7);
     };
@@ -161,16 +197,35 @@ pub fn confidence_for(duration_min: f64, resting_hr: Option<i32>, mean_hr: Optio
 /// Classify one candidate window. Tri-state, conservative: OFF or sparse -> Inconclusive; dense but moving
 /// or a too-short quiet run -> None; a too-long quiet run -> Inconclusive; a quiet run in `[min,max]` with
 /// HR not settled (when known) -> None; else -> Nap (offered as a review card).
-pub fn evaluate(gravity: &[GravitySample], hr: &[HrSample], resting_hr: Option<i32>, config: &NapConfig) -> NapDecision {
-    let inconclusive = NapDecision { verdict: NapVerdict::Inconclusive, candidate: None };
-    let none = NapDecision { verdict: NapVerdict::None, candidate: None };
+pub fn evaluate(
+    gravity: &[GravitySample],
+    hr: &[HrSample],
+    resting_hr: Option<i32>,
+    config: &NapConfig,
+) -> NapDecision {
+    let inconclusive = NapDecision {
+        verdict: NapVerdict::Inconclusive,
+        candidate: None,
+    };
+    let none = NapDecision {
+        verdict: NapVerdict::None,
+        candidate: None,
+    };
     if !config.enabled {
         return inconclusive;
     }
-    if !is_window_dense(gravity, DEFAULT_MIN_GRAVITY_SAMPLES, DEFAULT_MAX_MEDIAN_GAP_S) {
+    if !is_window_dense(
+        gravity,
+        DEFAULT_MIN_GRAVITY_SAMPLES,
+        DEFAULT_MAX_MEDIAN_GAP_S,
+    ) {
         return inconclusive;
     }
-    let Some((start, end)) = longest_quiet_run(gravity, config.still_threshold_g, config.smooth_window_seconds) else {
+    let Some((start, end)) = longest_quiet_run(
+        gravity,
+        config.still_threshold_g,
+        config.smooth_window_seconds,
+    ) else {
         return none;
     };
     let duration_min = (end - start) as f64 / 60.0;
@@ -211,20 +266,34 @@ mod tests {
             // Alternate x by move_g each record so the L2 per-record delta is exactly move_g.
             x += flip * move_g;
             flip = -flip;
-            out.push(GravitySample { ts: t, x, y: 0.0, z: 0.0 });
+            out.push(GravitySample {
+                ts: t,
+                x,
+                y: 0.0,
+                z: 0.0,
+            });
             t += step;
         }
         out
     }
 
     fn hr_flat(t0: i64, dur: i64, bpm: i32) -> Vec<HrSample> {
-        (0..dur).step_by(30).map(|d| HrSample { ts: t0 + d, bpm }).collect()
+        (0..dur)
+            .step_by(30)
+            .map(|d| HrSample { ts: t0 + d, bpm })
+            .collect()
     }
 
     #[test]
     fn disabled_is_inconclusive() {
-        let cfg = NapConfig { enabled: false, ..Default::default() };
-        assert_eq!(evaluate(&grav(0, 3600, 30, 0.0), &[], None, &cfg).verdict, NapVerdict::Inconclusive);
+        let cfg = NapConfig {
+            enabled: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            evaluate(&grav(0, 3600, 30, 0.0), &[], None, &cfg).verdict,
+            NapVerdict::Inconclusive
+        );
     }
 
     /// Both density constants, each at its own boundary and each on its own. One row short of
@@ -232,9 +301,19 @@ mod tests {
     /// `DEFAULT_MAX_MEDIAN_GAP_S` declines on the gap with plenty of rows.
     #[test]
     fn each_density_constant_decides_the_window_at_its_own_boundary() {
-        assert_eq!((20, 90), (DEFAULT_MIN_GRAVITY_SAMPLES, DEFAULT_MAX_MEDIAN_GAP_S as usize));
+        assert_eq!(
+            (20, 90),
+            (
+                DEFAULT_MIN_GRAVITY_SAMPLES,
+                DEFAULT_MAX_MEDIAN_GAP_S as usize
+            )
+        );
         let dense = |n: i64, step: i64| {
-            is_window_dense(&grav(0, n * step, step, 0.0), DEFAULT_MIN_GRAVITY_SAMPLES, DEFAULT_MAX_MEDIAN_GAP_S)
+            is_window_dense(
+                &grav(0, n * step, step, 0.0),
+                DEFAULT_MIN_GRAVITY_SAMPLES,
+                DEFAULT_MAX_MEDIAN_GAP_S,
+            )
         };
         assert!(!dense(DEFAULT_MIN_GRAVITY_SAMPLES as i64 - 1, 30)); // 19 rows, 30 s apart
         assert!(dense(DEFAULT_MIN_GRAVITY_SAMPLES as i64, 30)); // 20 rows, the count floor
@@ -247,19 +326,35 @@ mod tests {
     /// answers the same for every window collapses two of these into one, so none can pass.
     #[test]
     fn the_tri_state_separates_cannot_judge_from_judged_and_not_a_nap() {
-        let cfg = NapConfig { enabled: true, ..Default::default() };
-        let verdict = |n: i64, step: i64| evaluate(&grav(0, n * step, step, 0.0), &[], Some(55), &cfg).verdict;
+        let cfg = NapConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let verdict = |n: i64, step: i64| {
+            evaluate(&grav(0, n * step, step, 0.0), &[], Some(55), &cfg).verdict
+        };
         assert_eq!(verdict(19, 30), NapVerdict::Inconclusive); // too few rows to judge
         assert_eq!(verdict(40, 91), NapVerdict::Inconclusive); // enough rows, gaps too wide to judge
         assert_eq!(verdict(20, 30), NapVerdict::None); // judged: 9.5 min of stillness is not a nap
         assert_eq!(verdict(40, 90), NapVerdict::Nap); // judged: 58.5 min of stillness is
-        let all = [verdict(19, 30), verdict(40, 91), verdict(20, 30), verdict(40, 90)];
-        assert!(all.iter().any(|v| *v != all[0]), "a constant verdict would satisfy every window");
+        let all = [
+            verdict(19, 30),
+            verdict(40, 91),
+            verdict(20, 30),
+            verdict(40, 90),
+        ];
+        assert!(
+            all.iter().any(|v| *v != all[0]),
+            "a constant verdict would satisfy every window"
+        );
     }
 
     #[test]
     fn still_settled_run_is_a_nap() {
-        let cfg = NapConfig { enabled: true, ..Default::default() };
+        let cfg = NapConfig {
+            enabled: true,
+            ..Default::default()
+        };
         // 40 min perfectly still, HR settled at resting+2 (<= margin 8).
         let g = grav(1000, 40 * 60, 30, 0.0);
         let hr = hr_flat(1000, 40 * 60, 57);
@@ -272,7 +367,10 @@ mod tests {
 
     #[test]
     fn still_but_elevated_hr_is_none() {
-        let cfg = NapConfig { enabled: true, ..Default::default() };
+        let cfg = NapConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let g = grav(1000, 40 * 60, 30, 0.0);
         let hr = hr_flat(1000, 40 * 60, 80); // resting 55 + 8 = 63 gate; 80 > gate -> awake
         assert_eq!(evaluate(&g, &hr, Some(55), &cfg).verdict, NapVerdict::None);
@@ -280,7 +378,10 @@ mod tests {
 
     #[test]
     fn moving_window_is_none() {
-        let cfg = NapConfig { enabled: true, ..Default::default() };
+        let cfg = NapConfig {
+            enabled: true,
+            ..Default::default()
+        };
         // Constant 0.3 g per-record motion (> 0.08 still threshold) -> no quiet run.
         let g = grav(1000, 40 * 60, 30, 0.3);
         assert_eq!(evaluate(&g, &[], Some(55), &cfg).verdict, NapVerdict::None);
@@ -288,9 +389,15 @@ mod tests {
 
     #[test]
     fn too_long_run_is_inconclusive() {
-        let cfg = NapConfig { enabled: true, ..Default::default() };
+        let cfg = NapConfig {
+            enabled: true,
+            ..Default::default()
+        };
         // 2 h still (> 90 min max) -> could be main sleep, don't mislabel.
         let g = grav(1000, 120 * 60, 30, 0.0);
-        assert_eq!(evaluate(&g, &[], Some(55), &cfg).verdict, NapVerdict::Inconclusive);
+        assert_eq!(
+            evaluate(&g, &[], Some(55), &cfg).verdict,
+            NapVerdict::Inconclusive
+        );
     }
 }

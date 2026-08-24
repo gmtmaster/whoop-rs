@@ -132,7 +132,12 @@ mod tests {
 
     /// A fully covered grid of `days` identical 23:00-07:00 nights.
     fn steady(days: usize) -> Vec<Vec<EpochState>> {
-        epoch_grid(0, days, &nights(days as i64, 23.0, 8.0), &full_cover(days as i64))
+        epoch_grid(
+            0,
+            days,
+            &nights(days as i64, 23.0, 8.0),
+            &full_cover(days as i64),
+        )
     }
 
     /// [`steady`] with every epoch of day 0 blanked and `blank_tail` epochs off the last day. Each
@@ -165,8 +170,10 @@ mod tests {
 
     /// A grid asleep all day on even days and awake all day on odd ones: every pair disagrees.
     fn inverted() -> Vec<Vec<EpochState>> {
-        let asleep: Vec<(i64, i64)> =
-            (0..8).filter(|d| d % 2 == 0).map(|d| (d * DAY, d * DAY + DAY)).collect();
+        let asleep: Vec<(i64, i64)> = (0..8)
+            .filter(|d| d % 2 == 0)
+            .map(|d| (d * DAY, d * DAY + DAY))
+            .collect();
         epoch_grid(0, 8, &asleep, &full_cover(8))
     }
 
@@ -189,18 +196,32 @@ mod tests {
             row("one late night", one_late_night(), Some(71.42857142857142)),
             row("no days at all", vec![], None),
             row("one paired day short", steady(MIN_PAIRED_DAYS), None),
-            row("at the paired-day minimum", steady(MIN_PAIRED_DAYS + 1), Some(100.0)),
-            row("at the coverage floor", thin_coverage(MIN_PAIRED_DAYS + 1, floor_tail), Some(100.0)),
-            row("one pair under the floor", thin_coverage(MIN_PAIRED_DAYS + 1, floor_tail + 1), None),
+            row(
+                "at the paired-day minimum",
+                steady(MIN_PAIRED_DAYS + 1),
+                Some(100.0),
+            ),
+            row(
+                "at the coverage floor",
+                thin_coverage(MIN_PAIRED_DAYS + 1, floor_tail),
+                Some(100.0),
+            ),
+            row(
+                "one pair under the floor",
+                thin_coverage(MIN_PAIRED_DAYS + 1, floor_tail + 1),
+                None,
+            ),
         ]
     }
 
     fn reproduces(scorer: impl Fn(&[Vec<EpochState>]) -> Option<f64>) -> bool {
-        table().into_iter().all(|r| match (scorer(&r.grid), r.want) {
-            (Some(got), Some(w)) => (got - w).abs() < 1e-9,
-            (None, None) => true,
-            _ => false,
-        })
+        table()
+            .into_iter()
+            .all(|r| match (scorer(&r.grid), r.want) {
+                (Some(got), Some(w)) => (got - w).abs() < 1e-9,
+                (None, None) => true,
+                _ => false,
+            })
     }
 
     /// The index formula with both availability gates removed, so it answers on any grid.
@@ -223,7 +244,9 @@ mod tests {
         for r in table() {
             let (name, want) = (r.name, r.want);
             match (sleep_regularity_index(&r.grid), want) {
-                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-9, "{name}: got {got}, want {w}"),
+                (Some(got), Some(w)) => {
+                    assert!((got - w).abs() < 1e-9, "{name}: got {got}, want {w}")
+                }
                 (None, None) => {}
                 (got, w) => panic!("{name}: got {got:?}, want {w:?}"),
             }
@@ -232,10 +255,16 @@ mod tests {
         // One refuses everything, one calls every schedule perfect, one runs the formula with both
         // availability gates removed. Each must miss at least one row.
         type Null = fn(&[Vec<EpochState>]) -> Option<f64>;
-        let nulls: [(&str, Null); 3] =
-            [("always none", |_| None), ("always perfect", |_| Some(100.0)), ("no availability gate", ungated)];
+        let nulls: [(&str, Null); 3] = [
+            ("always none", |_| None),
+            ("always perfect", |_| Some(100.0)),
+            ("no availability gate", ungated),
+        ];
         for (name, null) in nulls {
-            assert!(!reproduces(null), "{name} reproduced every row; the table cannot tell it apart");
+            assert!(
+                !reproduces(null),
+                "{name} reproduced every row; the table cannot tell it apart"
+            );
         }
     }
 
@@ -251,21 +280,32 @@ mod tests {
         // THE POINT OF THIS METRIC: every night is exactly 8 h, so duration variance is zero and the old
         // 1 - CV measure would call this perfectly regular. The start time alternates by 4 h, which the
         // index sees.
-        let asleep: Vec<(i64, i64)> =
-            (-1..8).map(|d| night(d, if d.rem_euclid(2) == 0 { 22.0 } else { 2.0 }, 8.0)).collect();
+        let asleep: Vec<(i64, i64)> = (-1..8)
+            .map(|d| night(d, if d.rem_euclid(2) == 0 { 22.0 } else { 2.0 }, 8.0))
+            .collect();
         let grid = epoch_grid(0, 8, &asleep, &full_cover(8));
         let sri = sleep_regularity_index(&grid).unwrap();
-        assert!(sri < 70.0, "a 4 h alternating bedtime should not read as regular, got {sri}");
+        assert!(
+            sri < 70.0,
+            "a 4 h alternating bedtime should not read as regular, got {sri}"
+        );
 
         let steady_sri =
-            sleep_regularity_index(&epoch_grid(0, 8, &nights(8, 22.0, 8.0), &full_cover(8))).unwrap();
-        assert!(steady_sri > sri, "steady {steady_sri} must beat shifting {sri}");
+            sleep_regularity_index(&epoch_grid(0, 8, &nights(8, 22.0, 8.0), &full_cover(8)))
+                .unwrap();
+        assert!(
+            steady_sri > sri,
+            "steady {steady_sri} must beat shifting {sri}"
+        );
     }
 
     #[test]
     fn a_perfectly_inverted_schedule_is_negative() {
         // Asleep all day on even days, awake all day on odd days: every pair disagrees.
-        let asleep: Vec<(i64, i64)> = (0..8).filter(|d| d % 2 == 0).map(|d| (d * DAY, d * DAY + DAY)).collect();
+        let asleep: Vec<(i64, i64)> = (0..8)
+            .filter(|d| d % 2 == 0)
+            .map(|d| (d * DAY, d * DAY + DAY))
+            .collect();
         let grid = epoch_grid(0, 8, &asleep, &full_cover(8));
         let sri = sleep_regularity_index(&grid).unwrap();
         assert!((sri + 100.0).abs() < 1e-9, "got {sri}");
@@ -305,8 +345,13 @@ mod tests {
         // `n` days carry `n - 1` pair windows, so the minimum needs one more day than pairs.
         let short = steady(MIN_PAIRED_DAYS);
         assert_eq!(short.len(), MIN_PAIRED_DAYS);
-        assert_eq!(sleep_regularity_index(&short), None, "one paired day short must refuse");
-        let sri = sleep_regularity_index(&steady(MIN_PAIRED_DAYS + 1)).expect("the minimum itself scores");
+        assert_eq!(
+            sleep_regularity_index(&short),
+            None,
+            "one paired day short must refuse"
+        );
+        let sri = sleep_regularity_index(&steady(MIN_PAIRED_DAYS + 1))
+            .expect("the minimum itself scores");
         assert!((sri - 100.0).abs() < 1e-9, "got {sri}");
     }
 
@@ -315,7 +360,8 @@ mod tests {
         assert_eq!(MIN_PAIRED_COVERAGE, 0.70);
         let days = MIN_PAIRED_DAYS + 1;
         let tail = tail_at_the_coverage_floor(days);
-        let sri = sleep_regularity_index(&thin_coverage(days, tail)).expect("the floor itself scores");
+        let sri =
+            sleep_regularity_index(&thin_coverage(days, tail)).expect("the floor itself scores");
         assert!((sri - 100.0).abs() < 1e-9, "got {sri}");
         assert_eq!(
             sleep_regularity_index(&thin_coverage(days, tail + 1)),
@@ -328,7 +374,10 @@ mod tests {
     #[test]
     fn a_single_late_night_dents_but_does_not_destroy_the_index() {
         let sri = sleep_regularity_index(&one_late_night()).unwrap();
-        assert!(sri > 50.0 && sri < 100.0, "one odd night should dent, not destroy: {sri}");
+        assert!(
+            sri > 50.0 && sri < 100.0,
+            "one odd night should dent, not destroy: {sri}"
+        );
         assert!((sri - 71.42857142857142).abs() < 1e-9, "got {sri}");
     }
 }
