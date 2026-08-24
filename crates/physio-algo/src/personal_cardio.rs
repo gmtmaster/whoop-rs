@@ -14,12 +14,22 @@
 //! and `hr_gap` for evidence corroboration, unchanged.
 //!
 //! CONFIDENCE NOTE (read before tuning constants): the recency window, decay half-life, and the
-//! MEDIUM/HIGH corroboration thresholds below are ENGINEERING JUDGMENT calibrated to the qualitative
-//! behavior the spec asks for (single strong session -> MEDIUM, sustained/repeated corroboration ->
-//! HIGH, one exceptional session can outweigh several weak ones) - they are NOT literature-derived
+//! MEDIUM/HIGH corroboration thresholds below are ENGINEERING JUDGMENT, not literature-derived
 //! numbers the way e.g. `ZONE_EDGES` in `healthspan_intensity.rs` are. Flagged LOW confidence
-//! individually below; every one is a named constant, not an inline magic number, specifically so a
-//! future tuning pass has one place to look and one thing to change without touching the update logic.
+//! individually below; every one is a named constant, not an inline magic number, so a future
+//! tuning pass has one place to look and one thing to change without touching the update logic.
+//!
+//! TWO SEPARATE CONFIDENCE QUESTIONS (conceptual correction, see `MaxHrProfile.confidence` and
+//! `observed_lower_bound_confidence` for the full reasoning): a credible HR observation of X proves
+//! roughly `MaxHr >= X`, not `MaxHr == X`. Repeated corroboration of the same value legitimately
+//! earns HIGH confidence in the FIRST claim (`observed_lower_bound_confidence`, computed on demand
+//! from `evidence`) - it must NOT by itself earn HIGH confidence in the SECOND
+//! (`MaxHrProfile.confidence`, the point-estimate/ceiling question), because nothing in
+//! `evaluate_session_evidence`'s gates distinguishes a hard-but-sustainable effort from a genuinely
+//! maximal one. `MaxHrProfile.confidence` is therefore capped at `Medium` for `FieldInferred` in v1
+//! (see `point_estimate_confidence`) regardless of corroboration strength - this is a deliberate,
+//! conservative choice given the signals actually available in this codebase today, not an
+//! oversight to be "fixed" by loosening the cap without a genuinely new near-maximal-effort signal.
 
 pub use crate::hr_gap::{GapPosition, classify as gap_classify};
 pub use crate::hr_sample::HrSample;
@@ -63,6 +73,18 @@ pub enum MaxHrSource {
 /// HIGH confidence never means "measured": see the terminology lock in `hr-intensity-model-spec.md`
 /// Part 14 - a wearable-inferred Max HR remains an estimate at every tier. These tiers describe how
 /// much corroborating evidence backs the current value, not how precise it is in absolute bpm terms.
+///
+/// CORRECTION (conceptual validation pass): this enum is used for TWO DIFFERENT QUESTIONS in this
+/// module, and they must not be conflated - see `MaxHrProfile.confidence`'s doc and
+/// `observed_lower_bound_confidence`'s doc for exactly which question each one answers. A repeated,
+/// clean, hard-but-ordinary training peak can legitimately earn HIGH confidence as an OBSERVED LOWER
+/// BOUND ("we're sure this bpm was genuinely reached") without that at all establishing HIGH
+/// confidence that the value IS the physiological ceiling - nothing in `evaluate_session_evidence`'s
+/// gates (sustain/continuity/effort-floor/recovery) distinguishes a hard sustainable effort from a
+/// genuine near-maximal one (no plateau-despite-continued-effort signal, no RPE, no lactate, no
+/// explicit maximal-test tagging available in this codebase today - see
+/// `MaxHrProfile.confidence`'s doc for the full reasoning and why the point estimate is deliberately
+/// capped for v1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
     Low,
@@ -210,8 +232,14 @@ pub fn evaluate_session_evidence(
     // is explicit recovery/RPE/plateau are not always available). When present and physiologically
     // plausible (a real, non-negative drop), it raises quality; when absent, quality is lower but the
     // session can still qualify on sustain + continuity + effort-floor alone.
+    // BUG FIX (verification pass): this must be `samples` (the full, un-filtered stream), NOT
+    // `in_session` (already filtered to `[workout_start, workout_end]`). `hr_recovery::calculate`
+    // needs samples AFTER `workout_end` (up to +5min) to compute the 1/2/5-minute recovery deltas;
+    // passing `in_session` meant no post-workout sample could ever reach it, so `recovery_quality`
+    // was structurally always 0.0 regardless of what recovery data actually existed - silently
+    // disabling this corroboration signal for every session ever evaluated.
     let recovery_quality = match crate::hr_recovery::calculate(
-        &in_session,
+        samples,
         workout_start,
         workout_end,
         candidate_bpm,
@@ -242,12 +270,17 @@ pub fn evaluate_session_evidence(
 /// dropping off a cliff.
 pub const EVIDENCE_HALF_LIFE_DAYS: f64 = 56.0;
 
-/// LOW CONFIDENCE: cumulative quality-weighted corroboration score required for each confidence
-/// tier. Deliberately NOT "exactly N workouts" (see module doc + `hr-implementation` request Part
-/// 13): a single quality~1.0 session can reach MEDIUM on its own; reaching HIGH generally wants
-/// either one truly exceptional session plus at least a little agreement, or several good ones -
-/// the thresholds are set so neither path is impossible, but HIGH is not reachable from one merely
-/// "qualifying" (quality ~0.5-0.6) session alone.
+/// LOW CONFIDENCE: cumulative quality-weighted corroboration score thresholds. Deliberately NOT
+/// "exactly N workouts" (see module doc): a single quality~1.0 session can cross the raise/MEDIUM
+/// threshold on its own; crossing HIGH generally wants either one truly exceptional session plus at
+/// least a little agreement, or several good ones.
+///
+/// `MEDIUM_CONFIDENCE_THRESHOLD` gates two DIFFERENT things that must not be confused (conceptual
+/// correction): (1) whether new evidence is strong enough to raise `max_hr` at all
+/// (`update_from_evidence`), and (2) the low tier of `observed_lower_bound_confidence`.
+/// `HIGH_CONFIDENCE_THRESHOLD` gates ONLY `observed_lower_bound_confidence`'s top tier - it no
+/// longer gates `MaxHrProfile.confidence` (the point estimate), which is capped at `Medium` for
+/// `FieldInferred` regardless of corroboration (see `point_estimate_confidence`).
 pub const MEDIUM_CONFIDENCE_THRESHOLD: f64 = 0.55;
 pub const HIGH_CONFIDENCE_THRESHOLD: f64 = 1.6;
 
@@ -278,10 +311,27 @@ pub const STALE_AFTER_DAYS: i64 = 180;
 pub struct MaxHrProfile {
     pub max_hr: f64,
     pub source: MaxHrSource,
+    /// Confidence in `max_hr` AS THE PHYSIOLOGICAL CEILING (the point estimate) - a DIFFERENT,
+    /// DELIBERATELY MORE CONSERVATIVE question than "how sure are we this bpm was genuinely
+    /// reached" (see `observed_lower_bound_confidence`, computed separately, not stored here).
+    ///
+    /// CORRECTION (conceptual validation pass): earlier versions of this module let repeated
+    /// corroboration of the same observed value push THIS field to `High`, which overstated what
+    /// the evidence proves - three clean, hard, sustained-but-submaximal sessions at ~194bpm prove
+    /// `MaxHr >= ~194` with real confidence; they do not prove `MaxHr == 194`, because nothing in
+    /// `evaluate_session_evidence` distinguishes "hard and sustainable" from "at the physiological
+    /// limit". For `MaxHrSource::FieldInferred` this field is now DELIBERATELY CAPPED at `Medium`
+    /// regardless of corroboration strength - see `point_estimate_confidence`. Raise that cap only
+    /// alongside a real near-maximal-effort signal (HR plateau despite continued effort, an
+    /// explicit maximal-test tag, etc.) becoming available - not by loosening the cap in isolation.
+    /// `UserSupplied` stays `Medium` by design too (a self-report, never `High` by default - see
+    /// `apply_user_override`). `AgeEstimate` is always `Low`.
     pub confidence: Confidence,
     /// The best single corroborated field-observed peak seen, independent of whether it currently
     /// drives `max_hr` - kept separate per the model spec's three-way terminology distinction
     /// (Part 6/14): this is "peak HR observed", never presented as the profile's max_hr claim itself.
+    /// Call `observed_lower_bound_confidence` for how sure we are THIS value was genuinely reached -
+    /// that confidence CAN legitimately be `High` even while `confidence` above stays `Medium`.
     pub observed_peak: Option<f64>,
     /// User-supplied override, if any - kept alongside the working estimate so `Hybrid` disagreement
     /// can be detected and surfaced without discarding either value.
@@ -372,23 +422,65 @@ pub fn update_from_evidence(profile: &MaxHrProfile, new_evidence: MaxHrEvidence,
             MaxHrSource::Hybrid => MaxHrSource::Hybrid,
             _ => MaxHrSource::FieldInferred,
         };
-        next.confidence = if corroboration >= HIGH_CONFIDENCE_THRESHOLD {
-            Confidence::High
-        } else {
-            Confidence::Medium
-        };
         next.last_meaningful_update_at = Some(now);
         next.profile_version = profile.profile_version + 1;
-    } else if corroboration >= HIGH_CONFIDENCE_THRESHOLD && next.confidence < Confidence::High {
-        // Corroboration caught up to HIGH without a fresh raise this call (e.g. a repeat of an
-        // already-credited value) - confidence may still advance; the published max_hr does not
-        // change, so this does NOT bump profile_version (see MaxHrProfile doc: version tracks the
-        // published value, not internal confidence bookkeeping). Left as an explicit no-op on
-        // version for clarity that this branch is deliberate, not an oversight.
-        next.confidence = Confidence::High;
     }
+    // Point-estimate confidence is now a PURE FUNCTION of `source` alone (see
+    // `point_estimate_confidence`'s doc) - never a function of `corroboration` magnitude. This is
+    // the conceptual fix: corroboration strength legitimately drives `observed_lower_bound_confidence`
+    // (below), which is a genuinely different question and is computed on demand, not stored here.
+    next.confidence = point_estimate_confidence(next.source);
 
     next
+}
+
+/// Confidence in `max_hr` as the physiological ceiling, purely from its provenance - see
+/// `MaxHrProfile.confidence`'s doc for why this is deliberately NOT sensitive to corroboration
+/// strength for `FieldInferred` in v1.
+fn point_estimate_confidence(source: MaxHrSource) -> Confidence {
+    match source {
+        MaxHrSource::AgeEstimate => Confidence::Low,
+        // Capped at Medium: see MaxHrProfile.confidence's doc. No signal in this codebase today
+        // (no plateau-despite-effort detection, no RPE, no lactate, no maximal-test tag) can
+        // distinguish "hard and sustainable" from "at the physiological limit", so no amount of
+        // corroboration of an ordinary hard effort is allowed to imply we know the true ceiling.
+        MaxHrSource::FieldInferred => Confidence::Medium,
+        // A self-report, not a lab measurement - never High by default (matches apply_user_override).
+        MaxHrSource::UserSupplied => Confidence::Medium,
+        MaxHrSource::Hybrid => Confidence::Medium,
+    }
+}
+
+/// Confidence that `profile.observed_peak` (or, if higher, the best value still in
+/// `profile.evidence`) was GENUINELY REACHED - i.e. confidence in the LOWER BOUND
+/// `MaxHr >= this value`, a DIFFERENT and DELIBERATELY LESS CONSERVATIVE question than
+/// `MaxHrProfile.confidence` (the point-estimate/ceiling question - see that field's doc). Computed
+/// on demand from the same `evidence`/`observed_peak` state already on the profile, rather than
+/// stored as a second field, so it can never drift out of sync with the evidence it's derived from
+/// and so this correction did not require changing `MaxHrProfile`'s shape (kept in-scope to
+/// `personal_cardio.rs` only, per this pass's constraint not to touch noop-engine/noop-backend).
+///
+/// Repeated credible observations clustered near the same high value SHOULD and DO drive this to
+/// `High` - that is exactly what "we're confident the user has genuinely reached ~X bpm" means, and
+/// corroboration (independent sessions agreeing) is good evidence for that claim specifically, even
+/// though it is not good evidence that X is the ceiling (see `point_estimate_confidence`).
+pub fn observed_lower_bound_confidence(profile: &MaxHrProfile, now: i64) -> Confidence {
+    let Some(peak) = profile.observed_peak else {
+        return Confidence::Low;
+    };
+    let corroboration: f64 = profile
+        .evidence
+        .iter()
+        .filter(|e| (e.candidate_bpm - peak).abs() <= AGREEMENT_TOLERANCE_BPM)
+        .map(|e| decayed_weight(e, now))
+        .sum();
+    if corroboration >= HIGH_CONFIDENCE_THRESHOLD {
+        Confidence::High
+    } else if corroboration >= MEDIUM_CONFIDENCE_THRESHOLD {
+        Confidence::Medium
+    } else {
+        Confidence::Low
+    }
 }
 
 /// Apply staleness: called at compute time (not per-evidence) with the days elapsed since
@@ -515,6 +607,13 @@ pub const HR_ONLY_SPAN_MODALITY_CONFIDENCE: f64 = 0.6;
 mod tests {
     use super::*;
 
+    // Nonzero base, matching `hr_recovery`'s own test convention (`const END: i64 = 10_000`) -
+    // `evaluate_session_evidence`'s `workout_start <= 0` sanity guard (mirroring
+    // `hr_recovery::calculate`'s identical guard) correctly treats unix epoch 0 as an invalid/
+    // sentinel timestamp, not a legitimate workout start. Fixtures below are written relative to
+    // this so none of them accidentally trip that guard the way the pre-fix versions did.
+    const START: i64 = 10_000;
+
     fn dense_session(start: i64, len_s: i64, bpm_fn: impl Fn(i64) -> i32) -> Vec<HrSample> {
         (0..len_s)
             .map(|i| HrSample {
@@ -522,6 +621,34 @@ mod tests {
                 bpm: bpm_fn(i),
             })
             .collect()
+    }
+
+    /// A ramp from 100bpm up to 195bpm over 300s, then a sustained plateau at 195bpm, then
+    /// (optionally) a sharp recovery back down - the shared shape several tests below need, with the
+    /// recovery block separable so tests can compare "with genuine recovery data" against "without".
+    fn ramp_sustain_and_optionally_recover(include_recovery: bool) -> Vec<HrSample> {
+        let mut samples = Vec::new();
+        for i in 0..300 {
+            samples.push(HrSample {
+                ts: START + i,
+                bpm: 100 + (i as i32 / 3).min(95),
+            }); // ramp to ~195
+        }
+        for i in 300..420 {
+            samples.push(HrSample {
+                ts: START + i,
+                bpm: 195,
+            }); // sustained 120s near peak
+        }
+        if include_recovery {
+            for i in 420..480 {
+                samples.push(HrSample {
+                    ts: START + i,
+                    bpm: 195 - (i as i32 - 420),
+                }); // sharp plausible recovery
+            }
+        }
+        samples
     }
 
     // ── HRR primitive ──────────────────────────────────────────────────────────────────────────
@@ -546,9 +673,9 @@ mod tests {
 
     #[test]
     fn rejects_a_session_with_too_few_samples() {
-        let samples = dense_session(0, 10, |_| 190);
+        let samples = dense_session(START, 10, |_| 190);
         assert_eq!(
-            evaluate_session_evidence(&samples, 0, 9, 190.0, 52.0, 1.0),
+            evaluate_session_evidence(&samples, START, START + 9, 190.0, 52.0, 1.0),
             None
         );
     }
@@ -556,37 +683,49 @@ mod tests {
     #[test]
     fn rejects_a_light_effort_even_with_plenty_of_samples() {
         // 62 bpm above a 190/52 profile is well under the 60% HRR effort floor.
-        let samples = dense_session(0, 600, |_| 100);
+        let samples = dense_session(START, 600, |_| 100);
         assert_eq!(
-            evaluate_session_evidence(&samples, 0, 599, 190.0, 52.0, 1.0),
+            evaluate_session_evidence(&samples, START, START + 599, 190.0, 52.0, 1.0),
             None
         );
     }
 
     #[test]
     fn rejects_a_lone_spike_that_does_not_sustain() {
-        let mut samples = dense_session(0, 600, |_| 100); // light throughout
-        samples.push(HrSample { ts: 300, bpm: 210 }); // one artifact spike
-        assert_eq!(
-            evaluate_session_evidence(&samples, 0, 599, 190.0, 52.0, 1.0),
-            None
-        );
+        let mut samples = dense_session(START, 600, |_| 100); // light throughout
+        samples.push(HrSample { ts: START + 300, bpm: 210 }); // one artifact spike
+        let result = evaluate_session_evidence(&samples, START, START + 599, 190.0, 52.0, 1.0);
+        assert_eq!(result, None);
+        // Confirm this actually exercises artifact resistance (the percentile-based candidate
+        // discounting the lone spike), not just an incidental reject at an earlier gate for the
+        // wrong reason - the 98th percentile of 601 samples where only 1 is the spike stays ~100,
+        // which is what pushes it below the effort floor, not the sustain/continuity gates.
+        let mut bpms: Vec<f64> = samples.iter().map(|s| s.bpm as f64).collect();
+        bpms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let candidate = percentile_pct(&bpms, SESSION_HRMAX_PERCENTILE);
+        assert!(candidate < 150.0, "the lone spike must not dominate the percentile: {candidate}");
     }
+
+    // NOTE (verification pass): I attempted to add a dedicated "isolated/discontinuous cluster"
+    // artifact test here and removed it - traced by hand, it did not actually exercise the
+    // continuity gate the way it was meant to. The continuity check in `evaluate_session_evidence`
+    // only inspects the immediate one-sample neighbours of the SINGLE sample nearest the candidate
+    // percentile value; a cluster that is itself internally contiguous (even if it sits hours away
+    // from an earlier, separate episode in the same `samples`/`(workout_start, workout_end)` window)
+    // has locally-clean neighbours and is NOT caught by this check - the large gap between the two
+    // episodes only fails to accumulate `sustained` seconds, which is a different gate and did not
+    // reject in my constructed case once the isolated cluster was made long enough to pass sustain
+    // on its own. This is a real, narrow gap (a genuinely separate high-HR episode accidentally
+    // included in one evaluation window could be selected as evidence) but is NOT one of the two
+    // reported failures and fixing it would mean strengthening continuity into a whole-window check
+    // rather than a local one - out of scope for this narrow correction pass; flagged in the report
+    // as a follow-up rather than silently patched here or silently dropped.
 
     #[test]
     fn accepts_a_sustained_hard_effort_with_recovery() {
-        // Ramp up, sustain near 195 for >90s, then recover.
-        let mut samples = Vec::new();
-        for i in 0..300 {
-            samples.push(HrSample { ts: i, bpm: 100 + (i as i32 / 3).min(95) }); // ramp to ~195
-        }
-        for i in 300..420 {
-            samples.push(HrSample { ts: i, bpm: 195 }); // sustained 120s near peak
-        }
-        for i in 420..480 {
-            samples.push(HrSample { ts: i, bpm: 195 - (i as i32 - 420) }); // sharp plausible recovery
-        }
-        let evidence = evaluate_session_evidence(&samples, 0, 419, 190.0, 52.0, 1.0);
+        let samples = ramp_sustain_and_optionally_recover(true);
+        let evidence =
+            evaluate_session_evidence(&samples, START, START + 419, 190.0, 52.0, 1.0);
         assert!(evidence.is_some(), "a clean sustained effort should qualify");
         let e = evidence.unwrap();
         assert!(e.candidate_bpm > 190.0, "candidate should exceed the prior estimate: {}", e.candidate_bpm);
@@ -594,16 +733,30 @@ mod tests {
     }
 
     #[test]
+    fn plausible_recovery_increases_quality_over_no_recovery_data() {
+        // Verifies the `samples` (not `in_session`) bug fix: recovery data past `workout_end` must
+        // actually reach `hr_recovery::calculate` and raise quality, not be silently invisible.
+        let with_recovery = ramp_sustain_and_optionally_recover(true);
+        let without_recovery = ramp_sustain_and_optionally_recover(false);
+        let a = evaluate_session_evidence(&with_recovery, START, START + 419, 190.0, 52.0, 1.0)
+            .expect("qualifies with recovery data");
+        let b = evaluate_session_evidence(&without_recovery, START, START + 419, 190.0, 52.0, 1.0)
+            .expect("qualifies without recovery data too - recovery is opportunistic, not required");
+        assert!(
+            a.quality > b.quality,
+            "genuine post-workout recovery data must raise quality: with={} without={}",
+            a.quality,
+            b.quality
+        );
+    }
+
+    #[test]
     fn low_modality_confidence_lowers_quality_but_does_not_by_itself_reject() {
-        let mut samples = Vec::new();
-        for i in 0..300 {
-            samples.push(HrSample { ts: i, bpm: 100 + (i as i32 / 3).min(95) });
-        }
-        for i in 300..420 {
-            samples.push(HrSample { ts: i, bpm: 195 });
-        }
-        let high_modality = evaluate_session_evidence(&samples, 0, 419, 190.0, 52.0, 1.0).unwrap();
-        let low_modality = evaluate_session_evidence(&samples, 0, 419, 190.0, 52.0, 0.1).unwrap();
+        let samples = ramp_sustain_and_optionally_recover(false);
+        let high_modality =
+            evaluate_session_evidence(&samples, START, START + 419, 190.0, 52.0, 1.0).unwrap();
+        let low_modality =
+            evaluate_session_evidence(&samples, START, START + 419, 190.0, 52.0, 0.1).unwrap();
         assert!(low_modality.quality < high_modality.quality);
     }
 
@@ -633,8 +786,14 @@ mod tests {
         );
     }
 
+    /// CORRECTED (conceptual validation pass - was `repeated_agreeing_sessions_reach_high_confidence`,
+    /// which asserted `profile.confidence == High` here; that was exactly the conflation being
+    /// fixed). Repeated, ordinary hard-but-submaximal sessions at the same value are real, strong
+    /// evidence of a LOWER BOUND - `observed_lower_bound_confidence` legitimately reaches `High`.
+    /// They are NOT evidence that the value IS the physiological ceiling - the point estimate's own
+    /// `confidence` must stay capped at `Medium` for `FieldInferred` regardless.
     #[test]
-    fn repeated_agreeing_sessions_reach_high_confidence() {
+    fn repeated_agreeing_sessions_reach_high_lower_bound_confidence_but_estimate_confidence_stays_medium() {
         let mut profile = MaxHrProfile::cold_start(30.0);
         let mut t = 0;
         for _ in 0..4 {
@@ -642,7 +801,29 @@ mod tests {
             profile = update_from_evidence(&profile, evidence, t);
             t += 7 * 86_400; // weekly sessions
         }
-        assert_eq!(profile.confidence, Confidence::High);
+        assert_eq!(
+            observed_lower_bound_confidence(&profile, t),
+            Confidence::High,
+            "four corroborating sessions should give high confidence the user reached ~194bpm"
+        );
+        assert_eq!(
+            profile.confidence,
+            Confidence::Medium,
+            "the SAME evidence must not claim high confidence that 194bpm is the true ceiling"
+        );
+        assert_eq!(profile.source, MaxHrSource::FieldInferred);
+    }
+
+    #[test]
+    fn a_single_session_gives_low_or_medium_lower_bound_confidence_not_high() {
+        let profile = MaxHrProfile::cold_start(30.0);
+        let evidence = MaxHrEvidence { candidate_bpm: 192.0, observed_at: 1000, quality: 0.9 };
+        let next = update_from_evidence(&profile, evidence, 1000);
+        assert_ne!(
+            observed_lower_bound_confidence(&next, 1000),
+            Confidence::High,
+            "one session alone should not yet be high lower-bound confidence"
+        );
     }
 
     #[test]
