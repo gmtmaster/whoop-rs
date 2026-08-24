@@ -236,7 +236,10 @@ mod tests {
 
     // DriverBaseline from a Gaussian sigma (spread is internal abs-dev units): spread = sigma / 1.253.
     fn baseline(mean: f64, sigma: f64) -> DriverBaseline {
-        DriverBaseline { mean, spread: sigma / 1.253 }
+        DriverBaseline {
+            mean,
+            spread: sigma / 1.253,
+        }
     }
 
     fn hr(ts: i64, bpm: i32) -> HrSample {
@@ -261,8 +264,9 @@ mod tests {
     // One sample dead-centre of each of `bins` consecutive windows, descending 1 bpm per bin.
     fn one_sample_per_bin(bins: usize) -> (Vec<HrSample>, i64, i64) {
         let origin: i64 = 100_000;
-        let samples =
-            (0..bins).map(|b| hr(origin + b as i64 * RESTING_HR_WINDOW_S + 150, 60 - b as i32)).collect();
+        let samples = (0..bins)
+            .map(|b| hr(origin + b as i64 * RESTING_HR_WINDOW_S + 150, 60 - b as i32))
+            .collect();
         (samples, origin, origin + bins as i64 * RESTING_HR_WINDOW_S)
     }
 
@@ -319,11 +323,21 @@ mod tests {
             })
             .collect();
         for (&target, &out) in SLOPE_TARGETS.iter().zip(&got) {
-            assert!((out - target).abs() < SLOPE_TOL, "injected {target} read as {out}");
+            assert!(
+                (out - target).abs() < SLOPE_TOL,
+                "injected {target} read as {out}"
+            );
         }
-        let mut pairs: Vec<(f64, f64)> = SLOPE_TARGETS.iter().copied().zip(got.iter().copied()).collect();
+        let mut pairs: Vec<(f64, f64)> = SLOPE_TARGETS
+            .iter()
+            .copied()
+            .zip(got.iter().copied())
+            .collect();
         pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        assert!(pairs.windows(2).all(|w| w[0].1 < w[1].1), "reading is not monotone in the rate");
+        assert!(
+            pairs.windows(2).all(|w| w[0].1 < w[1].1),
+            "reading is not monotone in the rate"
+        );
 
         // The unit is per HOUR, not per night: the same rate over 2 to 9 hours reads the same, and
         // the reading converges on it as the night lengthens.
@@ -334,14 +348,26 @@ mod tests {
                 (recovery_index_slope(&s, a, b).unwrap() + 2.0).abs()
             })
             .collect();
-        assert!(errs.iter().all(|e| *e < 0.10), "the rate drifted with night length: {errs:?}");
-        assert!(errs.windows(2).all(|w| w[1] < w[0]), "longer nights did not converge: {errs:?}");
+        assert!(
+            errs.iter().all(|e| *e < 0.10),
+            "the rate drifted with night length: {errs:?}"
+        );
+        assert!(
+            errs.windows(2).all(|w| w[1] < w[0]),
+            "longer nights did not converge: {errs:?}"
+        );
 
         // Estimators that do no work: any single constant misses at least one injected rate, and a
         // night flattened to one bpm cannot reproduce the steep row.
         for null in [0.0f64, -2.0, 5.0] {
-            let worst = SLOPE_TARGETS.iter().map(|t| (null - t).abs()).fold(0.0, f64::max);
-            assert!(worst > SLOPE_TOL, "constant estimator {null} fits every injected rate");
+            let worst = SLOPE_TARGETS
+                .iter()
+                .map(|t| (null - t).abs())
+                .fold(0.0, f64::max);
+            assert!(
+                worst > SLOPE_TOL,
+                "constant estimator {null} fits every injected rate"
+            );
         }
         let (flat, a, b) = slope_series(65.0, 0.0, 6);
         assert!((recovery_index_slope(&flat, a, b).unwrap() - -4.0).abs() > SLOPE_TOL);
@@ -463,7 +489,14 @@ mod tests {
         });
         assert_eq!(out, None);
         // No driver at all → None even when usable.
-        assert_eq!(recovery(&RecoveryInput { hrv: 60.0, rhr: 50.0, ..Default::default() }), None);
+        assert_eq!(
+            recovery(&RecoveryInput {
+                hrv: 60.0,
+                rhr: 50.0,
+                ..Default::default()
+            }),
+            None
+        );
     }
 
     /// Nine three-driver nights and the score each must return, spanning 0 to 100. The expectations
@@ -496,9 +529,15 @@ mod tests {
 
     #[test]
     fn charge_score_reproduces_the_composite_across_the_whole_0_100_range() {
-        let got: Vec<f64> = SPREAD_NIGHTS.iter().map(|&(h, r, s, _)| three_driver(h, r, s)).collect();
+        let got: Vec<f64> = SPREAD_NIGHTS
+            .iter()
+            .map(|&(h, r, s, _)| three_driver(h, r, s))
+            .collect();
         for (&(h, r, s, want), &out) in SPREAD_NIGHTS.iter().zip(&got) {
-            assert!((out - want).abs() < SPREAD_TOL, "hrv {h} rhr {r} sleep {s}: {out} != {want}");
+            assert!(
+                (out - want).abs() < SPREAD_TOL,
+                "hrv {h} rhr {r} sleep {s}: {out} != {want}"
+            );
         }
         // Each score is the weight-renormalised mean of the driver z's, squashed once. Resting HR is
         // inverted, so a sign flip on it moves every row.
@@ -507,18 +546,33 @@ mod tests {
                 + W_RHR * z_score(55.0, r, 3.0 / 1.253)
                 + W_SLEEP * (s - SLEEP_PERF_CENTER) / SLEEP_PERF_SCALE)
                 / (W_HRV + W_RHR + W_SLEEP);
-            assert!((out - score_of(z)).abs() < SPREAD_TOL, "hrv {h}: {out} != score_of({z})");
+            assert!(
+                (out - score_of(z)).abs() < SPREAD_TOL,
+                "hrv {h}: {out} != score_of({z})"
+            );
         }
         // The fixture spans the range and rises with the composite, so no flat scorer can fit it.
         assert!(got.windows(2).all(|w| w[1] > w[0]), "not monotone: {got:?}");
         assert!(got.last().unwrap() - got.first().unwrap() > 99.0);
-        for null in [57.932425214875f64, got.iter().sum::<f64>() / got.len() as f64, 50.0] {
-            let worst = SPREAD_NIGHTS.iter().map(|&(.., w)| (null - w).abs()).fold(0.0, f64::max);
-            assert!(worst > 10.0, "constant scorer {null} is within 10 points of every night");
+        for null in [
+            57.932425214875f64,
+            got.iter().sum::<f64>() / got.len() as f64,
+            50.0,
+        ] {
+            let worst = SPREAD_NIGHTS
+                .iter()
+                .map(|&(.., w)| (null - w).abs())
+                .fold(0.0, f64::max);
+            assert!(
+                worst > 10.0,
+                "constant scorer {null} is within 10 points of every night"
+            );
         }
         // Every driver exactly at baseline / centre is the population anchor the bands are cut around.
         let anchor = three_driver(50.0, 55.0, SLEEP_PERF_CENTER);
-        assert!((anchor - 100.0 / (1.0 + (-LOGISTIC_K * (0.0 - LOGISTIC_Z0)).exp())).abs() < SPREAD_TOL);
+        assert!(
+            (anchor - 100.0 / (1.0 + (-LOGISTIC_K * (0.0 - LOGISTIC_Z0)).exp())).abs() < SPREAD_TOL
+        );
         assert!((anchor - 57.93).abs() < 0.05);
     }
 
@@ -619,11 +673,19 @@ mod tests {
         // Classifiers that do no work: one word for every score, and a single split at the midpoint.
         let probes = [0.0, 24.9, 25.0, 49.9, 50.0, 69.9, 70.0, 87.9, 88.0, 100.0];
         let always: fn(f64) -> RecoveryState = |_| RecoveryState::Moderate;
-        let split: fn(f64) -> RecoveryState =
-            |s| if s < 50.0 { RecoveryState::Low } else { RecoveryState::Primed };
+        let split: fn(f64) -> RecoveryState = |s| {
+            if s < 50.0 {
+                RecoveryState::Low
+            } else {
+                RecoveryState::Primed
+            }
+        };
         for (name, null) in [("constant Moderate", always), ("one split at 50", split)] {
             let wrong = probes.iter().filter(|&&s| null(s) != state(s)).count();
-            assert!(wrong >= 5, "null classifier '{name}' agreed on all but {wrong} probes");
+            assert!(
+                wrong >= 5,
+                "null classifier '{name}' agreed on all but {wrong} probes"
+            );
         }
     }
 
@@ -649,14 +711,24 @@ mod tests {
             assert_eq!(banked_nights(&[v], HRV_MIN_MS, HRV_MAX_MS), want, "{what}");
         }
 
-        let nights = [Some(55.0), None, Some(3.0), Some(300.0), Some(80.0), Some(HRV_MIN_MS)];
+        let nights = [
+            Some(55.0),
+            None,
+            Some(3.0),
+            Some(300.0),
+            Some(80.0),
+            Some(HRV_MIN_MS),
+        ];
         assert_eq!(banked_nights(&nights, HRV_MIN_MS, HRV_MAX_MS), 3);
         // The bounds are arguments, not a hidden rule: widened, the same series banks every reading.
         assert_eq!(banked_nights(&nights, 0.0, f64::INFINITY), 5);
         // Counters that do no work: the slot count, the present-value count and always-nothing.
         for (name, n) in [
             ("every slot counted", nights.len()),
-            ("every present value counted", nights.iter().filter(|v| v.is_some()).count()),
+            (
+                "every present value counted",
+                nights.iter().filter(|v| v.is_some()).count(),
+            ),
             ("nothing counted", 0),
         ] {
             assert_ne!(n, 3, "null counter '{name}' reproduces the shipped count");

@@ -22,4 +22,5 @@ cli = ["uniffi/cli"]
 [dependencies]
 whoop-protocol.workspace = true
 physio-algo.workspace = true
+cloud-map.workspace = true
 uniffi = "0.32"

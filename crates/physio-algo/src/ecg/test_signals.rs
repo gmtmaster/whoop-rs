@@ -31,8 +31,13 @@ impl Rng {
 /// mixture puts the QRS at ~100 ms wide, inside the 60-140 ms physiological band, and the T wave at a
 /// realistic QT of ~300 ms — well OUTSIDE the 200 ms refractory, so a T wave has to be rejected on its
 /// own merits rather than hidden by the refractory.
-const WAVES: [(f64, f64, f64); 5] =
-    [(-180.0, 0.15, 25.0), (-25.0, -0.10, 8.0), (0.0, 1.0, 10.0), (25.0, -0.25, 12.0), (300.0, 0.30, 50.0)];
+const WAVES: [(f64, f64, f64); 5] = [
+    (-180.0, 0.15, 25.0),
+    (-25.0, -0.10, 8.0),
+    (0.0, 1.0, 10.0),
+    (25.0, -0.25, 12.0),
+    (300.0, 0.30, 50.0),
+];
 
 /// Synthetic single-lead ECG plus the true R-peak sample indices.
 ///

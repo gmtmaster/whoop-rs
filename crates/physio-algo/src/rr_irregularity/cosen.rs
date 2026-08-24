@@ -40,7 +40,11 @@ pub const SAMPEN_MAX_BEATS: usize = 1_000;
 /// positive and finite, or when either count is zero — no match at all is an absence of evidence, not an
 /// infinite entropy.
 pub fn sample_entropy(rr_ms: &[u16], m: usize, r_ms: f64) -> Option<f64> {
-    if m == 0 || !r_ms.is_finite() || r_ms <= 0.0 || rr_ms.len() < m + 2 || rr_ms.len() > SAMPEN_MAX_BEATS
+    if m == 0
+        || !r_ms.is_finite()
+        || r_ms <= 0.0
+        || rr_ms.len() < m + 2
+        || rr_ms.len() > SAMPEN_MAX_BEATS
     {
         return None;
     }
@@ -91,7 +95,9 @@ mod tests {
         let mut x = seed;
         (0..n)
             .map(|_| {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 lo + ((x >> 33) % span) as u16
             })
             .collect()
@@ -121,7 +127,10 @@ mod tests {
         assert_eq!(sample_entropy(&[800u16; 10], 0, 5.0), None); // zero embedding
         assert_eq!(sample_entropy(&[800u16; 10], 1, f64::NAN), None);
         // A whole night is not a short record: refused at the cap, answered just under it.
-        assert_eq!(sample_entropy(&[800u16; SAMPEN_MAX_BEATS + 1], 1, 5.0), None);
+        assert_eq!(
+            sample_entropy(&[800u16; SAMPEN_MAX_BEATS + 1], 1, 5.0),
+            None
+        );
         assert_eq!(cosen(&[800u16; SAMPEN_MAX_BEATS + 1]), None);
         assert!(sample_entropy(&[800u16; SAMPEN_MAX_BEATS], 1, 5.0).is_some());
     }
@@ -135,7 +144,10 @@ mod tests {
         let expected = sampen + (2.0 * COSEN_R_MS).ln() - mean.ln();
         assert!((cosen(&rr).unwrap() - expected).abs() < 1e-12);
         // The corrections are not cosmetic: they move it by ln(60) - ln(~812) = -2.6.
-        assert!((cosen(&rr).unwrap() - sampen + 2.6).abs() < 0.1, "correction size");
+        assert!(
+            (cosen(&rr).unwrap() - sampen + 2.6).abs() < 0.1,
+            "correction size"
+        );
     }
 
     #[test]
@@ -145,7 +157,10 @@ mod tests {
         let regular = cosen(&flat).unwrap();
         // A wide scatter breaks the m+1 matches and pushes entropy, hence COSEn, up.
         let irregular = cosen(&scatter(120, 600, 400, 12345)).unwrap();
-        assert!(irregular > regular, "regular {regular}, scattered {irregular}");
+        assert!(
+            irregular > regular,
+            "regular {regular}, scattered {irregular}"
+        );
     }
 
     #[test]

@@ -16,7 +16,9 @@ const EFFORT_SCALE: f64 = 100.0;
 
 /// Nearest integer, ties toward positive infinity.
 fn round_half_up(v: f64) -> i32 {
-    if !v.is_finite() { return 0; }
+    if !v.is_finite() {
+        return 0;
+    }
     (v + 0.5).floor() as i32
 }
 
@@ -39,7 +41,9 @@ pub fn effort_bump_ml(effort: Option<f64>) -> i32 {
 
 /// Round `value` to the nearest multiple of `step`, half up. A non-positive step is a no-op.
 pub fn round_to_nearest(value: i32, step: i32) -> i32 {
-    if step <= 0 { return value; }
+    if step <= 0 {
+        return value;
+    }
     ((value + step / 2) / step) * step
 }
 

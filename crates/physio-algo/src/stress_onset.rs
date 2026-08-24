@@ -23,7 +23,11 @@ pub struct OnsetState {
 
 impl Default for OnsetState {
     fn default() -> Self {
-        Self { baseline_rmssd: 0.0, was_below: false, last_fire_at: 0 }
+        Self {
+            baseline_rmssd: 0.0,
+            was_below: false,
+            last_fire_at: 0,
+        }
     }
 }
 
@@ -66,39 +70,72 @@ pub fn evaluate(
     tz_offset_sec: i64,
 ) -> OnsetDecision {
     let refuse = |reason: OnsetReason| OnsetDecision {
-        should_nudge: false, reason,
+        should_nudge: false,
+        reason,
         fast_rmssd: None,
-        baseline_rmssd: if state.baseline_rmssd > 0.0 { Some(state.baseline_rmssd) } else { None },
+        baseline_rmssd: if state.baseline_rmssd > 0.0 {
+            Some(state.baseline_rmssd)
+        } else {
+            None
+        },
         next_state: state,
     };
-    if !enabled || !auto_nudge { return refuse(OnsetReason::Disabled); }
+    if !enabled || !auto_nudge {
+        return refuse(OnsetReason::Disabled);
+    }
 
     let clean_all = HrvReadiness::clean_rr(rr_buffer);
-    let fast_window = if clean_all.len() > FAST_WINDOW_BEATS { &clean_all[clean_all.len() - FAST_WINDOW_BEATS..] } else { &clean_all[..] };
-    let fast = if fast_window.len() >= MIN_BEATS { HrvReadiness::rmssd_plain(fast_window) } else { None };
-    let Some(fast) = fast else { return refuse(OnsetReason::InsufficientData); };
+    let fast_window = if clean_all.len() > FAST_WINDOW_BEATS {
+        &clean_all[clean_all.len() - FAST_WINDOW_BEATS..]
+    } else {
+        &clean_all[..]
+    };
+    let fast = if fast_window.len() >= MIN_BEATS {
+        HrvReadiness::rmssd_plain(fast_window)
+    } else {
+        None
+    };
+    let Some(fast) = fast else {
+        return refuse(OnsetReason::InsufficientData);
+    };
 
-    let new_baseline = if state.baseline_rmssd == 0.0 { fast }
-        else { state.baseline_rmssd * BASELINE_EMA_ALPHA + fast * (1.0 - BASELINE_EMA_ALPHA) };
-    let mut next = OnsetState { baseline_rmssd: new_baseline, ..state };
+    let new_baseline = if state.baseline_rmssd == 0.0 {
+        fast
+    } else {
+        state.baseline_rmssd * BASELINE_EMA_ALPHA + fast * (1.0 - BASELINE_EMA_ALPHA)
+    };
+    let mut next = OnsetState {
+        baseline_rmssd: new_baseline,
+        ..state
+    };
     let threshold = new_baseline * DROP_RATIO;
     let is_below = fast < threshold;
     let is_edge = is_below && !state.was_below;
     next.was_below = is_below;
 
     let decide = |nudge: bool, reason: OnsetReason| OnsetDecision {
-        should_nudge: nudge, reason,
-        fast_rmssd: Some(fast), baseline_rmssd: Some(new_baseline),
+        should_nudge: nudge,
+        reason,
+        fast_rmssd: Some(fast),
+        baseline_rmssd: Some(new_baseline),
         next_state: next,
     };
-    if !is_below { return decide(false, OnsetReason::NoDip); }
-    if !is_edge { return decide(false, OnsetReason::NotAnEdge); }
+    if !is_below {
+        return decide(false, OnsetReason::NoDip);
+    }
+    if !is_edge {
+        return decide(false, OnsetReason::NotAnEdge);
+    }
 
     let hr_in_band = current_hr.is_some_and(|h| (RESTING_HR_LOW..=RESTING_HR_HIGH).contains(&h));
     let moving = recent_motion_g.is_some_and(|m| m >= ACTIVITY_GATE_G);
-    if !hr_in_band || moving { return decide(false, OnsetReason::ExerciseGated); }
+    if !hr_in_band || moving {
+        return decide(false, OnsetReason::ExerciseGated);
+    }
 
-    if session_active { return decide(false, OnsetReason::Suppressed); }
+    if session_active {
+        return decide(false, OnsetReason::Suppressed);
+    }
     if state.last_fire_at != 0 && (now_sec - state.last_fire_at) < MIN_SECONDS_BETWEEN_FIRES {
         return decide(false, OnsetReason::Suppressed);
     }
@@ -109,13 +146,17 @@ pub fn evaluate(
         } else {
             local_min >= quiet_start_min || local_min < quiet_end_min
         };
-        if in_window { return decide(false, OnsetReason::Suppressed); }
+        if in_window {
+            return decide(false, OnsetReason::Suppressed);
+        }
     }
 
     next.last_fire_at = now_sec;
     OnsetDecision {
-        should_nudge: true, reason: OnsetReason::Onset,
-        fast_rmssd: Some(fast), baseline_rmssd: Some(new_baseline),
+        should_nudge: true,
+        reason: OnsetReason::Onset,
+        fast_rmssd: Some(fast),
+        baseline_rmssd: Some(new_baseline),
         next_state: next,
     }
 }
@@ -129,12 +170,17 @@ mod tests {
     /// exactly `spread`. Feeding the detector a known RMSSD is what makes the dip arithmetic
     /// checkable rather than merely present.
     fn buffer(spread: u16) -> Vec<u16> {
-        (0..80).map(|i| if i % 2 == 0 { 800u16 } else { 800 + spread }).collect()
+        (0..80)
+            .map(|i| if i % 2 == 0 { 800u16 } else { 800 + spread })
+            .collect()
     }
 
     /// A baseline the detector has already learned, so a dip has something to fall from.
-    const SEEDED: OnsetState =
-        OnsetState { baseline_rmssd: 40.0, was_below: false, last_fire_at: 0 };
+    const SEEDED: OnsetState = OnsetState {
+        baseline_rmssd: 40.0,
+        was_below: false,
+        last_fire_at: 0,
+    };
     /// The fixture clock: 100000 s past the epoch is 03:46 local at tz 0, the minute the
     /// quiet-hours rows straddle.
     const NOW: i64 = 100_000;
@@ -169,8 +215,18 @@ mod tests {
         fn decide_on(&self, rr: &[u16]) -> OnsetDecision {
             let (qs, qe) = self.quiet.unwrap_or((0, 0));
             evaluate(
-                rr, self.hr, self.motion, self.session_active, self.state, self.enabled,
-                self.auto_nudge, self.quiet.is_some(), qs, qe, NOW, self.tz_offset_sec,
+                rr,
+                self.hr,
+                self.motion,
+                self.session_active,
+                self.state,
+                self.enabled,
+                self.auto_nudge,
+                self.quiet.is_some(),
+                qs,
+                qe,
+                NOW,
+                self.tz_offset_sec,
             )
         }
 
@@ -201,8 +257,14 @@ mod tests {
     fn cases() -> Vec<Case> {
         use OnsetReason::*;
         vec![
-            Case { enabled: false, ..case("detector switched off", Disabled, false) },
-            Case { auto_nudge: false, ..case("auto-nudge switched off", Disabled, false) },
+            Case {
+                enabled: false,
+                ..case("detector switched off", Disabled, false)
+            },
+            Case {
+                auto_nudge: false,
+                ..case("auto-nudge switched off", Disabled, false)
+            },
             Case {
                 rr: vec![800u16; 19],
                 ..case("fewer clean beats than MIN_BEATS", InsufficientData, false)
@@ -217,10 +279,16 @@ mod tests {
             },
             case("a dip below the learned baseline", Onset, true),
             Case {
-                state: OnsetState { was_below: true, ..SEEDED },
+                state: OnsetState {
+                    was_below: true,
+                    ..SEEDED
+                },
                 ..case("still below, so not a fresh edge", NotAnEdge, false)
             },
-            Case { hr: None, ..case("no heart rate to gate on", ExerciseGated, false) },
+            Case {
+                hr: None,
+                ..case("no heart rate to gate on", ExerciseGated, false)
+            },
             Case {
                 hr: Some(RESTING_HR_HIGH + 0.1),
                 ..case("heart rate above the resting band", ExerciseGated, false)
@@ -237,13 +305,22 @@ mod tests {
                 motion: Some(ACTIVITY_GATE_G - 1e-4),
                 ..case("motion just under the activity gate", Onset, true)
             },
-            Case { session_active: true, ..case("a session is running", Suppressed, false) },
             Case {
-                state: OnsetState { last_fire_at: NOW - MIN_SECONDS_BETWEEN_FIRES + 1, ..SEEDED },
+                session_active: true,
+                ..case("a session is running", Suppressed, false)
+            },
+            Case {
+                state: OnsetState {
+                    last_fire_at: NOW - MIN_SECONDS_BETWEEN_FIRES + 1,
+                    ..SEEDED
+                },
                 ..case("inside the refractory window", Suppressed, false)
             },
             Case {
-                state: OnsetState { last_fire_at: NOW - MIN_SECONDS_BETWEEN_FIRES, ..SEEDED },
+                state: OnsetState {
+                    last_fire_at: NOW - MIN_SECONDS_BETWEEN_FIRES,
+                    ..SEEDED
+                },
                 ..case("refractory window just elapsed", Onset, true)
             },
             Case {
@@ -299,7 +376,15 @@ mod tests {
         // Coverage, asserted rather than assumed: every reason the enum can carry is produced by
         // some row, and the firing rows exist. A table of refusals alone cannot see a detector
         // that never nudges.
-        for r in [Onset, Disabled, InsufficientData, NoDip, NotAnEdge, ExerciseGated, Suppressed] {
+        for r in [
+            Onset,
+            Disabled,
+            InsufficientData,
+            NoDip,
+            NotAnEdge,
+            ExerciseGated,
+            Suppressed,
+        ] {
             assert!(cases.iter().any(|c| c.reason == r), "no row reaches {r:?}");
         }
         assert_eq!(cases.iter().filter(|c| c.nudge).count(), FIRING_ROWS);
@@ -314,15 +399,28 @@ mod tests {
         let d = c.decide();
         assert!(d.should_nudge);
         assert_eq!(d.reason, OnsetReason::Onset);
-        assert_eq!(d.fast_rmssd.unwrap().to_bits(), (DIP_SPREAD as f64).to_bits());
-        assert_eq!(d.baseline_rmssd.unwrap().to_bits(), 39.660000000000004f64.to_bits());
+        assert_eq!(
+            d.fast_rmssd.unwrap().to_bits(),
+            (DIP_SPREAD as f64).to_bits()
+        );
+        assert_eq!(
+            d.baseline_rmssd.unwrap().to_bits(),
+            39.660000000000004f64.to_bits()
+        );
         assert_eq!(
             d.next_state,
-            OnsetState { baseline_rmssd: 39.660000000000004, was_below: true, last_fire_at: NOW }
+            OnsetState {
+                baseline_rmssd: 39.660000000000004,
+                was_below: true,
+                last_fire_at: NOW
+            }
         );
         // A refusal leaves the refractory clock alone, so a suppressed evaluation cannot silently
         // start one.
-        let calm = Case { rr: buffer(CALM_SPREAD), ..case("", OnsetReason::NoDip, false) };
+        let calm = Case {
+            rr: buffer(CALM_SPREAD),
+            ..case("", OnsetReason::NoDip, false)
+        };
         assert_eq!(calm.decide().next_state.last_fire_at, 0);
     }
 
@@ -332,14 +430,18 @@ mod tests {
         // `f = DROP_RATIO * (alpha*b + (1-alpha)*f)`. Derived from the shipped constants here, so
         // moving either one moves this bound and breaks the pair below it.
         let b = SEEDED.baseline_rmssd;
-        let crossing = DROP_RATIO * BASELINE_EMA_ALPHA * b / (1.0 - DROP_RATIO * (1.0 - BASELINE_EMA_ALPHA));
+        let crossing =
+            DROP_RATIO * BASELINE_EMA_ALPHA * b / (1.0 - DROP_RATIO * (1.0 - BASELINE_EMA_ALPHA));
         assert!(
             (DIP_SPREAD as f64) < crossing && crossing < (CALM_SPREAD as f64),
             "the fixture no longer straddles the crossing point at {crossing}"
         );
         let dip = case("", OnsetReason::Onset, true);
         assert_eq!(dip.decide().reason, OnsetReason::Onset);
-        let calm = Case { rr: buffer(CALM_SPREAD), ..case("", OnsetReason::NoDip, false) };
+        let calm = Case {
+            rr: buffer(CALM_SPREAD),
+            ..case("", OnsetReason::NoDip, false)
+        };
         assert_eq!(calm.decide().reason, OnsetReason::NoDip);
     }
 
@@ -349,16 +451,31 @@ mod tests {
         // The whole-buffer RMSSD is far above the threshold; the fast window's is the dip, so the
         // detector fires only because it read the tail and not the head.
         let tail = buffer(DIP_SPREAD).into_iter().take(60).collect::<Vec<_>>();
-        let mut rr: Vec<u16> = (0..20).map(|i| if i % 2 == 0 { 700u16 } else { 900 }).collect();
+        let mut rr: Vec<u16> = (0..20)
+            .map(|i| if i % 2 == 0 { 700u16 } else { 900 })
+            .collect();
         rr.extend(tail.iter().copied());
         let clean = HrvReadiness::clean_rr(&rr);
-        assert_eq!(clean[clean.len() - tail.len()..], tail[..], "the tail must survive cleaning");
+        assert_eq!(
+            clean[clean.len() - tail.len()..],
+            tail[..],
+            "the tail must survive cleaning"
+        );
         let whole = HrvReadiness::rmssd_plain(&clean).unwrap();
-        assert!(whole > 4.0 * DIP_SPREAD as f64, "head and tail must differ, whole reads {whole}");
+        assert!(
+            whole > 4.0 * DIP_SPREAD as f64,
+            "head and tail must differ, whole reads {whole}"
+        );
 
-        let c = Case { rr, ..case("", OnsetReason::Onset, true) };
+        let c = Case {
+            rr,
+            ..case("", OnsetReason::Onset, true)
+        };
         let d = c.decide();
-        assert_eq!(d.fast_rmssd.unwrap().to_bits(), (DIP_SPREAD as f64).to_bits());
+        assert_eq!(
+            d.fast_rmssd.unwrap().to_bits(),
+            (DIP_SPREAD as f64).to_bits()
+        );
         assert_eq!(d.reason, OnsetReason::Onset);
     }
 
@@ -374,8 +491,14 @@ mod tests {
             };
             let d = c.decide();
             assert_eq!(d.reason, OnsetReason::NoDip, "spread {spread}");
-            assert_eq!(d.baseline_rmssd.unwrap().to_bits(), (spread as f64).to_bits());
-            assert_eq!(d.next_state.baseline_rmssd.to_bits(), (spread as f64).to_bits());
+            assert_eq!(
+                d.baseline_rmssd.unwrap().to_bits(),
+                (spread as f64).to_bits()
+            );
+            assert_eq!(
+                d.next_state.baseline_rmssd.to_bits(),
+                (spread as f64).to_bits()
+            );
             assert!(!d.should_nudge);
         }
     }
@@ -383,12 +506,26 @@ mod tests {
     #[test]
     fn the_exercise_gate_is_inclusive_at_both_resting_edges() {
         for hr in [RESTING_HR_LOW, 70.0, RESTING_HR_HIGH] {
-            let c = Case { hr: Some(hr), ..case("", OnsetReason::Onset, true) };
-            assert_eq!(c.decide().reason, OnsetReason::Onset, "{hr} bpm is inside the band");
+            let c = Case {
+                hr: Some(hr),
+                ..case("", OnsetReason::Onset, true)
+            };
+            assert_eq!(
+                c.decide().reason,
+                OnsetReason::Onset,
+                "{hr} bpm is inside the band"
+            );
         }
         for hr in [RESTING_HR_LOW - 0.1, RESTING_HR_HIGH + 0.1] {
-            let c = Case { hr: Some(hr), ..case("", OnsetReason::ExerciseGated, false) };
-            assert_eq!(c.decide().reason, OnsetReason::ExerciseGated, "{hr} bpm is outside it");
+            let c = Case {
+                hr: Some(hr),
+                ..case("", OnsetReason::ExerciseGated, false)
+            };
+            assert_eq!(
+                c.decide().reason,
+                OnsetReason::ExerciseGated,
+                "{hr} bpm is outside it"
+            );
         }
     }
 
@@ -397,21 +534,32 @@ mod tests {
         // The same `>=` on the same constant the windowed path uses, so both stress paths refuse
         // the same movement. Exercised here because the shipped Android caller passes no motion.
         let at = |m: f64| {
-            Case { motion: Some(m), ..case("", OnsetReason::Onset, true) }.decide().reason
+            Case {
+                motion: Some(m),
+                ..case("", OnsetReason::Onset, true)
+            }
+            .decide()
+            .reason
         };
         assert_eq!(at(ACTIVITY_GATE_G), OnsetReason::ExerciseGated);
         assert_eq!(at(ACTIVITY_GATE_G + 1.0), OnsetReason::ExerciseGated);
         assert_eq!(at(ACTIVITY_GATE_G - 1e-4), OnsetReason::Onset);
         assert_eq!(at(0.0), OnsetReason::Onset);
         // An absent channel is not movement: the gate is skipped, not failed.
-        assert_eq!(case("", OnsetReason::Onset, true).decide().reason, OnsetReason::Onset);
+        assert_eq!(
+            case("", OnsetReason::Onset, true).decide().reason,
+            OnsetReason::Onset
+        );
     }
 
     #[test]
     fn the_refractory_window_is_open_at_its_far_edge() {
         let after = |elapsed: i64| {
             Case {
-                state: OnsetState { last_fire_at: NOW - elapsed, ..SEEDED },
+                state: OnsetState {
+                    last_fire_at: NOW - elapsed,
+                    ..SEEDED
+                },
                 ..case("", OnsetReason::Onset, true)
             }
             .decide()
@@ -429,9 +577,13 @@ mod tests {
     #[test]
     fn quiet_hours_suppress_only_inside_the_window() {
         let at = |q: (i32, i32), tz: i64| {
-            Case { quiet: Some(q), tz_offset_sec: tz, ..case("", OnsetReason::Onset, true) }
-                .decide()
-                .should_nudge
+            Case {
+                quiet: Some(q),
+                tz_offset_sec: tz,
+                ..case("", OnsetReason::Onset, true)
+            }
+            .decide()
+            .should_nudge
         };
         // `[start, end)`: the starting minute is quiet, the ending minute is not.
         assert!(!at((NOW_LOCAL_MIN, NOW_LOCAL_MIN + 1), 0));
@@ -452,7 +604,10 @@ mod tests {
         // the algorithm apart from a stand-in.
         let cases = cases();
         let missed = |f: &dyn Fn(&Case) -> (OnsetReason, bool), firing: bool| -> usize {
-            cases.iter().filter(|c| c.nudge == firing && f(c) != (c.reason, c.nudge)).count()
+            cases
+                .iter()
+                .filter(|c| c.nudge == firing && f(c) != (c.reason, c.nudge))
+                .count()
         };
         let never = |_: &Case| (OnsetReason::NoDip, false);
         let always = |_: &Case| (OnsetReason::Onset, true);
@@ -462,12 +617,20 @@ mod tests {
             let d = c.decide_on(&buffer(SEEDED.baseline_rmssd as u16));
             (d.reason, d.should_nudge)
         };
-        assert_eq!(missed(&never, true), FIRING_ROWS, "a detector that never nudges must miss every firing row");
+        assert_eq!(
+            missed(&never, true),
+            FIRING_ROWS,
+            "a detector that never nudges must miss every firing row"
+        );
         assert_eq!(
             missed(&always, false),
             cases.len() - FIRING_ROWS,
             "a detector that always nudges must miss every refusal"
         );
-        assert_eq!(missed(&deaf, true), FIRING_ROWS, "a detector deaf to the R-R buffer must miss every dip");
+        assert_eq!(
+            missed(&deaf, true),
+            FIRING_ROWS,
+            "a detector deaf to the R-R buffer must miss every dip"
+        );
     }
 }

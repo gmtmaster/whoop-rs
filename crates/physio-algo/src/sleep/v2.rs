@@ -9,9 +9,9 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
-use super::common::{flatten_rr, median, ZScore};
-use super::params::Params;
+use super::common::{ZScore, flatten_rr, median};
 use super::input::{AccelSample, HrSample, SleepInput};
+use super::params::Params;
 use super::{SleepStage, StageSegment};
 
 /// Consecutive non-wake epochs that mark sleep onset for the onset-anchored priors.
@@ -26,8 +26,12 @@ const LIGHT: usize = 2;
 const AWAKE: usize = 3;
 
 /// Column order of every emission row and of both transition-matrix axes.
-pub const STAGE_ORDER: [SleepStage; 4] =
-    [SleepStage::Deep, SleepStage::Rem, SleepStage::Light, SleepStage::Wake];
+pub const STAGE_ORDER: [SleepStage; 4] = [
+    SleepStage::Deep,
+    SleepStage::Rem,
+    SleepStage::Light,
+    SleepStage::Wake,
+];
 
 /// Deep-eligibility HR-flatness percentile gate of the shipped recipe.
 pub const DEEP_GATE_THRESH: f64 = Params::SHIPPED.deep_gate_thresh;
@@ -67,13 +71,21 @@ pub fn prepare(input: &SleepInput, p: &Params) -> Prepared {
     let mut rr = flatten_rr(&input.rr);
     rr.sort_by_key(|a| a.0);
     let feats = features(input.start, input.end, &grav, &hr, &rr, p);
-    Prepared { feats, start: input.start, end: input.end }
+    Prepared {
+        feats,
+        start: input.start,
+        end: input.end,
+    }
 }
 
 /// Label already-extracted features under `p`; segments tile the prepared span.
 pub fn stage_prepared(prep: &Prepared, p: &Params) -> Vec<StageSegment> {
     if prep.feats.is_empty() {
-        return vec![StageSegment { start: prep.start, end: prep.end, stage: SleepStage::Light }];
+        return vec![StageSegment {
+            start: prep.start,
+            end: prep.end,
+            stage: SleepStage::Light,
+        }];
     }
     let labels = stage_epochs(&prep.feats, p);
     segments_from(&prep.feats, &labels, prep.start, prep.end)
@@ -97,7 +109,11 @@ pub fn epoch_starts(prep: &Prepared) -> Vec<i64> {
 /// path gets the segments [`stage_prepared`] would have returned. `labels` must be one per prepared epoch.
 pub fn segments_of(prep: &Prepared, labels: &[SleepStage]) -> Vec<StageSegment> {
     if prep.feats.is_empty() {
-        return vec![StageSegment { start: prep.start, end: prep.end, stage: SleepStage::Light }];
+        return vec![StageSegment {
+            start: prep.start,
+            end: prep.end,
+            stage: SleepStage::Light,
+        }];
     }
     segments_from(&prep.feats, labels, prep.start, prep.end)
 }
@@ -116,14 +132,23 @@ pub fn stage_with(input: &SleepInput, p: &Params) -> Vec<StageSegment> {
 
     let feats = features(start, end, &grav, &hr, &rr, p);
     if feats.is_empty() {
-        return vec![StageSegment { start, end, stage: SleepStage::Light }];
+        return vec![StageSegment {
+            start,
+            end,
+            stage: SleepStage::Light,
+        }];
     }
     let labels = stage_epochs(&feats, p);
     segments_from(&feats, &labels, start, end)
 }
 
 /// Tile `[start, end]` from one label per epoch, merging equal-stage neighbours.
-fn segments_from(feats: &[Epoch], labels: &[SleepStage], start: i64, end: i64) -> Vec<StageSegment> {
+fn segments_from(
+    feats: &[Epoch],
+    labels: &[SleepStage],
+    start: i64,
+    end: i64,
+) -> Vec<StageSegment> {
     let mut segments: Vec<StageSegment> = Vec::new();
     let n = feats.len();
     for (i, f) in feats.iter().enumerate() {
@@ -132,7 +157,11 @@ fn segments_from(feats: &[Epoch], labels: &[SleepStage], start: i64, end: i64) -
         let seg_end = if i == n - 1 { end } else { feats[i + 1].start };
         match segments.last_mut() {
             Some(last) if last.stage == stage => last.end = seg_end,
-            _ => segments.push(StageSegment { start: seg_start, end: seg_end, stage }),
+            _ => segments.push(StageSegment {
+                start: seg_start,
+                end: seg_end,
+                stage,
+            }),
         }
     }
     segments
@@ -277,7 +306,11 @@ fn features(
         let jerk_max = jerks.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let jerk_max = if jerks.is_empty() { 0.0 } else { jerk_max };
 
-        let hr_mean = if hrs.is_empty() { None } else { Some(hrs.iter().sum::<f64>() / hrs.len() as f64) };
+        let hr_mean = if hrs.is_empty() {
+            None
+        } else {
+            Some(hrs.iter().sum::<f64>() / hrs.len() as f64)
+        };
         let hr_var = std_of_seconds(e - 150, e + 30 + 150);
         let hr_flat11 = std_of_seconds(e - 330, e + 30 + 360);
 
@@ -291,7 +324,11 @@ fn features(
             }
             bs += 1;
         }
-        beats.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+        beats.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap()
+                .then(a.1.partial_cmp(&b.1).unwrap())
+        });
         let resp_reg = resp_regularity(&beats);
 
         raws.push(Raw {
@@ -308,7 +345,11 @@ fn features(
         e += 30;
     }
 
-    let jerk_scale = if all_jerks.is_empty() { 1e-6 } else { median(&all_jerks) };
+    let jerk_scale = if all_jerks.is_empty() {
+        1e-6
+    } else {
+        median(&all_jerks)
+    };
     let move_thr = jerk_scale * p.jerk_move_mult;
 
     // PASS 2 — move fraction against the night-relative threshold.
@@ -360,7 +401,11 @@ fn resp_regularity(beats: &[(f64, f64)]) -> Option<f64> {
         let tb = beats[seg + 1].0;
         let va = beats[seg].1;
         let vb = beats[seg + 1].1;
-        *yi = if tb <= ta { va } else { va + ((t - ta) / (tb - ta)).clamp(0.0, 1.0) * (vb - va) };
+        *yi = if tb <= ta {
+            va
+        } else {
+            va + ((t - ta) / (tb - ta)).clamp(0.0, 1.0) * (vb - va)
+        };
     }
     let mean = y.iter().sum::<f64>() / n as f64;
     for v in y.iter_mut() {
@@ -423,7 +468,11 @@ fn cycle_clock(c: f64, feats: &[Epoch], anchor: Anchor, p: &Params) -> f64 {
         return c;
     }
     let c0 = feats[o].clock;
-    if c0 >= 1.0 { c } else { ((c - c0) / (1.0 - c0)).clamp(0.0, 1.0) }
+    if c0 >= 1.0 {
+        c
+    } else {
+        ((c - c0) / (1.0 - c0)).clamp(0.0, 1.0)
+    }
 }
 
 /// The early-REM suppression for one epoch. Zero `cycle_rem_onset_minutes` keeps the step at a fraction
@@ -537,7 +586,11 @@ fn idx_to_stage(i: usize) -> SleepStage {
 fn final_emissions(feats: &[Epoch], p: &Params) -> Vec<[f64; 4]> {
     if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
         let probe = viterbi(&emissions(feats, p, Anchor::Probe), &p.transition);
-        return emissions(feats, p, Anchor::Onset(sustained_onset(&probe).unwrap_or(0)));
+        return emissions(
+            feats,
+            p,
+            Anchor::Onset(sustained_onset(&probe).unwrap_or(0)),
+        );
     }
     emissions(feats, p, Anchor::Window)
 }
@@ -587,8 +640,13 @@ fn emissions(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<[f64; 4]> {
         let zhvv = zhv.apply(f.hr_var);
         let zmvv = zmv.apply(f.move_frac);
         let gate = p.deep_gate_slope * (fpct(f.hr_flat11) - p.deep_gate_thresh).max(0.0);
-        let awake_cardiac0 = p.awake_hrv * dz(zhvv, p.awake_deadzone) + p.awake_hr * dz(zhrv, p.awake_deadzone);
-        let awake_cardiac = if motion_quiescent(f, p) { awake_cardiac0.min(0.0) } else { awake_cardiac0 };
+        let awake_cardiac0 =
+            p.awake_hrv * dz(zhvv, p.awake_deadzone) + p.awake_hr * dz(zhrv, p.awake_deadzone);
+        let awake_cardiac = if motion_quiescent(f, p) {
+            awake_cardiac0.min(0.0)
+        } else {
+            awake_cardiac0
+        };
 
         let mut em = [0.0f64; 4];
         em[DEEP] = p.deep_hrv * zhvv + p.deep_hr * zhrv + p.deep_motion * zmvv - gate + blp[DEEP];
@@ -596,7 +654,11 @@ fn emissions(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<[f64; 4]> {
         em[LIGHT] = blp[LIGHT];
         em[AWAKE] = p.awake_motion * zmvv + awake_cardiac + blp[AWAKE];
 
-        let pr = cycle_prior(cycle_clock(f.clock, feats, anchor, p), rem_guard(i, f.clock, anchor, p), p);
+        let pr = cycle_prior(
+            cycle_clock(f.clock, feats, anchor, p),
+            rem_guard(i, f.clock, anchor, p),
+            p,
+        );
         for (s, p) in pr.iter().enumerate() {
             em[s] += p;
         }
@@ -622,21 +684,52 @@ mod tests {
     /// carry a motion reading, the epochs that did not carry `None`.
     fn half_blind_epochs() -> Vec<Epoch> {
         let start = 1_749_513_600i64;
-        let hr: Vec<HrSample> = (0..60).map(|i| HrSample { ts: start + i, bpm: 55 }).collect();
-        let accel: Vec<AccelSample> =
-            (0..30).map(|i| AccelSample { ts: start + i, x: 0.0, y: 0.0, z: 1.0 }).collect();
-        let input = SleepInput { start, end: start + 60, hr, rr: Vec::<RrRun>::new(), accel };
+        let hr: Vec<HrSample> = (0..60)
+            .map(|i| HrSample {
+                ts: start + i,
+                bpm: 55,
+            })
+            .collect();
+        let accel: Vec<AccelSample> = (0..30)
+            .map(|i| AccelSample {
+                ts: start + i,
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            })
+            .collect();
+        let input = SleepInput {
+            start,
+            end: start + 60,
+            hr,
+            rr: Vec::<RrRun>::new(),
+            accel,
+        };
         let mut grav = input.accel.clone();
         grav.sort_by_key(|g| g.ts);
-        features(input.start, input.end, &grav, &input.hr, &[], &Params::SHIPPED)
+        features(
+            input.start,
+            input.end,
+            &grav,
+            &input.hr,
+            &[],
+            &Params::SHIPPED,
+        )
     }
 
     #[test]
     fn an_epoch_without_gravity_reports_no_motion_reading() {
         let feats = half_blind_epochs();
         assert_eq!(feats.len(), 2, "two 30 s epochs");
-        assert_eq!(feats[0].move_frac, Some(0.0), "gravity present and still -> a measured zero");
-        assert_eq!(feats[1].move_frac, None, "no gravity -> no reading, not a measured zero");
+        assert_eq!(
+            feats[0].move_frac,
+            Some(0.0),
+            "gravity present and still -> a measured zero"
+        );
+        assert_eq!(
+            feats[1].move_frac, None,
+            "no gravity -> no reading, not a measured zero"
+        );
     }
 
     #[test]
@@ -644,8 +737,14 @@ mod tests {
         // The quiescent gate clamps the awake-cardiac term, so asserting it on absent motion would let a
         // dropout suppress wake. Only an epoch that actually SAW a still wrist may be quiescent.
         let feats = half_blind_epochs();
-        assert!(motion_quiescent(&feats[0], &Params::SHIPPED), "an observed still wrist is quiescent");
-        assert!(!motion_quiescent(&feats[1], &Params::SHIPPED), "an absent accelerometer cannot assert stillness");
+        assert!(
+            motion_quiescent(&feats[0], &Params::SHIPPED),
+            "an observed still wrist is quiescent"
+        );
+        assert!(
+            !motion_quiescent(&feats[1], &Params::SHIPPED),
+            "an absent accelerometer cannot assert stillness"
+        );
     }
 
     #[test]
@@ -664,7 +763,10 @@ mod tests {
     #[test]
     fn the_onset_anchored_guard_grades_from_onset_not_from_the_window() {
         let p = Params::SHIPPED;
-        assert!(p.cycle_rem_onset_minutes > 0.0, "the shipped guard is onset-anchored");
+        assert!(
+            p.cycle_rem_onset_minutes > 0.0,
+            "the shipped guard is onset-anchored"
+        );
         let onset = 40usize;
         let full = p.cycle_rem_early_penalty;
         // Full magnitude at onset, nothing at onset + the grading width, and never negative before onset.
@@ -682,16 +784,31 @@ mod tests {
     fn the_onset_anchored_clock_rebases_only_when_asked() {
         let feats = half_blind_epochs();
         let shipped = Params::SHIPPED;
-        let from_onset = Params { cycle_clock_from_onset: true, ..shipped };
+        let from_onset = Params {
+            cycle_clock_from_onset: true,
+            ..shipped
+        };
         let c0 = feats[0].clock;
-        assert_eq!(0.75, cycle_clock(0.75, &feats, Anchor::Onset(0), &shipped), "off by default");
-        assert_eq!(0.75, cycle_clock(0.75, &feats, Anchor::Window, &from_onset), "no anchor, no rebase");
+        assert_eq!(
+            0.75,
+            cycle_clock(0.75, &feats, Anchor::Onset(0), &shipped),
+            "off by default"
+        );
+        assert_eq!(
+            0.75,
+            cycle_clock(0.75, &feats, Anchor::Window, &from_onset),
+            "no anchor, no rebase"
+        );
         assert_eq!(
             (0.75 - c0) / (1.0 - c0),
             cycle_clock(0.75, &feats, Anchor::Onset(0), &from_onset),
             "rebased onto the onset epoch's own fraction"
         );
-        assert_eq!(0.0, cycle_clock(0.0, &feats, Anchor::Onset(1), &from_onset), "clamped below onset");
+        assert_eq!(
+            0.0,
+            cycle_clock(0.0, &feats, Anchor::Onset(1), &from_onset),
+            "clamped below onset"
+        );
     }
 
     // ── the decoder, isolated from the emissions feeding it ───────────────────────────────────────
@@ -729,7 +846,9 @@ mod tests {
     /// Deterministic LCG in [-4, 4) — the same emission sequences on every run, at a spread comparable to
     /// the log-transitions so neither term trivially dominates.
     fn lcg(state: &mut u64) -> f64 {
-        *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         ((*state >> 33) as f64) / ((1u64 << 31) as f64) * 8.0 - 4.0
     }
 
@@ -749,13 +868,32 @@ mod tests {
         let mut state = 0x5eed_1234_u64;
         let mut checked = 0usize;
         for case in 0..80 {
-            let t = if case % 2 == 0 { Params::SHIPPED.transition } else { PROBE_T };
-            let em: Vec<[f64; 4]> =
-                (0..7).map(|_| [lcg(&mut state), lcg(&mut state), lcg(&mut state), lcg(&mut state)]).collect();
+            let t = if case % 2 == 0 {
+                Params::SHIPPED.transition
+            } else {
+                PROBE_T
+            };
+            let em: Vec<[f64; 4]> = (0..7)
+                .map(|_| {
+                    [
+                        lcg(&mut state),
+                        lcg(&mut state),
+                        lcg(&mut state),
+                        lcg(&mut state),
+                    ]
+                })
+                .collect();
             let got: Vec<usize> = viterbi(&em, &t).into_iter().map(idx_of).collect();
             let (want, best) = brute_force(&em, &t);
-            assert_eq!(path_score(&em, &t, &got), best, "case {case}: decoded path is not optimal");
-            assert_eq!(got, want, "case {case}: decoded path differs from the enumerated best");
+            assert_eq!(
+                path_score(&em, &t, &got),
+                best,
+                "case {case}: decoded path is not optimal"
+            );
+            assert_eq!(
+                got, want,
+                "case {case}: decoded path differs from the enumerated best"
+            );
             checked += 1;
         }
         assert_eq!(80, checked);
@@ -796,12 +934,26 @@ mod tests {
         em[1][DEEP] = 1.0;
         em[2][REM] = 5.0;
         let got: Vec<usize> = viterbi(&em, &t).into_iter().map(idx_of).collect();
-        assert_eq!(vec![REM, REM, REM], got, "the sticky diagonal must smooth a single blip");
-        assert_eq!(DEEP, (0..4).max_by(|a, b| em[1][*a].total_cmp(&em[1][*b])).unwrap(), "argmax disagrees");
+        assert_eq!(
+            vec![REM, REM, REM],
+            got,
+            "the sticky diagonal must smooth a single blip"
+        );
+        assert_eq!(
+            DEEP,
+            (0..4)
+                .max_by(|a, b| em[1][*a].total_cmp(&em[1][*b]))
+                .unwrap(),
+            "argmax disagrees"
+        );
         // And it is not unconditional: widen the blip's margin past the two transitions it must pay for
         // and the decoder follows the evidence instead.
         em[1][DEEP] = 12.0;
-        assert_eq!(DEEP, idx_of(viterbi(&em, &t)[1]), "a large enough margin must win");
+        assert_eq!(
+            DEEP,
+            idx_of(viterbi(&em, &t)[1]),
+            "a large enough margin must win"
+        );
     }
 
     #[test]
@@ -812,7 +964,11 @@ mod tests {
         assert_eq!(SleepStage::Wake, viterbi(&[[0.0, 1.0, 2.0, 3.0]], &t)[0]);
         // Everything equal under a uniform matrix: every path ties and the earliest column wins.
         let uniform = [[0.25; 4]; 4];
-        assert!(viterbi(&[[0.0; 4]; 6], &uniform).iter().all(|&s| s == SleepStage::Deep));
+        assert!(
+            viterbi(&[[0.0; 4]; 6], &uniform)
+                .iter()
+                .all(|&s| s == SleepStage::Deep)
+        );
     }
 
     /// Twenty minutes of HR and gravity, still for the first half and jittering in the second, so the
@@ -821,12 +977,27 @@ mod tests {
         let start = 1_749_513_600i64;
         let (mut hr, mut accel) = (Vec::new(), Vec::new());
         for i in 0..1200i64 {
-            let bpm = if i < 600 { 52 + (i % 3) as u16 } else { 66 + (i % 5) as u16 };
+            let bpm = if i < 600 {
+                52 + (i % 3) as u16
+            } else {
+                66 + (i % 5) as u16
+            };
             hr.push(HrSample { ts: start + i, bpm });
             let jitter = if i < 600 { 0.0 } else { 0.02 * (i % 7) as f64 };
-            accel.push(AccelSample { ts: start + i, x: jitter, y: 0.0, z: 1.0 - jitter });
+            accel.push(AccelSample {
+                ts: start + i,
+                x: jitter,
+                y: 0.0,
+                z: 1.0 - jitter,
+            });
         }
-        let input = SleepInput { start, end: start + 1200, hr, rr: Vec::<RrRun>::new(), accel };
+        let input = SleepInput {
+            start,
+            end: start + 1200,
+            hr,
+            rr: Vec::<RrRun>::new(),
+            accel,
+        };
         prepare(&input, &Params::SHIPPED)
     }
 
@@ -838,8 +1009,15 @@ mod tests {
         let p = Params::SHIPPED;
         let em = emissions_prepared(&prep, &p);
         assert_eq!(em.len(), prep.feats.len(), "one emission row per epoch");
-        assert_eq!(em.len(), epoch_starts(&prep).len(), "one epoch start per emission row");
-        assert!(em.len() >= 30, "a night long enough for the path search to matter");
+        assert_eq!(
+            em.len(),
+            epoch_starts(&prep).len(),
+            "one epoch start per emission row"
+        );
+        assert!(
+            em.len() >= 30,
+            "a night long enough for the path search to matter"
+        );
         let via_decoder = segments_of(&prep, &viterbi(&em, &p.transition));
         assert_eq!(stage_prepared(&prep, &p), via_decoder);
     }
@@ -849,12 +1027,22 @@ mod tests {
         // The rows are read as probabilities and logged, so a row that does not sum to 1 would weight one
         // stage's whole outgoing mass. A 0 cell is floored, not forbidden.
         for (i, row) in Params::SHIPPED.transition.iter().enumerate() {
-            assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-9, "row {i} is not a distribution");
+            assert!(
+                (row.iter().sum::<f64>() - 1.0).abs() < 1e-9,
+                "row {i} is not a distribution"
+            );
         }
         let t = Params::SHIPPED.transition;
-        assert_eq!(0.0, t[AWAKE][DEEP], "the awake row's zeros are what the floor has to cover");
+        assert_eq!(
+            0.0, t[AWAKE][DEEP],
+            "the awake row's zeros are what the floor has to cover"
+        );
         let em = [[0.0, 0.0, 0.0, 50.0], [50.0, 0.0, 0.0, 0.0]];
-        assert_eq!(vec![SleepStage::Wake, SleepStage::Deep], viterbi(&em, &t), "a zero cell is traversable");
+        assert_eq!(
+            vec![SleepStage::Wake, SleepStage::Deep],
+            viterbi(&em, &t),
+            "a zero cell is traversable"
+        );
     }
 
     #[test]
@@ -863,7 +1051,13 @@ mod tests {
         // distribution, so a dropout never reads as the stillest stretch of the night.
         let z = ZScore::build(&[Some(0.0), Some(4.0), Some(8.0), None]);
         assert_eq!(z.apply(None), 0.0);
-        assert!(z.apply(Some(0.0)) < 0.0, "a measured zero sits below the night mean");
-        assert!(z.apply(None) > z.apply(Some(0.0)), "absence must not out-still a measured zero");
+        assert!(
+            z.apply(Some(0.0)) < 0.0,
+            "a measured zero sits below the night mean"
+        );
+        assert!(
+            z.apply(None) > z.apply(Some(0.0)),
+            "absence must not out-still a measured zero"
+        );
     }
 }

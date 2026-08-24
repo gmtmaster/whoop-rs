@@ -3,8 +3,20 @@
 //! term cancels. Protocol-free: plain profile scalars in, wellness estimate out, never medical.
 
 // Nes waist coefficients: VO2 = intercept - ageC*age + paiC*PA - wcC*waist - rhrC*RHR.
-const MEN: Coeffs = Coeffs { intercept: 100.27, age: 0.296, wc: 0.369, rhr: 0.155, pai: 0.226 };
-const WOMEN: Coeffs = Coeffs { intercept: 74.74, age: 0.247, wc: 0.259, rhr: 0.114, pai: 0.198 };
+const MEN: Coeffs = Coeffs {
+    intercept: 100.27,
+    age: 0.296,
+    wc: 0.369,
+    rhr: 0.155,
+    pai: 0.226,
+};
+const WOMEN: Coeffs = Coeffs {
+    intercept: 74.74,
+    age: 0.247,
+    wc: 0.259,
+    rhr: 0.114,
+    pai: 0.198,
+};
 
 // Normative "average peer" the Fitness Age compares against.
 pub const RESTING_HR_REFERENCE: f64 = 65.0;
@@ -27,11 +39,7 @@ fn is_female(sex: &str) -> bool {
 }
 
 fn coeffs(sex: &str) -> &'static Coeffs {
-    if is_female(sex) {
-        &WOMEN
-    } else {
-        &MEN
-    }
+    if is_female(sex) { &WOMEN } else { &MEN }
 }
 
 /// Nes waist-variant VO2max (ml/kg/min). Needs a waist measurement.
@@ -44,7 +52,8 @@ pub fn estimate_vo2max(age: f64, sex: &str, waist_cm: f64, resting_hr: f64, pa_i
 pub fn fitness_age(age: f64, sex: &str, resting_hr: f64, pa_index: f64) -> f64 {
     let c = coeffs(sex);
     let fa = age
-        + (c.rhr * (resting_hr - RESTING_HR_REFERENCE) - c.pai * (pa_index - PAI_REFERENCE)) / c.age;
+        + (c.rhr * (resting_hr - RESTING_HR_REFERENCE) - c.pai * (pa_index - PAI_REFERENCE))
+            / c.age;
     fa.clamp(MIN_AGE, MAX_AGE)
 }
 
@@ -88,7 +97,10 @@ pub fn physical_activity_index(
 }
 
 /// PA-index (0-15) from mean active-day strain — strain already folds intensity x duration.
-pub fn physical_activity_index_from_strain(active_days_per_week: i32, mean_active_strain: f64) -> f64 {
+pub fn physical_activity_index_from_strain(
+    active_days_per_week: i32,
+    mean_active_strain: f64,
+) -> f64 {
     let frequency = frequency_factor(active_days_per_week);
     if frequency == 0.0 {
         return 0.0;
@@ -153,12 +165,15 @@ mod tests {
 
     #[test]
     fn vo2max_women() {
-        approx(estimate_vo2max(40.0, "female", 80.0, 65.0, 5.0), 37.72, 1e-3);
+        approx(
+            estimate_vo2max(40.0, "female", 80.0, 65.0, 5.0),
+            37.72,
+            1e-3,
+        );
     }
 
     #[test]
-    fn bmi_helper() {
-    }
+    fn bmi_helper() {}
 
     #[test]
     fn reference_fit_person_equals_chrono_age() {

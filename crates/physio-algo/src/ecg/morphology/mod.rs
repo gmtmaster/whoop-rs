@@ -29,8 +29,8 @@
 pub mod atrial_band;
 pub mod p_wave;
 
-pub use atrial_band::{atrial_band, AtrialBand, AtrialBandEvidence, AtrialBandLimit};
-pub use p_wave::{p_wave, PWaveEvidence, PWaveFinding, PWaveLimit};
+pub use atrial_band::{AtrialBand, AtrialBandEvidence, AtrialBandLimit, atrial_band};
+pub use p_wave::{PWaveEvidence, PWaveFinding, PWaveLimit, p_wave};
 
 use crate::ecg::sqi::beat_template;
 
@@ -54,7 +54,11 @@ pub fn evidence_fraction(have: usize, full: usize) -> f64 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BeatConsistency {
     /// Mean leave-one-out correlation of each beat against the average of the others.
-    Measured { correlation: f64, beats: usize, confidence: f64 },
+    Measured {
+        correlation: f64,
+        beats: usize,
+        confidence: f64,
+    },
     /// Too few whole beat windows fit the buffer to build a template from.
     Indeterminate,
 }
@@ -106,12 +110,24 @@ mod tests {
         let m = morphology(&x, fs, &truth);
         assert_eq!(m.beats, truth.len());
         assert_eq!(m.p_wave.finding, PWaveFinding::Present, "{m:?}");
-        assert!(matches!(m.atrial_band, AtrialBandEvidence::Measured(_)), "{m:?}");
-        assert!(matches!(m.beat_consistency, BeatConsistency::Measured { .. }), "{m:?}");
+        assert!(
+            matches!(m.atrial_band, AtrialBandEvidence::Measured(_)),
+            "{m:?}"
+        );
+        assert!(
+            matches!(m.beat_consistency, BeatConsistency::Measured { .. }),
+            "{m:?}"
+        );
 
         let flat = morphology(&constant(10_000, 0.0), fs, &[]);
-        assert!(matches!(flat.p_wave.finding, PWaveFinding::Indeterminate(_)), "{flat:?}");
-        assert!(matches!(flat.atrial_band, AtrialBandEvidence::Indeterminate(_)), "{flat:?}");
+        assert!(
+            matches!(flat.p_wave.finding, PWaveFinding::Indeterminate(_)),
+            "{flat:?}"
+        );
+        assert!(
+            matches!(flat.atrial_band, AtrialBandEvidence::Indeterminate(_)),
+            "{flat:?}"
+        );
         assert_eq!(flat.beat_consistency, BeatConsistency::Indeterminate);
     }
 
@@ -126,14 +142,19 @@ mod tests {
         for &c in &truth {
             let (mu, sigma) = (c as f64 - 0.180 * fs, 0.025 * fs);
             let span = (4.0 * sigma) as isize;
-            for i in (mu as isize - span).max(0)..(mu as isize + span).min(stripped.len() as isize - 1) {
+            for i in
+                (mu as isize - span).max(0)..(mu as isize + span).min(stripped.len() as isize - 1)
+            {
                 let d = (i as f64 - mu) / sigma;
                 stripped[i as usize] -= 0.15 * (-0.5 * d * d).exp();
             }
         }
         let cut = morphology(&stripped, fs, &truth);
         assert_eq!(cut.p_wave.finding, PWaveFinding::Absent, "{cut:?}");
-        assert_eq!(cut.beat_consistency, full.beat_consistency, "the QRS did not change");
+        assert_eq!(
+            cut.beat_consistency, full.beat_consistency,
+            "the QRS did not change"
+        );
     }
 
     #[test]
@@ -141,20 +162,35 @@ mod tests {
         // The gate `format_hr_watch` carries in the CLI, applied to the Debug rendering — the only text
         // this crate produces, and the text that reaches a log. Same list as `rr_irregularity`.
         let banned = [
-            "afib", "fibrillat", "arrhythm", "cardiac", "diagnos", "disease", "patient", "clinical",
-            "alarm", "emergency", "abnormal",
+            "afib",
+            "fibrillat",
+            "arrhythm",
+            "cardiac",
+            "diagnos",
+            "disease",
+            "patient",
+            "clinical",
+            "alarm",
+            "emergency",
+            "abnormal",
         ];
         let (x, truth) = synthetic_ecg(250.0, 40.0, 60.0, 1.0, 0.01, 3);
         let mut renderings = vec![
             format!("{:?}", morphology(&x, 250.0, &truth)),
             format!("{:?}", morphology(&constant(10_000, 0.0), 250.0, &[])),
-            format!("{BeatConsistency:?}", BeatConsistency = BeatConsistency::Indeterminate),
+            format!(
+                "{BeatConsistency:?}",
+                BeatConsistency = BeatConsistency::Indeterminate
+            ),
         ];
         for finding in [
             PWaveFinding::Present,
             PWaveFinding::Absent,
             PWaveFinding::Indeterminate(PWaveLimit::UnusableRate),
-            PWaveFinding::Indeterminate(PWaveLimit::WindowTooNarrow { samples: 2, need: 4 }),
+            PWaveFinding::Indeterminate(PWaveLimit::WindowTooNarrow {
+                samples: 2,
+                need: 4,
+            }),
             PWaveFinding::Indeterminate(PWaveLimit::TooFewBeats { have: 1, need: 8 }),
             PWaveFinding::Indeterminate(PWaveLimit::NoReferenceAmplitude),
             PWaveFinding::Indeterminate(PWaveLimit::BelowNoiseFloor),

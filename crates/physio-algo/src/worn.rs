@@ -43,7 +43,8 @@ fn flag_worn(h: &HistoryRecord) -> Option<bool> {
 /// is the presence witness — it is `Some` exactly when the baseline bytes were readable, so a poor
 /// signal never votes on wear alone, it only makes the baseline evidence usable.
 fn optical_worn(h: &HistoryRecord) -> Option<bool> {
-    h.optical_signal_poor.map(|_| h.optical_baseline_a.is_some() || h.optical_baseline_b.is_some())
+    h.optical_signal_poor
+        .map(|_| h.optical_baseline_a.is_some() || h.optical_baseline_b.is_some())
 }
 
 #[cfg(test)]
@@ -83,7 +84,11 @@ mod tests {
     #[test]
     fn the_off_wrist_bit_alone_misses_a_real_off_wrist_record() {
         let h = real_off_wrist();
-        assert_eq!(flag_worn(&h), Some(true), "the bit says worn on a record that is not");
+        assert_eq!(
+            flag_worn(&h),
+            Some(true),
+            "the bit says worn on a record that is not"
+        );
         assert_eq!(worn_state(&h), WornState::NotWorn);
     }
 
@@ -102,7 +107,12 @@ mod tests {
 
     #[test]
     fn a_record_carrying_no_wear_channel_is_unknown_not_off_wrist() {
-        let h = HistoryRecord { version: 24, unix: 1_784_000_000, heart_rate: Some(60), ..Default::default() };
+        let h = HistoryRecord {
+            version: 24,
+            unix: 1_784_000_000,
+            heart_rate: Some(60),
+            ..Default::default()
+        };
         assert_eq!(worn_state(&h), WornState::Unknown);
         assert!(!worn_state(&h).is_off());
     }

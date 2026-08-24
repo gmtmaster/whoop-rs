@@ -172,14 +172,18 @@ readiness        = 7-night mean of ln(RMSSD) vs a smallest-worthwhile-change ban
 ```
 
 The production nightly physiology version is
-`physiology-dynamic-rhr-final-sws-hrv-v2`. Its HRV selects the chronologically last reliable Deep
+`physiology-dynamic-rhr-final-sws-hrv-v3`. Its primary HRV selects the chronologically last reliable Deep
 episode lasting at least 10 minutes. HR, accelerometer, clean-HR, and R-R report coverage must each be
 at least 80%; R-R/HR agreement must be at least 80%; wrist-off overlap is limited to 1%; and R-R artifact
 rejection is limited to 35%. It scans backward for the final quality-valid five-minute window, requires
 at least 240 quality-valid report seconds and 20 clean intervals, applies the existing 300-2000 ms range,
 local-Malik, and report-seam rules, then computes RMSSD directly from contiguous surviving pairs. It does
-not interpolate and returns unavailable without a whole-night fallback. Diagnostics retain the selected
-episode/window, coverage, report/interval and contiguous-pair counts, rejected artifacts, and refusal reason.
+not interpolate. If the complete primary estimator returns no numeric HRV, it applies the identical gates,
+cleaning, backward 30-second window scan, and RMSSD calculation to Deep episodes lasting at least 6 minutes,
+newest first. An episode already exhaustively rejected by the primary window scan is not rescanned. The
+result records `PRIMARY_FINAL_SWS` or `FALLBACK_SHORT_SWS`; fallback values can score Recovery but are not
+eligible for the personal HRV baseline. There is no whole-night or late-stable fallback. Diagnostics retain
+both selection attempts, the selected episode/window, coverage, interval counts, and refusal reason.
 Measured on 85 nights from 5 wearers, on a corpus with the R-R duplication removed: the seam rule leaves
 the per-night median unmoved (+0.0%) and fires on 4 of 18 nights for the one wearer whose duplication was
 removed, 21 of 29 and 13 of 19 for the two whose over-1.0x streams have no known cause, and 0 of 17 for a
@@ -196,7 +200,7 @@ whole night +6.7 ms (MAE 6.0, over on 14 of 15). One wearer, cross-wrist (WHOOP 
 ## 4. Resting HR  ·  FFI `session_resting_hr`, `daily_resting_hr`
 
 `resting_hr.rs` retains the legacy standalone helpers. Normal sleep analysis now uses
-`physiology-dynamic-rhr-final-sws-hrv-v2`: HR is reduced to one-second samples, rejects out-of-range
+`physiology-dynamic-rhr-final-sws-hrv-v3`: HR is reduced to one-second samples, rejects out-of-range
 25-220 bpm values, wrist-off seconds, motion contamination, local median/MAD spikes, and adjacent jumps,
 then forms UTC-aligned 30-second asleep epochs. Each epoch's median receives
 `quality_fraction * stage_weight * 4^progress`, where Deep/SWS has `stage_weight=3`, all other asleep

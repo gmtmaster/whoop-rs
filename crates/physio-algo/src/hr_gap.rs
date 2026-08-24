@@ -139,10 +139,18 @@ mod tests {
 
     #[test]
     fn position_ceilings_are_inclusive_at_the_edge() {
-        for p in [GapPosition::Leading, GapPosition::Interior, GapPosition::Trailing] {
+        for p in [
+            GapPosition::Leading,
+            GapPosition::Interior,
+            GapPosition::Trailing,
+        ] {
             let c = ceiling_seconds(p);
             assert_eq!(classify(c, p), GapVerdict::Bridge, "{p:?} at ceiling");
-            assert_eq!(classify(c + 1.0, p), GapVerdict::Refuse, "{p:?} past ceiling");
+            assert_eq!(
+                classify(c + 1.0, p),
+                GapVerdict::Refuse,
+                "{p:?} past ceiling"
+            );
             assert_eq!(creditable_seconds(c, p), c);
             assert_eq!(creditable_seconds(c + 1.0, p), 0.0);
         }

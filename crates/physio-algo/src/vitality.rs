@@ -113,7 +113,13 @@ const STEPS_CLAMP: f64 = 4.0;
 /// Nocturnal RMSSD age norms (age, ms) — the ~50th percentile by decade. A person at their age norm
 /// contributes zero hazard. Interpolated linearly between anchors, flat outside them.
 const RMSSD_NORM_ANCHORS: [(f64, f64); 7] = [
-    (20.0, 47.0), (30.0, 40.0), (40.0, 33.0), (50.0, 29.0), (60.0, 25.0), (70.0, 22.0), (80.0, 20.0),
+    (20.0, 47.0),
+    (30.0, 40.0),
+    (40.0, 33.0),
+    (50.0, 29.0),
+    (60.0, 25.0),
+    (70.0, 22.0),
+    (80.0, 20.0),
 ];
 
 /// The wearable drivers for one reading. Every field is optional; an absent driver simply drops.
@@ -189,26 +195,44 @@ pub fn sleep_consistency(nightly_hours: &[f64]) -> Option<f64> {
 }
 
 fn push(out: &mut Vec<Contribution>, key: &str, label: &str, ln_hazard: f64) {
-    out.push(Contribution { key: key.to_string(), label: label.to_string(), ln_hazard });
+    out.push(Contribution {
+        key: key.to_string(),
+        label: label.to_string(),
+        ln_hazard,
+    });
 }
 
 /// Each present driver's signed log-hazard against its population reference.
 pub fn contributions(input: &VitalityInput) -> Vec<Contribution> {
     let mut out = Vec::new();
     if let Some(rhr) = input.resting_hr {
-        push(&mut out, "rhr", "Resting heart rate",
-            ((rhr - RESTING_HR_REFERENCE) / 10.0) * HR_RESTING_PER_10BPM);
+        push(
+            &mut out,
+            "rhr",
+            "Resting heart rate",
+            ((rhr - RESTING_HR_REFERENCE) / 10.0) * HR_RESTING_PER_10BPM,
+        );
     }
     if let (Some(vo2), Some(expected)) = (input.vo2max, input.expected_vo2max) {
         if expected > 0.0 {
-            let mets = ((expected - vo2) / MET_ML_KG_MIN).clamp(-VO2MAX_MET_CLAMP, VO2MAX_MET_CLAMP);
-            push(&mut out, "vo2max", "Cardio fitness", mets * HR_VO2MAX_PER_MET);
+            let mets =
+                ((expected - vo2) / MET_ML_KG_MIN).clamp(-VO2MAX_MET_CLAMP, VO2MAX_MET_CLAMP);
+            push(
+                &mut out,
+                "vo2max",
+                "Cardio fitness",
+                mets * HR_VO2MAX_PER_MET,
+            );
         }
     }
     if let Some(hours) = input.sleep_hours {
         let deviation = ((hours - SLEEP_OPTIMUM_HOURS).abs() - SLEEP_DEADBAND_HOURS).max(0.0);
-        push(&mut out, "sleep", "Sleep duration",
-            deviation.clamp(0.0, SLEEP_DEVIATION_CLAMP) * HR_SLEEP_PER_HOUR);
+        push(
+            &mut out,
+            "sleep",
+            "Sleep duration",
+            deviation.clamp(0.0, SLEEP_DEVIATION_CLAMP) * HR_SLEEP_PER_HOUR,
+        );
     }
     // The real index wins when it is available; the duration proxy is the fallback, never both.
     if let Some(sri) = input.sleep_regularity_index {
@@ -217,18 +241,33 @@ pub fn contributions(input: &VitalityInput) -> Vec<Contribution> {
             .clamp(-SRI_LN_HAZARD_CLAMP, SRI_LN_HAZARD_CLAMP);
         push(&mut out, "consistency", "Sleep regularity", ln_hazard);
     } else if let Some(consistency) = input.sleep_consistency {
-        push(&mut out, "consistency", "Sleep regularity",
-            (SLEEP_REGULARITY_REFERENCE - consistency.clamp(0.0, 1.0)) * HR_SLEEP_DURATION_REGULARITY);
+        push(
+            &mut out,
+            "consistency",
+            "Sleep regularity",
+            (SLEEP_REGULARITY_REFERENCE - consistency.clamp(0.0, 1.0))
+                * HR_SLEEP_DURATION_REGULARITY,
+        );
     }
     if let (Some(rmssd), Some(norm)) = (input.rmssd, input.rmssd_norm) {
         if norm > 0.0 {
             let shortfall = ((norm - rmssd) / norm).clamp(-1.0, 1.0);
-            push(&mut out, "hrv", "Heart-rate variability", shortfall * HR_HRV_PER_FRACTION);
+            push(
+                &mut out,
+                "hrv",
+                "Heart-rate variability",
+                shortfall * HR_HRV_PER_FRACTION,
+            );
         }
     }
     if let Some(steps) = input.steps {
         let deficit = (STEPS_REFERENCE - steps.clamp(0.0, STEPS_CLAMP_HI)) / 1000.0;
-        push(&mut out, "steps", "Daily steps", deficit.clamp(-STEPS_CLAMP, STEPS_CLAMP) * HR_STEPS_PER_1000);
+        push(
+            &mut out,
+            "steps",
+            "Daily steps",
+            deficit.clamp(-STEPS_CLAMP, STEPS_CLAMP) * HR_STEPS_PER_1000,
+        );
     }
     out
 }
@@ -320,16 +359,34 @@ mod tests {
         let mut worn = reference();
         worn.resting_hr = Some(80.0);
         let r = compute(&worn).unwrap();
-        let sum_ln = contributions(&worn).iter().map(|c| c.ln_hazard).sum::<f64>() * OVERLAP_SHRINK;
+        let sum_ln = contributions(&worn)
+            .iter()
+            .map(|c| c.ln_hazard)
+            .sum::<f64>()
+            * OVERLAP_SHRINK;
         let expected = sum_ln * MORTALITY_DOUBLING_YEARS / std::f64::consts::LN_2;
-        assert!((r.advance_years - expected).abs() < 1e-9, "{} vs {expected}", r.advance_years);
+        assert!(
+            (r.advance_years - expected).abs() < 1e-9,
+            "{} vs {expected}",
+            r.advance_years
+        );
     }
 
     #[test]
     fn too_few_drivers_is_none() {
-        let thin = VitalityInput { chrono_age: 40.0, resting_hr: Some(60.0), ..Default::default() };
+        let thin = VitalityInput {
+            chrono_age: 40.0,
+            resting_hr: Some(60.0),
+            ..Default::default()
+        };
         assert!(compute(&thin).is_none());
-        assert!(compute(&VitalityInput { chrono_age: 0.0, ..reference() }).is_none());
+        assert!(
+            compute(&VitalityInput {
+                chrono_age: 0.0,
+                ..reference()
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -337,22 +394,41 @@ mod tests {
         // Cribb: HR 1.53 at SRI 41 and 0.90 at SRI 75, relative to the median. The fitted line must land
         // on both, which is what makes this coefficient calibrated rather than chosen.
         let at = |sri: f64| {
-            let i = VitalityInput { sleep_regularity_index: Some(sri), ..Default::default() };
+            let i = VitalityInput {
+                sleep_regularity_index: Some(sri),
+                ..Default::default()
+            };
             contributions(&i).first().unwrap().ln_hazard
         };
-        assert!((at(41.0) - 1.53f64.ln()).abs() < 0.01, "SRI 41 -> {}", at(41.0));
-        assert!((at(75.0) - 0.90f64.ln()).abs() < 0.01, "SRI 75 -> {}", at(75.0));
-        assert!(at(SRI_MEDIAN_REFERENCE).abs() < 1e-9, "the median must be zero hazard");
+        assert!(
+            (at(41.0) - 1.53f64.ln()).abs() < 0.01,
+            "SRI 41 -> {}",
+            at(41.0)
+        );
+        assert!(
+            (at(75.0) - 0.90f64.ln()).abs() < 0.01,
+            "SRI 75 -> {}",
+            at(75.0)
+        );
+        assert!(
+            at(SRI_MEDIAN_REFERENCE).abs() < 1e-9,
+            "the median must be zero hazard"
+        );
     }
 
     #[test]
     fn the_real_index_supersedes_the_duration_proxy() {
         let both = VitalityInput {
-            sleep_regularity_index: Some(41.0), sleep_consistency: Some(1.0), ..Default::default()
+            sleep_regularity_index: Some(41.0),
+            sleep_consistency: Some(1.0),
+            ..Default::default()
         };
         let c = contributions(&both);
         assert_eq!(c.len(), 1, "one regularity driver, never two");
-        assert!(c[0].ln_hazard > 0.0, "the index says irregular, so the proxy must not override it");
+        assert!(
+            c[0].ln_hazard > 0.0,
+            "the index says irregular, so the proxy must not override it"
+        );
     }
 
     #[test]

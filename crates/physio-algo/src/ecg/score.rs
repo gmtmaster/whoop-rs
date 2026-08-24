@@ -5,9 +5,11 @@
 //! `score` never converts counts to millivolts and never reports an amplitude. Every index it carries
 //! is invariant to the amplitude scale, so the result is as meaningful on raw counts as on mV.
 
-use crate::ecg::sqi::{bas_sqi, beat_template, k_sqi, p_sqi};
 use crate::ecg::spectrum::Periodogram;
-use crate::ecg::{beat_agreement, detect_pan_tompkins, detect_wavelet, usable_rate, DEFAULT_MATCH_WINDOW_MS};
+use crate::ecg::sqi::{bas_sqi, beat_template, k_sqi, p_sqi};
+use crate::ecg::{
+    DEFAULT_MATCH_WINDOW_MS, beat_agreement, detect_pan_tompkins, detect_wavelet, usable_rate,
+};
 use crate::stats::median;
 
 /// Detector-agreement floor. DERIVED, not published. Measured over 39 ten-second windows from 13
@@ -153,8 +155,20 @@ fn verdict(
     let bas_ok = bas.is_some_and(|v| v >= BAS_SQI_MIN);
     let template_ok = template.is_some_and(|v| v >= TEMPLATE_SQI_MIN);
     let hr_ok = hr.is_some_and(|v| (MIN_HR_BPM..=MAX_HR_BPM).contains(&v));
-    let passed = [b_ok, k_ok, p_ok, template_ok, hr_ok].iter().filter(|v| **v).count();
-    EcgVerdict { b_ok, k_ok, p_ok, bas_ok, template_ok, hr_ok, passed, accepted: passed == GATED_INDEX_COUNT }
+    let passed = [b_ok, k_ok, p_ok, template_ok, hr_ok]
+        .iter()
+        .filter(|v| **v)
+        .count();
+    EcgVerdict {
+        b_ok,
+        k_ok,
+        p_ok,
+        bas_ok,
+        template_ok,
+        hr_ok,
+        passed,
+        accepted: passed == GATED_INDEX_COUNT,
+    }
 }
 
 #[cfg(test)]
@@ -183,7 +197,10 @@ mod tests {
         assert!((s.mean_hr_bpm.unwrap() - 60.0).abs() < 3.0, "{s:?}");
 
         let flat = score(&vec![0.0; 4000], 200.0);
-        assert!(!flat.verdict.accepted && flat.verdict.passed == 0, "{flat:?}");
+        assert!(
+            !flat.verdict.accepted && flat.verdict.passed == 0,
+            "{flat:?}"
+        );
         assert_eq!(flat.b_sqi, 0.0, "two empty peak sets are not agreement");
     }
 
@@ -200,14 +217,20 @@ mod tests {
         // The same samples read at 5x the true rate imply a 5x heart rate: 60 bpm becomes 300.
         let x = beats(4000, 200.0, 60.0);
         let wrong = score(&x, 1000.0);
-        assert!(!wrong.verdict.hr_ok, "300 bpm must be refused: {:?}", wrong.mean_hr_bpm);
+        assert!(
+            !wrong.verdict.hr_ok,
+            "300 bpm must be refused: {:?}",
+            wrong.mean_hr_bpm
+        );
         assert!(!wrong.verdict.accepted);
     }
 
     #[test]
     fn a_pure_tone_has_the_kurtosis_of_a_tone_and_is_refused() {
         // A 3 Hz sine has kurtosis 1.5, far under the ECG floor, however periodic it looks.
-        let tone: Vec<f64> = (0..4000).map(|i| (2.0 * PI * 3.0 * i as f64 / 200.0).sin()).collect();
+        let tone: Vec<f64> = (0..4000)
+            .map(|i| (2.0 * PI * 3.0 * i as f64 / 200.0).sin())
+            .collect();
         let s = score(&tone, 200.0);
         assert!(s.k_sqi.unwrap() < K_SQI_MIN, "kurtosis {:?}", s.k_sqi);
         assert!(!s.verdict.accepted, "{s:?}");

@@ -17,12 +17,20 @@ impl ZScore {
     pub(super) fn build(vals: &[Option<f64>]) -> Self {
         let present: Vec<f64> = vals.iter().filter_map(|v| *v).collect();
         if present.is_empty() {
-            return ZScore { mean: 0.0, sd: 1.0, empty: true };
+            return ZScore {
+                mean: 0.0,
+                sd: 1.0,
+                empty: true,
+            };
         }
         let mean = present.iter().sum::<f64>() / present.len() as f64;
         let sd0 = population_sd(&present);
         let sd = if sd0 == 0.0 { 1.0 } else { sd0 };
-        ZScore { mean, sd, empty: false }
+        ZScore {
+            mean,
+            sd,
+            empty: false,
+        }
     }
 
     pub(super) fn apply(&self, value: Option<f64>) -> f64 {

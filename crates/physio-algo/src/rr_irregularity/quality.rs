@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use crate::hrv::{clean_counts, duplicate_beat_count, rr_coverage, HrvReadiness};
+use crate::hrv::{HrvReadiness, clean_counts, duplicate_beat_count, rr_coverage};
 
 /// Beat-time over elapsed time. Above 1.0 is physically impossible. The slack absorbs whole-second
 /// stamping, which lets a true 1.0 read high on a short window.
@@ -53,7 +53,13 @@ pub fn measure(beats: &[(u32, u16)]) -> RrQuality {
     let n = beats.len();
     let ts: Vec<i64> = beats.iter().map(|&(t, _)| i64::from(t)).collect();
     let ms: Vec<f64> = values.iter().map(|&v| f64::from(v)).collect();
-    let frac = |num: u32| if n == 0 { 0.0 } else { f64::from(num) / n as f64 };
+    let frac = |num: u32| {
+        if n == 0 {
+            0.0
+        } else {
+            f64::from(num) / n as f64
+        }
+    };
     RrQuality {
         n_input: counts.n_input,
         n_ranged: counts.n_ranged,
@@ -122,7 +128,11 @@ mod tests {
         assert_eq!(q.range_rejected_fraction, 0.0);
         assert_eq!(q.duplicate_fraction, 0.0);
         assert_eq!(q.rescaled_fraction, 0.0);
-        assert!((q.coverage - 60.0 / 59.0).abs() < 1e-9, "coverage {}", q.coverage);
+        assert!(
+            (q.coverage - 60.0 / 59.0).abs() < 1e-9,
+            "coverage {}",
+            q.coverage
+        );
     }
 
     #[test]
@@ -145,8 +155,15 @@ mod tests {
             beats.push((i + 1, rescaled(v) as u16));
         }
         let q = measure(&beats);
-        assert_eq!(q.duplicate_fraction, 0.0, "exact repeats cannot see a rescaled copy");
-        assert!(q.rescaled_fraction > MAX_RESCALED_FRACTION, "rescaled {}", q.rescaled_fraction);
+        assert_eq!(
+            q.duplicate_fraction, 0.0,
+            "exact repeats cannot see a rescaled copy"
+        );
+        assert!(
+            q.rescaled_fraction > MAX_RESCALED_FRACTION,
+            "rescaled {}",
+            q.rescaled_fraction
+        );
     }
 
     #[test]
@@ -155,8 +172,14 @@ mod tests {
         let mut beats = steady(30, 800);
         beats[15].1 = 1200;
         let q = measure(&beats);
-        assert_eq!(q.n_ranged, 30, "the range filter keeps a physiologically possible beat");
-        assert!(q.ectopic_rejected_fraction > 0.0, "and the ectopic count still reports it");
+        assert_eq!(
+            q.n_ranged, 30,
+            "the range filter keeps a physiologically possible beat"
+        );
+        assert!(
+            q.ectopic_rejected_fraction > 0.0,
+            "and the ectopic count still reports it"
+        );
         assert!(ranged(&beats).contains(&1200));
     }
 

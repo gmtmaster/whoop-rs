@@ -52,7 +52,7 @@
 //! been shown to carry from a chest electrode to an optical wrist sensor.
 
 use crate::rr_irregularity::{
-    assess, ectopy::EctopyProfile, IrregularityIndices, IrregularityReading, Refusal,
+    IrregularityIndices, IrregularityReading, Refusal, assess, ectopy::EctopyProfile,
 };
 use crate::stats::median;
 
@@ -157,9 +157,15 @@ pub enum ScreenState {
     /// Not enough beats for even the shortest episode. Resolves by collecting more.
     Calibrating { have: usize, need: usize },
     /// Assessed, and no run of irregular windows reached the duration floor.
-    Regular { windows_assessed: usize, windows_irregular: usize },
+    Regular {
+        windows_assessed: usize,
+        windows_irregular: usize,
+    },
     /// One or more episodes the ectopy view did not explain.
-    IrregularEpisodes { episodes: Vec<Episode>, windows_assessed: usize },
+    IrregularEpisodes {
+        episodes: Vec<Episode>,
+        windows_assessed: usize,
+    },
     /// The input cannot support an honest answer. Not a failure, and not "regular".
     Inconclusive { reason: ScreenRefusal },
 }
@@ -177,7 +183,10 @@ pub enum ScreenState {
 /// of a moment, and it cannot support the word "episode".
 pub fn screen(beats: &[(u32, u16)]) -> ScreenState {
     if beats.len() < MIN_SCREEN_BEATS {
-        return ScreenState::Calibrating { have: beats.len(), need: MIN_SCREEN_BEATS };
+        return ScreenState::Calibrating {
+            have: beats.len(),
+            need: MIN_SCREEN_BEATS,
+        };
     }
     let readings: Vec<(usize, IrregularityReading)> = (0..)
         .map(|i| i * STEP_BEATS)
@@ -195,7 +204,10 @@ pub fn screen(beats: &[(u32, u16)]) -> ScreenState {
     let assessed = scored.iter().filter(|s| s.is_some()).count();
     if (assessed as f64) < MIN_ASSESSED_FRACTION * readings.len() as f64 {
         return ScreenState::Inconclusive {
-            reason: ScreenRefusal::PoorInputQuality { assessed, windows: readings.len() },
+            reason: ScreenRefusal::PoorInputQuality {
+                assessed,
+                windows: readings.len(),
+            },
         };
     }
 
@@ -220,14 +232,17 @@ pub fn screen(beats: &[(u32, u16)]) -> ScreenState {
     }
 
     match (episodes.is_empty(), candidates) {
-        (false, _) => ScreenState::IrregularEpisodes { episodes, windows_assessed: assessed },
+        (false, _) => ScreenState::IrregularEpisodes {
+            episodes,
+            windows_assessed: assessed,
+        },
         (true, 0) => ScreenState::Regular {
             windows_assessed: assessed,
             windows_irregular: irregular.iter().filter(|&&b| b).count(),
         },
-        (true, runs) => {
-            ScreenState::Inconclusive { reason: ScreenRefusal::EctopyNotExcluded { runs } }
-        }
+        (true, runs) => ScreenState::Inconclusive {
+            reason: ScreenRefusal::EctopyNotExcluded { runs },
+        },
     }
 }
 
@@ -245,7 +260,10 @@ fn episode(
         (!v.is_empty()).then(|| median(&v))
     };
     let ect = |f: fn(&EctopyProfile) -> Option<f64>| {
-        let v: Vec<f64> = idx.iter().filter_map(|i| i.ectopy.as_ref().and_then(f)).collect();
+        let v: Vec<f64> = idx
+            .iter()
+            .filter_map(|i| i.ectopy.as_ref().and_then(f))
+            .collect();
         (!v.is_empty()).then(|| median(&v))
     };
     let residual_cosen = ect(|e| e.residual_cosen)?;
@@ -288,7 +306,9 @@ fn confidence(cosen: f64, residual_cosen: f64) -> EpisodeConfidence {
 /// No two successive beats in the window are more than [`MAX_BEAT_GAP_S`] apart, so its successive
 /// differences are all real beat-to-beat changes rather than one spanning a hole in the data.
 fn contiguous(window: &[(u32, u16)]) -> bool {
-    window.windows(2).all(|w| w[1].0.saturating_sub(w[0].0) <= MAX_BEAT_GAP_S)
+    window
+        .windows(2)
+        .all(|w| w[1].0.saturating_sub(w[0].0) <= MAX_BEAT_GAP_S)
 }
 
 /// The `[start, end)` spans of consecutive set flags.
@@ -348,7 +368,9 @@ mod tests {
         let mut x = seed;
         (0..n)
             .map(|_| {
-                x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
                 lo + ((x >> 33) % span) as u16
             })
             .collect()
@@ -356,7 +378,9 @@ mod tests {
 
     /// Bigeminy: every other beat premature, with the pause that compensates for it.
     fn bigeminy(n: usize) -> Vec<u16> {
-        (0..n).map(|i| if i % 2 == 0 { 560u16 } else { 1040 }).collect()
+        (0..n)
+            .map(|i| if i % 2 == 0 { 560u16 } else { 1040 })
+            .collect()
     }
 
     #[test]
@@ -365,16 +389,28 @@ mod tests {
         let thirty_seconds = stamp(&regular(35));
         assert_eq!(
             screen(&thirty_seconds),
-            ScreenState::Calibrating { have: 35, need: MIN_SCREEN_BEATS }
+            ScreenState::Calibrating {
+                have: 35,
+                need: MIN_SCREEN_BEATS
+            }
         );
-        assert_eq!(MIN_SCREEN_BEATS, 216, "one window plus the step of every later window in an episode");
-        assert!(matches!(screen(&[]), ScreenState::Calibrating { have: 0, .. }));
+        assert_eq!(
+            MIN_SCREEN_BEATS, 216,
+            "one window plus the step of every later window in an episode"
+        );
+        assert!(matches!(
+            screen(&[]),
+            ScreenState::Calibrating { have: 0, .. }
+        ));
     }
 
     #[test]
     fn a_regular_night_reports_regular_and_counts_what_it_looked_at() {
         match screen(&stamp(&regular(1200))) {
-            ScreenState::Regular { windows_assessed, windows_irregular } => {
+            ScreenState::Regular {
+                windows_assessed,
+                windows_irregular,
+            } => {
                 assert!(windows_assessed > 100, "assessed {windows_assessed}");
                 assert_eq!(windows_irregular, 0);
             }
@@ -398,7 +434,11 @@ mod tests {
                 // The episode must not start before the irregular beats do. Window 0 covers beats 0..32,
                 // so the first firing window cannot begin earlier than beat 400 - WINDOW_BEATS.
                 let earliest = stamp(&rr)[400 - WINDOW_BEATS].0;
-                assert!(e.start_unix >= earliest, "episode started at {} before {earliest}", e.start_unix);
+                assert!(
+                    e.start_unix >= earliest,
+                    "episode started at {} before {earliest}",
+                    e.start_unix
+                );
             }
             other => panic!("expected an episode, got {other:?}"),
         }
@@ -441,7 +481,9 @@ mod tests {
         assert!(
             matches!(
                 state,
-                ScreenState::Inconclusive { reason: ScreenRefusal::EctopyNotExcluded { .. } }
+                ScreenState::Inconclusive {
+                    reason: ScreenRefusal::EctopyNotExcluded { .. }
+                }
             ) || matches!(state, ScreenState::Regular { .. }),
             "ectopy must resolve to inconclusive or regular, never an episode: {state:?}"
         );
@@ -450,9 +492,14 @@ mod tests {
     #[test]
     fn a_duplicated_series_is_refused_on_quality_not_scored_as_irregular() {
         // Every beat stored twice: the storage shape that reads as pure irregularity.
-        let doubled: Vec<(u32, u16)> = stamp(&regular(700)).into_iter().flat_map(|b| [b, b]).collect();
+        let doubled: Vec<(u32, u16)> = stamp(&regular(700))
+            .into_iter()
+            .flat_map(|b| [b, b])
+            .collect();
         match screen(&doubled) {
-            ScreenState::Inconclusive { reason: ScreenRefusal::PoorInputQuality { .. } } => {}
+            ScreenState::Inconclusive {
+                reason: ScreenRefusal::PoorInputQuality { .. },
+            } => {}
             other => panic!("a duplicated series must be refused on quality, got {other:?}"),
         }
         assert!(!window_refusals(&doubled).is_empty());
@@ -460,10 +507,22 @@ mod tests {
 
     #[test]
     fn confidence_bands_are_ordered_and_bounded_by_the_corpus_medians() {
-        assert_eq!(confidence(COSEN_CONFIDENT, RESIDUAL_COSEN_CONFIDENT), EpisodeConfidence::High);
-        assert_eq!(confidence(COSEN_CONFIDENT, RESIDUAL_COSEN_CONFIDENT - 0.01), EpisodeConfidence::Moderate);
-        assert_eq!(confidence(COSEN_MODERATE, -2.0), EpisodeConfidence::Moderate);
-        assert_eq!(confidence(COSEN_IRREGULAR_FLOOR, -2.0), EpisodeConfidence::Low);
+        assert_eq!(
+            confidence(COSEN_CONFIDENT, RESIDUAL_COSEN_CONFIDENT),
+            EpisodeConfidence::High
+        );
+        assert_eq!(
+            confidence(COSEN_CONFIDENT, RESIDUAL_COSEN_CONFIDENT - 0.01),
+            EpisodeConfidence::Moderate
+        );
+        assert_eq!(
+            confidence(COSEN_MODERATE, -2.0),
+            EpisodeConfidence::Moderate
+        );
+        assert_eq!(
+            confidence(COSEN_IRREGULAR_FLOOR, -2.0),
+            EpisodeConfidence::Low
+        );
         assert!(EpisodeConfidence::Low < EpisodeConfidence::Moderate);
         assert!(EpisodeConfidence::Moderate < EpisodeConfidence::High);
     }
@@ -473,8 +532,19 @@ mod tests {
         // The gate `format_hr_watch` carries in the CLI, applied to every state and refusal this module
         // can render, which is the only text it produces.
         let banned = [
-            "afib", "fibrillat", "arrhythm", "cardiac", "diagnos", "disease", "patient", "clinical",
-            "alarm", "emergency", "abnormal", "medical", "treat",
+            "afib",
+            "fibrillat",
+            "arrhythm",
+            "cardiac",
+            "diagnos",
+            "disease",
+            "patient",
+            "clinical",
+            "alarm",
+            "emergency",
+            "abnormal",
+            "medical",
+            "treat",
         ];
         let mut rr = regular(300);
         rr.extend(irregular(700, 500, 700, 7));
@@ -484,12 +554,19 @@ mod tests {
             format!("{:?}", screen(&stamp(&regular(20)))),
         ];
         for reason in [
-            ScreenRefusal::PoorInputQuality { assessed: 1, windows: 9 },
+            ScreenRefusal::PoorInputQuality {
+                assessed: 1,
+                windows: 9,
+            },
             ScreenRefusal::EctopyNotExcluded { runs: 2 },
         ] {
             texts.push(format!("{:?}", ScreenState::Inconclusive { reason }));
         }
-        for c in [EpisodeConfidence::Low, EpisodeConfidence::Moderate, EpisodeConfidence::High] {
+        for c in [
+            EpisodeConfidence::Low,
+            EpisodeConfidence::Moderate,
+            EpisodeConfidence::High,
+        ] {
             texts.push(format!("{c:?}"));
         }
         for text in texts {

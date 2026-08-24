@@ -102,7 +102,11 @@ pub fn cosinor(bins: &[ActivityBin]) -> Option<CosinorFit> {
     if acrophase_hours < 0.0 {
         acrophase_hours += 24.0;
     }
-    Some(CosinorFit { mesor, amplitude, acrophase_hours })
+    Some(CosinorFit {
+        mesor,
+        amplitude,
+        acrophase_hours,
+    })
 }
 
 /// Pool raw `(unix seconds, activity)` samples into per-hour rest-activity bins: the mean activity over each
@@ -118,7 +122,10 @@ pub fn hourly_bins(samples: &[(i64, f64)], tz_offset_seconds: i64) -> Vec<Activi
     }
     (0..24)
         .filter(|&h| count[h] > 0)
-        .map(|h| ActivityBin { hour: h as f64, activity: sum[h] / count[h] as f64 })
+        .map(|h| ActivityBin {
+            hour: h as f64,
+            activity: sum[h] / count[h] as f64,
+        })
         .collect()
 }
 
@@ -237,7 +244,11 @@ mod tests {
         let fit = cosinor(&synth(100.0, 40.0, 14.0)).unwrap();
         assert!((fit.mesor - 100.0).abs() < 1e-6, "mesor {}", fit.mesor);
         assert!((fit.amplitude - 40.0).abs() < 1e-6, "amp {}", fit.amplitude);
-        assert!((fit.acrophase_hours - 14.0).abs() < 1e-6, "acro {}", fit.acrophase_hours);
+        assert!(
+            (fit.acrophase_hours - 14.0).abs() < 1e-6,
+            "acro {}",
+            fit.acrophase_hours
+        );
     }
 
     #[test]
@@ -256,7 +267,10 @@ mod tests {
         let base = cosinor(&synth(0.062, 0.057, 15.0)).unwrap();
         let scaled_bins: Vec<ActivityBin> = synth(0.062, 0.057, 15.0)
             .into_iter()
-            .map(|b| ActivityBin { hour: b.hour, activity: b.activity * 1000.0 })
+            .map(|b| ActivityBin {
+                hour: b.hour,
+                activity: b.activity * 1000.0,
+            })
             .collect();
         let scaled = cosinor(&scaled_bins).unwrap();
         assert!((scaled.acrophase_hours - base.acrophase_hours).abs() < 1e-9);
@@ -268,7 +282,13 @@ mod tests {
     #[test]
     fn cosinor_needs_three_bins() {
         assert!(cosinor(&[]).is_none());
-        assert!(cosinor(&[ActivityBin { hour: 0.0, activity: 1.0 }]).is_none());
+        assert!(
+            cosinor(&[ActivityBin {
+                hour: 0.0,
+                activity: 1.0
+            }])
+            .is_none()
+        );
     }
 
     #[test]

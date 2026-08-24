@@ -38,7 +38,11 @@ pub fn roughness(x: &[f64]) -> Option<f64> {
     if var.is_nan() || var <= 0.0 {
         return None;
     }
-    let d = x.windows(2).map(|w| (w[1] - w[0]) * (w[1] - w[0])).sum::<f64>() / (x.len() - 1) as f64;
+    let d = x
+        .windows(2)
+        .map(|w| (w[1] - w[0]) * (w[1] - w[0]))
+        .sum::<f64>()
+        / (x.len() - 1) as f64;
     Some(d / (2.0 * var))
 }
 
@@ -53,7 +57,12 @@ pub fn layout_stats(x: &[f64]) -> Option<LayoutStats> {
     if var.is_nan() || var <= 0.0 {
         return None;
     }
-    Some(LayoutStats { samples: x.len(), sd: var.sqrt(), roughness: roughness(x)?, kurtosis: k_sqi(x)? })
+    Some(LayoutStats {
+        samples: x.len(),
+        sd: var.sqrt(),
+        roughness: roughness(x)?,
+        kurtosis: k_sqi(x)?,
+    })
 }
 
 /// Waveform equivalence: `|r| ≥ min_r` over the common prefix, and lengths within
@@ -73,7 +82,9 @@ pub fn cluster(waveforms: &[&[f64]], min_r: f64) -> Vec<usize> {
     let mut reps: Vec<usize> = Vec::new();
     let mut class = vec![0usize; waveforms.len()];
     for (i, w) in waveforms.iter().enumerate() {
-        let found = reps.iter().position(|&r| equivalent(waveforms[r], w, min_r));
+        let found = reps
+            .iter()
+            .position(|&r| equivalent(waveforms[r], w, min_r));
         class[i] = match found {
             Some(c) => c,
             None => {
@@ -103,9 +114,8 @@ fn correlates(a: &[f64], b: &[f64], min_r: f64) -> bool {
         let n = x.len().min(y.len()).min(CLUSTER_PREFIX);
         pearson(&x[..n], &y[..n]).is_some_and(|r| r.abs() >= min_r)
     };
-    (0..=MAX_LAG).any(|lag| {
-        (a.len() > lag && at(&a[lag..], b)) || (b.len() > lag && at(a, &b[lag..]))
-    })
+    (0..=MAX_LAG)
+        .any(|lag| (a.len() > lag && at(&a[lag..], b)) || (b.len() > lag && at(a, &b[lag..])))
 }
 
 /// Deepest decimation considered when asking whether two candidates are the same signal.
@@ -154,14 +164,18 @@ mod tests {
     use std::f64::consts::PI;
 
     fn smooth(n: usize) -> Vec<f64> {
-        (0..n).map(|i| (2.0 * PI * i as f64 / 40.0).sin() + 0.3 * (2.0 * PI * i as f64 / 7.0).sin()).collect()
+        (0..n)
+            .map(|i| (2.0 * PI * i as f64 / 40.0).sin() + 0.3 * (2.0 * PI * i as f64 / 7.0).sin())
+            .collect()
     }
 
     fn white(n: usize, seed: u64) -> Vec<f64> {
         let mut s = seed;
         (0..n)
             .map(|_| {
-                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (s >> 11) as f64 / (1u64 << 53) as f64 - 0.5
             })
             .collect()
@@ -171,10 +185,18 @@ mod tests {
     fn roughness_separates_oversampled_from_white() {
         let r_smooth = roughness(&smooth(4000)).unwrap();
         let r_white = roughness(&white(4000, 3)).unwrap();
-        assert!(r_smooth < 0.1, "an oversampled waveform must be smooth, got {r_smooth}");
-        assert!((r_white - 1.0).abs() < 0.1, "white noise must sit at 1, got {r_white}");
+        assert!(
+            r_smooth < 0.1,
+            "an oversampled waveform must be smooth, got {r_smooth}"
+        );
+        assert!(
+            (r_white - 1.0).abs() < 0.1,
+            "white noise must sit at 1, got {r_white}"
+        );
         // Alternating sign is the roughest a series can be: r1 = -1, so 1 - r1 = 2.
-        let alt: Vec<f64> = (0..1000).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }).collect();
+        let alt: Vec<f64> = (0..1000)
+            .map(|i| if i % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
         assert!((roughness(&alt).unwrap() - 2.0).abs() < 0.01);
         assert!(roughness(&[1.0; 100]).is_none());
         assert!(roughness(&[1.0]).is_none());

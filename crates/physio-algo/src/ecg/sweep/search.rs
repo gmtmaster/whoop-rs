@@ -7,11 +7,11 @@
 //! that has to run live during a calibration is a design failure if it takes a minute per window.
 
 use crate::ecg::score::score;
+use crate::ecg::score::{MAX_HR_BPM, MIN_HR_BPM};
 use crate::ecg::sweep::layout::{self, Layout};
 use crate::ecg::sweep::ppg::{self, ppg_agreement};
 use crate::ecg::sweep::prune::{cluster, layout_stats, same_time_base};
 use crate::ecg::sweep::{Attribution, Candidate, SweepConfig, WindowReport};
-use crate::ecg::score::{MAX_HR_BPM, MIN_HR_BPM};
 use crate::ecg::{detect_pan_tompkins, usable_rate};
 use crate::stats::median;
 
@@ -27,7 +27,9 @@ pub fn sweep_window(bytes: &[u8], ppg_beats_ms: &[f64], cfg: &SweepConfig) -> Wi
         }
         decoded += 1;
         let x = l.decode(bytes);
-        let Some(stats) = layout_stats(&x) else { continue };
+        let Some(stats) = layout_stats(&x) else {
+            continue;
+        };
         if stats.roughness > cfg.max_roughness || stats.kurtosis < cfg.min_kurtosis {
             continue;
         }
@@ -43,7 +45,9 @@ pub fn sweep_window(bytes: &[u8], ppg_beats_ms: &[f64], cfg: &SweepConfig) -> Wi
     let mut leaderboard: Vec<(Candidate, usize)> = Vec::new();
     let mut scored = 0usize;
     for class in 0..n_classes {
-        let Some(rep) = representative(&kept, &classes, class) else { continue };
+        let Some(rep) = representative(&kept, &classes, class) else {
+            continue;
+        };
         let aliases = classes.iter().filter(|&&c| c == class).count() - 1;
         let (l, x, _) = &kept[rep];
         for &fs in &cfg.rates_hz {
@@ -51,7 +55,9 @@ pub fn sweep_window(bytes: &[u8], ppg_beats_ms: &[f64], cfg: &SweepConfig) -> Wi
                 continue;
             }
             let peaks = detect_pan_tompkins(x, fs);
-            let Some(hr) = beat_rate_bpm_samples(&peaks, fs) else { continue };
+            let Some(hr) = beat_rate_bpm_samples(&peaks, fs) else {
+                continue;
+            };
             if !(MIN_HR_BPM..=MAX_HR_BPM).contains(&hr) {
                 continue;
             }
@@ -120,7 +126,13 @@ pub fn sweep_window(bytes: &[u8], ppg_beats_ms: &[f64], cfg: &SweepConfig) -> Wi
     // reporting the one that throws samples away because it won a coin toss is not a result.
     let mut leaderboard: Vec<Candidate> = leaderboard.into_iter().map(|(c, _)| c).collect();
     let best_of: Vec<f64> = (0..=leaderboard.iter().map(|c| c.answer).max().unwrap_or(0))
-        .map(|a| leaderboard.iter().filter(|c| c.answer == a).map(|c| c.quality).fold(f64::NEG_INFINITY, f64::max))
+        .map(|a| {
+            leaderboard
+                .iter()
+                .filter(|c| c.answer == a)
+                .map(|c| c.quality)
+                .fold(f64::NEG_INFINITY, f64::max)
+        })
         .collect();
     leaderboard.sort_by(|a, b| {
         best_of[b.answer]
@@ -156,13 +168,19 @@ pub(super) fn attribution(ppg_beats_ms: &[f64]) -> Attribution {
     if ppg_beats_ms.is_empty() {
         return Attribution::Unknown;
     }
-    let Some(bpm) = beat_rate_bpm(ppg_beats_ms) else { return Attribution::Contact };
+    let Some(bpm) = beat_rate_bpm(ppg_beats_ms) else {
+        return Attribution::Contact;
+    };
     if !(MIN_HR_BPM..=MAX_HR_BPM).contains(&bpm) {
         return Attribution::Contact;
     }
     // Erratic is judged on the beat intervals themselves: a contact loss shows up as intervals that are
     // multiples or fragments of the true one, which moves the spread far more than any real rhythm does.
-    let gaps: Vec<f64> = ppg_beats_ms.windows(2).map(|w| w[1] - w[0]).filter(|g| g.is_finite() && *g > 0.0).collect();
+    let gaps: Vec<f64> = ppg_beats_ms
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|g| g.is_finite() && *g > 0.0)
+        .collect();
     if gaps.len() < 3 {
         return Attribution::Contact;
     }
@@ -184,7 +202,11 @@ fn beat_rate_bpm(beats_ms: &[f64]) -> Option<f64> {
     if beats_ms.len() < ppg::PPG_MIN_BEATS {
         return None;
     }
-    let gaps: Vec<f64> = beats_ms.windows(2).map(|w| w[1] - w[0]).filter(|g| g.is_finite() && *g > 0.0).collect();
+    let gaps: Vec<f64> = beats_ms
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|g| g.is_finite() && *g > 0.0)
+        .collect();
     if gaps.is_empty() {
         return None;
     }
@@ -211,7 +233,11 @@ fn beat_rate_bpm_samples(peaks: &[usize], fs_hz: f64) -> Option<f64> {
 /// discontinuity the true reading does not have, so the smoothest member is the one that neither
 /// truncates nor borrows. The margin between them can fall below what an f64 sum of a few thousand terms
 /// can resolve, and then the width tie-break decides and every alternative stays in `alias_shapes`.
-fn representative(kept: &[(Layout, Vec<f64>, f64)], classes: &[usize], class: usize) -> Option<usize> {
+fn representative(
+    kept: &[(Layout, Vec<f64>, f64)],
+    classes: &[usize],
+    class: usize,
+) -> Option<usize> {
     let members = || (0..classes.len()).filter(|&i| classes[i] == class);
     let floor = members().map(|i| kept[i].2).fold(f64::INFINITY, f64::min);
     if !floor.is_finite() {
@@ -221,19 +247,26 @@ fn representative(kept: &[(Layout, Vec<f64>, f64)], classes: &[usize], class: us
     // 10^8 of the roughness, which is below what this corpus resolves and below what stays put from one
     // window to the next; treating that as a preference made the reported field width flicker between
     // windows and read as instability. Ties fall to the narrowest field, which is the smaller claim.
-    members()
-        .min_by_key(|&i| {
-            let step = (floor.abs() * REPRESENTATIVE_ROUGHNESS_TOLERANCE).max(f64::MIN_POSITIVE);
-            let bucket = ((kept[i].2 - floor) / step).round().clamp(0.0, u32::MAX as f64) as u32;
-            let l = kept[i].0;
-            (bucket, l.bits, l.stride_bits, l.start_bit)
-        })
+    members().min_by_key(|&i| {
+        let step = (floor.abs() * REPRESENTATIVE_ROUGHNESS_TOLERANCE).max(f64::MIN_POSITIVE);
+        let bucket = ((kept[i].2 - floor) / step)
+            .round()
+            .clamp(0.0, u32::MAX as f64) as u32;
+        let l = kept[i].0;
+        (bucket, l.bits, l.stride_bits, l.start_bit)
+    })
 }
 
 /// Relative roughness difference below which two readings of one class are not ranked against each other.
 const REPRESENTATIVE_ROUGHNESS_TOLERANCE: f64 = 1e-4;
 
 fn order_key(c: &Candidate) -> (u64, u8, bool, layout::BitOrder, usize, usize) {
-    (c.fs_hz.to_bits(), c.layout.bits, c.layout.signed, c.layout.order, c.layout.start_bit, c.layout.stride_bits)
+    (
+        c.fs_hz.to_bits(),
+        c.layout.bits,
+        c.layout.signed,
+        c.layout.order,
+        c.layout.start_bit,
+        c.layout.stride_bits,
+    )
 }
-

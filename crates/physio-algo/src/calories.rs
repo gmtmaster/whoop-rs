@@ -17,21 +17,36 @@ pub struct Coeffs {
 }
 
 pub const MALE: Coeffs = Coeffs {
-    resting_alpha: 88.362, resting_weight: 13.397, resting_height: 479.9,
-    resting_age: 5.677, workout_hr: 0.6309, workout_weight: 0.1988,
-    workout_age: 0.2017, workout_alpha: -55.0969,
+    resting_alpha: 88.362,
+    resting_weight: 13.397,
+    resting_height: 479.9,
+    resting_age: 5.677,
+    workout_hr: 0.6309,
+    workout_weight: 0.1988,
+    workout_age: 0.2017,
+    workout_alpha: -55.0969,
 };
 
 pub const FEMALE: Coeffs = Coeffs {
-    resting_alpha: 447.593, resting_weight: 9.247, resting_height: 309.8,
-    resting_age: 4.33, workout_hr: 0.4472, workout_weight: -0.1263,
-    workout_age: 0.0740, workout_alpha: -20.4022,
+    resting_alpha: 447.593,
+    resting_weight: 9.247,
+    resting_height: 309.8,
+    resting_age: 4.33,
+    workout_hr: 0.4472,
+    workout_weight: -0.1263,
+    workout_age: 0.0740,
+    workout_alpha: -20.4022,
 };
 
 pub const NONBINARY: Coeffs = Coeffs {
-    resting_alpha: 267.9775, resting_weight: 11.322, resting_height: 394.85,
-    resting_age: 5.0035, workout_hr: 0.53905, workout_weight: 0.03625,
-    workout_age: 0.13785, workout_alpha: -37.74955,
+    resting_alpha: 267.9775,
+    resting_weight: 11.322,
+    resting_height: 394.85,
+    resting_age: 5.0035,
+    workout_hr: 0.53905,
+    workout_weight: 0.03625,
+    workout_age: 0.13785,
+    workout_alpha: -37.74955,
 };
 
 /// The ACTIVITY question — "is this second work?" — asked only where motion is already confirmed, so
@@ -62,15 +77,17 @@ pub fn resolve_coeffs(sex: &str) -> Coeffs {
 /// Resting metabolic rate (kcal/s) from the revised Harris-Benedict equation.
 pub fn resting_kcal_per_s(c: &Coeffs, weight_kg: f64, height_cm: f64, age: f64) -> f64 {
     let height_m = height_cm / 100.0;
-    let bmr = c.resting_alpha + c.resting_weight * weight_kg
-        + c.resting_height * height_m - c.resting_age * age;
+    let bmr = c.resting_alpha + c.resting_weight * weight_kg + c.resting_height * height_m
+        - c.resting_age * age;
     (bmr.max(0.0)) / 86_400.0
 }
 
 /// Active energy rate (kcal/s) from the Keytel 2005 equation.
 pub fn active_kcal_per_s(c: &Coeffs, hr: f64, hrmax: f64, weight_kg: f64, age: f64) -> f64 {
-    let ee_kj_min = c.workout_hr * hr.min(hrmax) + c.workout_weight * weight_kg
-        + c.workout_age * age + c.workout_alpha;
+    let ee_kj_min = c.workout_hr * hr.min(hrmax)
+        + c.workout_weight * weight_kg
+        + c.workout_age * age
+        + c.workout_alpha;
     (ee_kj_min.max(0.0)) / WORKOUT_DIVISOR
 }
 
@@ -148,7 +165,13 @@ pub fn estimate_bout_calories(
     let coeffs = resolve_coeffs(sex);
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
     let (kcal, _) = bill(
-        &ordered(hr_samples), &coeffs, weight_kg, age, hrmax, resting_hr, resting_rate,
+        &ordered(hr_samples),
+        &coeffs,
+        weight_kg,
+        age,
+        hrmax,
+        resting_hr,
+        resting_rate,
         |_| (ACTIVITY_HRR_FRACTION, MERGE_GAP_S),
     );
     (kcal, kcal * 4.184)
@@ -171,12 +194,22 @@ pub fn estimate_day_calories(
     resting_hr: f64,
 ) -> DayCalories {
     if hr_samples.is_empty() {
-        return DayCalories { total_kcal: 0.0, resting_kcal: 0.0, active_kcal: 0.0 };
+        return DayCalories {
+            total_kcal: 0.0,
+            resting_kcal: 0.0,
+            active_kcal: 0.0,
+        };
     }
     let coeffs = resolve_coeffs(sex);
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
     let (total_kcal, secs) = bill(
-        &ordered(hr_samples), &coeffs, weight_kg, age, hrmax, resting_hr, resting_rate,
+        &ordered(hr_samples),
+        &coeffs,
+        weight_kg,
+        age,
+        hrmax,
+        resting_hr,
+        resting_rate,
         |ts| {
             if confirmed_bouts.iter().any(|&(s, e)| ts >= s && ts <= e) {
                 (ACTIVITY_HRR_FRACTION, MERGE_GAP_S)
@@ -186,7 +219,11 @@ pub fn estimate_day_calories(
         },
     );
     let resting_kcal = resting_rate * secs;
-    DayCalories { total_kcal, resting_kcal, active_kcal: total_kcal - resting_kcal }
+    DayCalories {
+        total_kcal,
+        resting_kcal,
+        active_kcal: total_kcal - resting_kcal,
+    }
 }
 
 #[cfg(test)]
@@ -209,13 +246,19 @@ mod tests {
     #[test]
     fn day_calories_empty_is_zero() {
         let d = estimate_day_calories(&[], &[], 70.0, 170.0, 30.0, "nonbinary", 190.0, 55.0);
-        assert_eq!((d.total_kcal, d.resting_kcal, d.active_kcal), (0.0, 0.0, 0.0));
+        assert_eq!(
+            (d.total_kcal, d.resting_kcal, d.active_kcal),
+            (0.0, 0.0, 0.0)
+        );
     }
 
     /// Both gates, for the (185 hrmax, 55 resting) profile every calorie test uses.
     fn gates() -> (f64, f64) {
         let reserve = 185.0 - 55.0;
-        (55.0 + ACTIVITY_HRR_FRACTION * reserve, 55.0 + TRUST_HRR_FRACTION * reserve)
+        (
+            55.0 + ACTIVITY_HRR_FRACTION * reserve,
+            55.0 + TRUST_HRR_FRACTION * reserve,
+        )
     }
 
     /// Above BOTH gates the two paths agree whether or not a bout was confirmed, because the trust gate
@@ -231,8 +274,18 @@ mod tests {
              this test proves nothing about agreement"
         );
         let hr = hr_day(bpm, 600);
-        let day = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let day = estimate_day_calories(
+            &hr,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
+        let (bout, _) =
+            estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
         assert!((bout - day.total_kcal).abs() < 1e-9);
     }
 
@@ -243,17 +296,31 @@ mod tests {
     fn bout_and_day_agree_across_the_light_band_inside_a_confirmed_bout() {
         let profile = (80.0, 180.0, 35.0, "male");
         let (activity_gate, trust_gate) = gates();
-        assert!((activity_gate, trust_gate) == (94.0, 120.0), "band edges {activity_gate}..{trust_gate}");
+        assert!(
+            (activity_gate, trust_gate) == (94.0, 120.0),
+            "band edges {activity_gate}..{trust_gate}"
+        );
 
         let mut checked = 0;
         for bpm in activity_gate.ceil() as i32..trust_gate.ceil() as i32 {
             let hr = hr_day(bpm, 3600);
             let day = estimate_day_calories(
-                &hr, &all_confirmed(&hr), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-            let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+                &hr,
+                &all_confirmed(&hr),
+                profile.0,
+                profile.1,
+                profile.2,
+                profile.3,
+                185.0,
+                55.0,
+            );
+            let (bout, _) = estimate_bout_calories(
+                &hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0,
+            );
             assert!(
                 (bout - day.total_kcal).abs() < 1e-9,
-                "{bpm} bpm inside a confirmed bout: bout {bout} vs day {}", day.total_kcal
+                "{bpm} bpm inside a confirmed bout: bout {bout} vs day {}",
+                day.total_kcal
             );
             // The whole band is Keytel, so none of it may read as a resting-only hour.
             assert!(day.active_kcal > 0.0, "{bpm} bpm bills no active energy");
@@ -272,9 +339,23 @@ mod tests {
         let mut ratios = Vec::new();
         for bpm in activity_gate.ceil() as i32..trust_gate.ceil() as i32 {
             let hr = hr_day(bpm, 3600);
-            let day = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-            let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-            assert!((day.active_kcal).abs() < 1e-6, "{bpm} bpm unconfirmed must bill BMR only");
+            let day = estimate_day_calories(
+                &hr,
+                &[],
+                profile.0,
+                profile.1,
+                profile.2,
+                profile.3,
+                185.0,
+                55.0,
+            );
+            let (bout, _) = estimate_bout_calories(
+                &hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0,
+            );
+            assert!(
+                (day.active_kcal).abs() < 1e-6,
+                "{bpm} bpm unconfirmed must bill BMR only"
+            );
             ratios.push(bout / day.total_kcal);
         }
         assert_eq!(ratios.len(), 26);
@@ -295,9 +376,24 @@ mod tests {
         let (activity_gate, trust_gate) = gates();
         for bpm in (40..=200).filter(|b| (*b as f64) < activity_gate || (*b as f64) >= trust_gate) {
             let hr = hr_day(bpm, 600);
-            let day = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-            let (bout, _) = estimate_bout_calories(&hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-            assert!((bout - day.total_kcal).abs() < 1e-9, "{bpm} bpm outside the band: bout {bout} day {}", day.total_kcal);
+            let day = estimate_day_calories(
+                &hr,
+                &[],
+                profile.0,
+                profile.1,
+                profile.2,
+                profile.3,
+                185.0,
+                55.0,
+            );
+            let (bout, _) = estimate_bout_calories(
+                &hr, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0,
+            );
+            assert!(
+                (bout - day.total_kcal).abs() < 1e-9,
+                "{bpm} bpm outside the band: bout {bout} day {}",
+                day.total_kcal
+            );
         }
     }
 
@@ -308,15 +404,47 @@ mod tests {
         let profile = (80.0, 180.0, 35.0, "male");
         // Two hours at 110 bpm (inside the band); only the second hour is a confirmed bout.
         let hr = hr_day(110, 7200);
-        let none = estimate_day_calories(&hr, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let none = estimate_day_calories(
+            &hr,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
         let half = estimate_day_calories(
-            &hr, &[(3600, 7199)], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            &hr,
+            &[(3600, 7199)],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
         let all = estimate_day_calories(
-            &hr, &all_confirmed(&hr), profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+            &hr,
+            &all_confirmed(&hr),
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
 
-        assert!((none.active_kcal).abs() < 1e-6, "nothing confirmed, nothing active");
-        assert!((half.active_kcal - all.active_kcal / 2.0).abs() < 1e-6,
-            "half {} vs all {}", half.active_kcal, all.active_kcal);
+        assert!(
+            (none.active_kcal).abs() < 1e-6,
+            "nothing confirmed, nothing active"
+        );
+        assert!(
+            (half.active_kcal - all.active_kcal / 2.0).abs() < 1e-6,
+            "half {} vs all {}",
+            half.active_kcal,
+            all.active_kcal
+        );
         // The resting floor is over the same credited seconds either way, so only the active half moved.
         assert!((none.resting_kcal - all.resting_kcal).abs() < 1e-6);
     }
@@ -327,9 +455,24 @@ mod tests {
     fn a_sedentary_day_is_all_resting_and_no_active_energy() {
         let profile = (80.0, 180.0, 35.0, "male");
         let d = estimate_day_calories(
-            &hr_day(55, 86_400), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        assert!((d.total_kcal - 1825.25).abs() < 1.0, "total {}", d.total_kcal);
-        assert!((d.resting_kcal - d.total_kcal).abs() < 1e-6, "a still day is BMR end to end");
+            &hr_day(55, 86_400),
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
+        assert!(
+            (d.total_kcal - 1825.25).abs() < 1.0,
+            "total {}",
+            d.total_kcal
+        );
+        assert!(
+            (d.resting_kcal - d.total_kcal).abs() < 1e-6,
+            "a still day is BMR end to end"
+        );
         assert!(d.active_kcal.abs() < 1e-6, "active {}", d.active_kcal);
     }
 
@@ -337,9 +480,16 @@ mod tests {
     fn sparse_hr_tracks_elapsed_time_not_sample_count() {
         let profile = (80.0, 180.0, 35.0, "male");
         let dense: Vec<HrSample> = (0..600).map(|i| HrSample { ts: i, bpm: 130 }).collect();
-        let sparse: Vec<HrSample> = (0..600).step_by(10).map(|i| HrSample { ts: i, bpm: 130 }).collect();
-        let (dense_kcal, _) = estimate_bout_calories(&dense, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        let (sparse_kcal, _) = estimate_bout_calories(&sparse, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let sparse: Vec<HrSample> = (0..600)
+            .step_by(10)
+            .map(|i| HrSample { ts: i, bpm: 130 })
+            .collect();
+        let (dense_kcal, _) = estimate_bout_calories(
+            &dense, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0,
+        );
+        let (sparse_kcal, _) = estimate_bout_calories(
+            &sparse, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0,
+        );
         assert!((sparse_kcal - dense_kcal).abs() < dense_kcal * 0.05);
         assert!(sparse_kcal > dense_kcal * 0.5);
     }
@@ -352,8 +502,18 @@ mod tests {
             HrSample { ts: 3600, bpm: 130 },
         ];
         let capped_equiv: Vec<HrSample> = (0..=150).map(|i| HrSample { ts: i, bpm: 130 }).collect();
-        let (gap_kcal, _) = estimate_bout_calories(&gapped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
-        let (equiv_kcal, _) = estimate_bout_calories(&capped_equiv, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let (gap_kcal, _) = estimate_bout_calories(
+            &gapped, profile.0, profile.1, profile.2, profile.3, 185.0, 55.0,
+        );
+        let (equiv_kcal, _) = estimate_bout_calories(
+            &capped_equiv,
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
         assert!((gap_kcal - equiv_kcal).abs() < equiv_kcal * 0.001);
     }
 
@@ -361,16 +521,56 @@ mod tests {
     fn day_path_caps_a_wear_gap_instead_of_billing_it() {
         let profile = (80.0, 180.0, 35.0, "male");
         // One hour between two samples: credited at DAY_GAP_CAP_S, not the full 3600 s.
-        let gapped = vec![HrSample { ts: 0, bpm: 130 }, HrSample { ts: 3600, bpm: 130 }];
-        let gap_day = estimate_day_calories(&gapped, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
+        let gapped = vec![
+            HrSample { ts: 0, bpm: 130 },
+            HrSample { ts: 3600, bpm: 130 },
+        ];
+        let gap_day = estimate_day_calories(
+            &gapped,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
         // The identical rate held for exactly the cap + the tail second.
-        let capped: Vec<HrSample> = (0..=DAY_GAP_CAP_S as i64).map(|i| HrSample { ts: i, bpm: 130 }).collect();
-        let capped_day = estimate_day_calories(&capped, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
-        assert!((gap_day - capped_day).abs() < capped_day * 0.01, "gap {gap_day} vs capped {capped_day}");
+        let capped: Vec<HrSample> = (0..=DAY_GAP_CAP_S as i64)
+            .map(|i| HrSample { ts: i, bpm: 130 })
+            .collect();
+        let capped_day = estimate_day_calories(
+            &capped,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
+        assert!(
+            (gap_day - capped_day).abs() < capped_day * 0.01,
+            "gap {gap_day} vs capped {capped_day}"
+        );
         // Far below billing the whole hour.
         let full_hour = estimate_day_calories(
-            &hr_day(130, 3601), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
-        assert!(gap_day < full_hour * 0.2, "a wear gap must not read as an hour of effort");
+            &hr_day(130, 3601),
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
+        assert!(
+            gap_day < full_hour * 0.2,
+            "a wear gap must not read as an hour of effort"
+        );
     }
 
     #[test]
@@ -378,17 +578,63 @@ mod tests {
         // A day sampled every 60 s must total the same as the dense 1 Hz day it stands in for.
         let profile = (80.0, 180.0, 35.0, "male");
         let dense: Vec<HrSample> = (0..3600).map(|i| HrSample { ts: i, bpm: 70 }).collect();
-        let sparse: Vec<HrSample> = (0..3600).step_by(60).map(|i| HrSample { ts: i, bpm: 70 }).collect();
-        let d = estimate_day_calories(&dense, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
-        let s = estimate_day_calories(&sparse, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
-        assert!((s - d).abs() < d * 0.05, "sparse {s} should track dense {d}");
+        let sparse: Vec<HrSample> = (0..3600)
+            .step_by(60)
+            .map(|i| HrSample { ts: i, bpm: 70 })
+            .collect();
+        let d = estimate_day_calories(
+            &dense,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
+        let s = estimate_day_calories(
+            &sparse,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
+        assert!(
+            (s - d).abs() < d * 0.05,
+            "sparse {s} should track dense {d}"
+        );
     }
 
     #[test]
     fn resting_day_is_lower_than_active_day() {
         let profile = default_profile();
-        let resting = estimate_day_calories(&hr_day(60, 3600), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
-        let active = estimate_day_calories(&hr_day(150, 3600), &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
+        let resting = estimate_day_calories(
+            &hr_day(60, 3600),
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
+        let active = estimate_day_calories(
+            &hr_day(150, 3600),
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
         assert!(resting > 0.0);
         assert!(active > resting);
     }
@@ -397,14 +643,29 @@ mod tests {
     fn sedentary_full_day_approximates_bmr() {
         let profile = (80.0, 180.0, 35.0, "male");
         let sedentary = hr_day(55, 86_400);
-        let total = estimate_day_calories(&sedentary, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
+        let total = estimate_day_calories(
+            &sedentary,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
         assert!((total - 1825.25).abs() < 1.0);
     }
 
     /// One block on a shared 24 h timeline; [hr_day] restarts at ts 0 on every call, so concatenating
     /// its output stacks blocks on the same seconds instead of laying them end to end.
     fn hr_block(start: i64, bpm: i32, n: usize) -> Vec<HrSample> {
-        (0..n).map(|i| HrSample { ts: start + i as i64, bpm }).collect()
+        (0..n)
+            .map(|i| HrSample {
+                ts: start + i as i64,
+                bpm,
+            })
+            .collect()
     }
 
     /// One sample per second of a whole day, no two on the same timestamp. A day fixture that fails
@@ -414,8 +675,16 @@ mod tests {
         let mut ts: Vec<i64> = day.iter().map(|s| s.ts).collect();
         ts.sort_unstable();
         ts.dedup();
-        assert_eq!(ts.len(), 86_400, "samples share timestamps: the fixture is not a 24 h timeline");
-        assert_eq!(day[day.len() - 1].ts - day[0].ts, 86_399, "fixture does not span 24 h");
+        assert_eq!(
+            ts.len(),
+            86_400,
+            "samples share timestamps: the fixture is not a 24 h timeline"
+        );
+        assert_eq!(
+            day[day.len() - 1].ts - day[0].ts,
+            86_399,
+            "fixture does not span 24 h"
+        );
     }
 
     /// Every sample sits UNDER the day gate, so Keytel is never reached and the total is the BMR the
@@ -432,7 +701,17 @@ mod tests {
             light_day.iter().all(|s| (s.bpm as f64) < day_gate),
             "every sample must stay under the {day_gate} bpm day gate or this is not a BMR-only day"
         );
-        let total = estimate_day_calories(&light_day, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0).total_kcal;
+        let total = estimate_day_calories(
+            &light_day,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        )
+        .total_kcal;
         assert!((total - 1825.25).abs() < 1.0);
         assert!(total < 4768.0 - 2000.0);
     }
@@ -455,10 +734,25 @@ mod tests {
         let active_day = active_day_fixture();
         assert_is_one_full_day(&active_day);
         let (_, day_gate) = gates();
-        let over = active_day.iter().filter(|s| (s.bpm as f64) >= day_gate).count();
-        assert_eq!(over, 3600, "exactly one hour must clear the {day_gate} bpm day gate");
+        let over = active_day
+            .iter()
+            .filter(|s| (s.bpm as f64) >= day_gate)
+            .count();
+        assert_eq!(
+            over, 3600,
+            "exactly one hour must clear the {day_gate} bpm day gate"
+        );
 
-        let day = estimate_day_calories(&active_day, &[], profile.0, profile.1, profile.2, profile.3, 185.0, 55.0);
+        let day = estimate_day_calories(
+            &active_day,
+            &[],
+            profile.0,
+            profile.1,
+            profile.2,
+            profile.3,
+            185.0,
+            55.0,
+        );
         let total = day.total_kcal;
         assert!((total - 2487.16).abs() < 1.0, "active day total {total}");
         assert!(total < 4768.0 - 2000.0);
@@ -466,16 +760,31 @@ mod tests {
         // Everything above a BMR-only day is Keytel's contribution, and it is what the wearer reads
         // as active energy.
         let bmr_day = resting_kcal_per_s(&MALE, profile.0, profile.1, profile.2) * 86_400.0;
-        assert!((total - bmr_day - 661.91).abs() < 1.0, "active energy {}", total - bmr_day);
+        assert!(
+            (total - bmr_day - 661.91).abs() < 1.0,
+            "active energy {}",
+            total - bmr_day
+        );
         // The same number the split reports, so the label "active energy" has one source.
-        assert!((day.active_kcal - 661.91).abs() < 1.0, "split active {}", day.active_kcal);
-        assert!((day.resting_kcal - bmr_day).abs() < 1e-6, "split resting {}", day.resting_kcal);
+        assert!(
+            (day.active_kcal - 661.91).abs() < 1.0,
+            "split active {}",
+            day.active_kcal
+        );
+        assert!(
+            (day.resting_kcal - bmr_day).abs() < 1e-6,
+            "split resting {}",
+            day.resting_kcal
+        );
 
         // Rebuilt from the two public rates: fails if the over-gate hour stops routing to Keytel.
         let rebuilt = resting_kcal_per_s(&MALE, profile.0, profile.1, profile.2) * 82_800.0
             + active_kcal_per_s(&MALE, 125.0, 185.0, profile.0, profile.2) * 1_800.0
             + active_kcal_per_s(&MALE, 140.0, 185.0, profile.0, profile.2) * 1_800.0;
-        assert!((total - rebuilt).abs() < 1e-6, "total {total} vs rebuilt {rebuilt}");
+        assert!(
+            (total - rebuilt).abs() < 1e-6,
+            "total {total} vs rebuilt {rebuilt}"
+        );
     }
 
     #[test]

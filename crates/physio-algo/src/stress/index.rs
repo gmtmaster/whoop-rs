@@ -76,12 +76,21 @@ pub fn components_raw(rr_ms: &[f64]) -> Option<StressComponents> {
         return None;
     }
     let si = amo / (2.0 * mo * mxdmn);
-    Some(StressComponents { mo_sec: mo, amo_percent: amo, mxdmn_sec: mxdmn, si })
+    Some(StressComponents {
+        mo_sec: mo,
+        amo_percent: amo,
+        mxdmn_sec: mxdmn,
+        si,
+    })
 }
 
 /// Full clean: range band then Malik ectopic rejection, order preserved.
 fn clean_rr(rr: &[f64]) -> Vec<f64> {
-    let ranged: Vec<f64> = rr.iter().copied().filter(|&v| (RR_MIN_MS..=RR_MAX_MS).contains(&v)).collect();
+    let ranged: Vec<f64> = rr
+        .iter()
+        .copied()
+        .filter(|&v| (RR_MIN_MS..=RR_MAX_MS).contains(&v))
+        .collect();
     reject_ectopic(&ranged)
 }
 
@@ -141,25 +150,33 @@ mod tests {
     fn table() -> Vec<(&'static str, Vec<f64>, Option<f64>)> {
         vec![
             ("the golden histogram", GOLDEN.to_vec(), Some(GOLDEN_SI)),
-            ("at the beat minimum", clean_series(MIN_BEATS), Some(CLEAN_SERIES_SI)),
+            (
+                "at the beat minimum",
+                clean_series(MIN_BEATS),
+                Some(CLEAN_SERIES_SI),
+            ),
             ("one clean beat short", clean_series(MIN_BEATS - 1), None),
             ("every beat equal", vec![800.0; MIN_BEATS + 10], None),
         ]
     }
 
     fn reproduces(scorer: impl Fn(&[f64]) -> Option<f64>) -> bool {
-        table().into_iter().all(|(_, rr, want)| match (scorer(&rr), want) {
-            (Some(got), Some(w)) => (got - w).abs() < 1e-9,
-            (None, None) => true,
-            _ => false,
-        })
+        table()
+            .into_iter()
+            .all(|(_, rr, want)| match (scorer(&rr), want) {
+                (Some(got), Some(w)) => (got - w).abs() < 1e-9,
+                (None, None) => true,
+                _ => false,
+            })
     }
 
     #[test]
     fn the_shipped_index_reproduces_the_table_and_three_do_nothing_scorers_do_not() {
         for (name, rr, want) in table() {
             match (stress_index_raw(&rr), want) {
-                (Some(got), Some(w)) => assert!((got - w).abs() < 1e-9, "{name}: got {got}, want {w}"),
+                (Some(got), Some(w)) => {
+                    assert!((got - w).abs() < 1e-9, "{name}: got {got}, want {w}")
+                }
                 (None, None) => {}
                 (got, w) => panic!("{name}: got {got:?}, want {w:?}"),
             }
@@ -171,16 +188,25 @@ mod tests {
         let nulls: [(&str, Null); 3] = [
             ("always none", |_| None),
             ("constant golden SI", |_| Some(GOLDEN_SI)),
-            ("mean interval", |rr| (!rr.is_empty()).then(|| rr.iter().sum::<f64>() / rr.len() as f64)),
+            ("mean interval", |rr| {
+                (!rr.is_empty()).then(|| rr.iter().sum::<f64>() / rr.len() as f64)
+            }),
         ];
         for (name, null) in nulls {
-            assert!(!reproduces(null), "{name} reproduced every row; the table cannot tell it apart");
+            assert!(
+                !reproduces(null),
+                "{name} reproduced every row; the table cannot tell it apart"
+            );
         }
     }
 
     #[test]
     fn the_golden_vector_passes_cleaning_untouched_so_it_measures_the_histogram_alone() {
-        assert_eq!(clean_rr(&GOLDEN).len(), GOLDEN.len(), "no beat may be dropped before the histogram");
+        assert_eq!(
+            clean_rr(&GOLDEN).len(),
+            GOLDEN.len(),
+            "no beat may be dropped before the histogram"
+        );
         let comp = components_raw(&GOLDEN).expect("scorable");
         assert!((comp.mxdmn_sec - 0.16).abs() < 1e-9);
         assert!((comp.mo_sec - 0.825).abs() < 1e-9);
@@ -192,16 +218,24 @@ mod tests {
     #[test]
     fn tighter_histogram_raises_si() {
         let broad: Vec<f64> = (0..30).map(|it| 700.0 + (it % 11) as f64 * 18.0).collect();
-        let rigid: Vec<f64> = (0..30).map(|it| if it % 6 == 0 { 810.0 } else { 800.0 }).collect();
+        let rigid: Vec<f64> = (0..30)
+            .map(|it| if it % 6 == 0 { 810.0 } else { 800.0 })
+            .collect();
         let si_broad = stress_index_raw(&broad).expect("broad scorable");
         let si_rigid = stress_index_raw(&rigid).expect("rigid scorable");
-        assert!(si_rigid > si_broad, "a rigid, tightly-clustered rhythm has a higher SI");
+        assert!(
+            si_rigid > si_broad,
+            "a rigid, tightly-clustered rhythm has a higher SI"
+        );
     }
 
     #[test]
     fn min_beats_is_the_edge_between_none_and_a_score_and_it_counts_clean_beats() {
         assert_eq!(MIN_BEATS, 20);
-        assert!(components_raw(&clean_series(MIN_BEATS - 1)).is_none(), "one beat short must refuse");
+        assert!(
+            components_raw(&clean_series(MIN_BEATS - 1)).is_none(),
+            "one beat short must refuse"
+        );
         let comp = components_raw(&clean_series(MIN_BEATS)).expect("the minimum itself must score");
         assert!((comp.si - CLEAN_SERIES_SI).abs() < 1e-9, "got {}", comp.si);
 
@@ -210,7 +244,10 @@ mod tests {
         short.insert(7, 2500.0);
         assert_eq!(short.len(), MIN_BEATS);
         assert_eq!(clean_rr(&short).len(), MIN_BEATS - 1);
-        assert!(stress_index_raw(&short).is_none(), "a dropout must not count toward the minimum");
+        assert!(
+            stress_index_raw(&short).is_none(),
+            "a dropout must not count toward the minimum"
+        );
         let mut exact = clean_series(MIN_BEATS);
         exact.insert(7, 2500.0);
         assert_eq!(clean_rr(&exact).len(), MIN_BEATS);
@@ -220,8 +257,14 @@ mod tests {
     #[test]
     fn an_all_equal_series_refuses_on_range_not_on_count() {
         let rr = vec![800.0; MIN_BEATS + 10];
-        assert!(clean_rr(&rr).len() >= MIN_BEATS, "the count gate must already be satisfied");
-        assert!(stress_index_raw(&rr).is_none(), "MxDMn 0 is an honest None, never infinity");
+        assert!(
+            clean_rr(&rr).len() >= MIN_BEATS,
+            "the count gate must already be satisfied"
+        );
+        assert!(
+            stress_index_raw(&rr).is_none(),
+            "MxDMn 0 is an honest None, never infinity"
+        );
     }
 
     #[test]
@@ -232,13 +275,23 @@ mod tests {
         let kept = clean_rr(&low);
         assert_eq!(kept.len(), 7, "only the 299.9 ms beat leaves");
         assert!(kept.iter().all(|&v| v != 299.9));
-        assert_eq!(kept.iter().filter(|&&v| v == 300.0).count(), 2, "the floor itself is kept");
+        assert_eq!(
+            kept.iter().filter(|&&v| v == 300.0).count(),
+            2,
+            "the floor itself is kept"
+        );
 
-        let high = [2000.0, 1980.0, 1960.0, 1980.0, 2000.0, 2000.1, 1980.0, 1960.0];
+        let high = [
+            2000.0, 1980.0, 1960.0, 1980.0, 2000.0, 2000.1, 1980.0, 1960.0,
+        ];
         let kept = clean_rr(&high);
         assert_eq!(kept.len(), 7, "only the 2000.1 ms beat leaves");
         assert!(kept.iter().all(|&v| v != 2000.1));
-        assert_eq!(kept.iter().filter(|&&v| v == 2000.0).count(), 2, "the ceiling itself is kept");
+        assert_eq!(
+            kept.iter().filter(|&&v| v == 2000.0).count(),
+            2,
+            "the ceiling itself is kept"
+        );
     }
 
     #[test]
@@ -260,15 +313,28 @@ mod tests {
         // Two adjacent outliers: at radius 1 each is the other's reference and both survive, at
         // radius 2 the window is still mostly baseline and both go.
         let pair = [800.0, 800.0, 1000.0, 1000.0, 800.0, 800.0, 800.0, 800.0];
-        assert_eq!(reject_ectopic(&pair).len(), 6, "radius 1 would keep all eight");
+        assert_eq!(
+            reject_ectopic(&pair).len(),
+            6,
+            "radius 1 would keep all eight"
+        );
         // Three adjacent outliers own a radius-2 window's median but not a radius-3 one.
-        let triple = [800.0, 800.0, 800.0, 1000.0, 1000.0, 1000.0, 800.0, 800.0, 800.0];
-        assert_eq!(reject_ectopic(&triple).len(), 9, "radius 3 would drop the middle three");
+        let triple = [
+            800.0, 800.0, 800.0, 1000.0, 1000.0, 1000.0, 800.0, 800.0, 800.0,
+        ];
+        assert_eq!(
+            reject_ectopic(&triple).len(),
+            9,
+            "radius 3 would drop the middle three"
+        );
     }
 
     #[test]
     fn a_series_no_longer_than_the_window_passes_cleaning_through() {
-        assert_eq!(reject_ectopic(&[800.0, 2000.0]).len(), ECTOPIC_WINDOW_RADIUS);
+        assert_eq!(
+            reject_ectopic(&[800.0, 2000.0]).len(),
+            ECTOPIC_WINDOW_RADIUS
+        );
         assert!(reject_ectopic(&[]).is_empty());
     }
 }

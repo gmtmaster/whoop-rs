@@ -28,12 +28,20 @@ impl Whoop4Calibration {
     /// The provisional Swift-compatible calibration: anchor raw 826 -> 33.0 C, slope 0.05 C/raw,
     /// worn raw band 550..=2040.
     pub fn provisional() -> Self {
-        Self { anchor_raw: 826.0, anchor_c: 33.0, slope_c_per_raw: 0.05, worn_raw_lo: 550.0, worn_raw_hi: 2040.0 }
+        Self {
+            anchor_raw: 826.0,
+            anchor_c: 33.0,
+            slope_c_per_raw: 0.05,
+            worn_raw_lo: 550.0,
+            worn_raw_hi: 2040.0,
+        }
     }
 }
 
 impl Default for Whoop4Calibration {
-    fn default() -> Self { Self::provisional() }
+    fn default() -> Self {
+        Self::provisional()
+    }
 }
 
 /// A converted skin temperature outside this band cannot be trusted, worn or not.
@@ -57,7 +65,11 @@ pub const MIN_NIGHTLY_SAMPLES: usize = 300;
 ///
 /// Returns `None` for non-finite input or a WHOOP4 raw sample outside its worn band — never a
 /// fabricated Celsius value.
-pub fn skin_temp_celsius(raw: f64, family: DeviceFamily, whoop4_cal: &Whoop4Calibration) -> Option<f64> {
+pub fn skin_temp_celsius(
+    raw: f64,
+    family: DeviceFamily,
+    whoop4_cal: &Whoop4Calibration,
+) -> Option<f64> {
     if !raw.is_finite() {
         return None;
     }
@@ -115,7 +127,9 @@ pub fn nightly_mean(
         if !(s.timestamp_secs >= sleep_start_secs && s.timestamp_secs <= sleep_end_secs) {
             continue;
         }
-        let Some(c) = skin_temp_celsius(s.raw, family, whoop4_cal) else { continue };
+        let Some(c) = skin_temp_celsius(s.raw, family, whoop4_cal) else {
+            continue;
+        };
         if !(c.is_finite() && c >= CONVERTED_TEMP_MIN_C && c <= CONVERTED_TEMP_MAX_C) {
             continue;
         }
@@ -136,17 +150,29 @@ mod tests {
     #[test]
     fn whoop5_conversion_divides_by_one_hundred() {
         let cal = Whoop4Calibration::provisional();
-        assert_eq!(skin_temp_celsius(3300.0, DeviceFamily::Whoop5Mg, &cal), Some(33.0));
-        assert_eq!(skin_temp_celsius(2800.0, DeviceFamily::Whoop5Mg, &cal), Some(28.0));
+        assert_eq!(
+            skin_temp_celsius(3300.0, DeviceFamily::Whoop5Mg, &cal),
+            Some(33.0)
+        );
+        assert_eq!(
+            skin_temp_celsius(2800.0, DeviceFamily::Whoop5Mg, &cal),
+            Some(28.0)
+        );
         // WHOOP5/MG has no raw-domain worn band: an out-of-WHOOP4-band raw value still converts.
-        assert_eq!(skin_temp_celsius(100.0, DeviceFamily::Whoop5Mg, &cal), Some(1.0));
+        assert_eq!(
+            skin_temp_celsius(100.0, DeviceFamily::Whoop5Mg, &cal),
+            Some(1.0)
+        );
     }
 
     #[test]
     fn whoop4_provisional_conversion_matches_the_agreed_calibration() {
         let cal = Whoop4Calibration::provisional();
         // Anchor: raw 826 -> 33.0 C exactly.
-        assert_eq!(skin_temp_celsius(826.0, DeviceFamily::Whoop4, &cal), Some(33.0));
+        assert_eq!(
+            skin_temp_celsius(826.0, DeviceFamily::Whoop4, &cal),
+            Some(33.0)
+        );
         // Slope: +100 raw -> +5.0 C.
         let got = skin_temp_celsius(926.0, DeviceFamily::Whoop4, &cal).unwrap();
         assert!((got - 38.0).abs() < 1e-9, "got {got}");
@@ -161,26 +187,47 @@ mod tests {
     }
 
     fn worn_sample(t: f64) -> SkinTempSample {
-        SkinTempSample { timestamp_secs: t, raw: 3300.0, hr_bpm: Some(60.0) }
+        SkinTempSample {
+            timestamp_secs: t,
+            raw: 3300.0,
+            hr_bpm: Some(60.0),
+        }
     }
 
     #[test]
     fn valid_full_worn_night_produces_a_mean() {
         let samples: Vec<SkinTempSample> = (0..400).map(|i| worn_sample(i as f64)).collect();
-        let mean = nightly_mean(&samples, 0.0, 1000.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
+        let mean = nightly_mean(
+            &samples,
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
         assert_eq!(mean, Some(33.0));
     }
 
     #[test]
     fn samples_outside_the_sleep_window_are_excluded() {
-        let mut samples: Vec<SkinTempSample> = (0..350).map(|i| worn_sample(100.0 + i as f64)).collect();
+        let mut samples: Vec<SkinTempSample> =
+            (0..350).map(|i| worn_sample(100.0 + i as f64)).collect();
         // 60 samples fall before the window and must not count.
         for i in 0..60 {
             samples.push(worn_sample(i as f64));
         }
         let n = samples.len();
-        let mean = nightly_mean(&samples, 100.0, 449.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
-        assert_eq!(mean, Some(33.0), "only the 350 in-window samples should be averaged");
+        let mean = nightly_mean(
+            &samples,
+            100.0,
+            449.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
+        assert_eq!(
+            mean,
+            Some(33.0),
+            "only the 350 in-window samples should be averaged"
+        );
         assert_eq!(n, 410);
     }
 
@@ -188,11 +235,29 @@ mod tests {
     fn missing_or_invalid_hr_is_excluded() {
         let mut samples: Vec<SkinTempSample> = (0..300).map(|i| worn_sample(i as f64)).collect();
         // No HR at all.
-        samples.push(SkinTempSample { timestamp_secs: 301.0, raw: 3300.0, hr_bpm: None });
+        samples.push(SkinTempSample {
+            timestamp_secs: 301.0,
+            raw: 3300.0,
+            hr_bpm: None,
+        });
         // HR outside 30..=220.
-        samples.push(SkinTempSample { timestamp_secs: 302.0, raw: 3300.0, hr_bpm: Some(29.0) });
-        samples.push(SkinTempSample { timestamp_secs: 303.0, raw: 3300.0, hr_bpm: Some(221.0) });
-        let mean = nightly_mean(&samples, 0.0, 1000.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
+        samples.push(SkinTempSample {
+            timestamp_secs: 302.0,
+            raw: 3300.0,
+            hr_bpm: Some(29.0),
+        });
+        samples.push(SkinTempSample {
+            timestamp_secs: 303.0,
+            raw: 3300.0,
+            hr_bpm: Some(221.0),
+        });
+        let mean = nightly_mean(
+            &samples,
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
         // Only the original 300 worn samples survive.
         assert_eq!(mean, Some(33.0));
     }
@@ -201,43 +266,89 @@ mod tests {
     fn converted_out_of_range_temperature_is_excluded() {
         let mut samples: Vec<SkinTempSample> = (0..300).map(|i| worn_sample(i as f64)).collect();
         // Converts to 27.9 C, just under the floor.
-        samples.push(SkinTempSample { timestamp_secs: 301.0, raw: 2790.0, hr_bpm: Some(60.0) });
+        samples.push(SkinTempSample {
+            timestamp_secs: 301.0,
+            raw: 2790.0,
+            hr_bpm: Some(60.0),
+        });
         // Converts to 42.1 C, just over the ceiling.
-        samples.push(SkinTempSample { timestamp_secs: 302.0, raw: 4210.0, hr_bpm: Some(60.0) });
-        let mean = nightly_mean(&samples, 0.0, 1000.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
+        samples.push(SkinTempSample {
+            timestamp_secs: 302.0,
+            raw: 4210.0,
+            hr_bpm: Some(60.0),
+        });
+        let mean = nightly_mean(
+            &samples,
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
         assert_eq!(mean, Some(33.0));
     }
 
     #[test]
     fn below_three_hundred_valid_samples_returns_none() {
         let samples: Vec<SkinTempSample> = (0..299).map(|i| worn_sample(i as f64)).collect();
-        let mean = nightly_mean(&samples, 0.0, 1000.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
+        let mean = nightly_mean(
+            &samples,
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
         assert_eq!(mean, None);
     }
 
     #[test]
     fn exactly_three_hundred_valid_samples_returns_a_value() {
         let samples: Vec<SkinTempSample> = (0..300).map(|i| worn_sample(i as f64)).collect();
-        let mean = nightly_mean(&samples, 0.0, 1000.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
+        let mean = nightly_mean(
+            &samples,
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
         assert_eq!(mean, Some(33.0));
     }
 
     #[test]
     fn empty_input_returns_none() {
-        let mean = nightly_mean(&[], 0.0, 1000.0, DeviceFamily::Whoop5Mg, &Whoop4Calibration::provisional());
+        let mean = nightly_mean(
+            &[],
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop5Mg,
+            &Whoop4Calibration::provisional(),
+        );
         assert_eq!(mean, None);
     }
 
     #[test]
     fn whoop4_raw_domain_worn_filter_applies_before_conversion() {
         let mut samples: Vec<SkinTempSample> = (0..300)
-            .map(|i| SkinTempSample { timestamp_secs: i as f64, raw: 826.0, hr_bpm: Some(60.0) })
+            .map(|i| SkinTempSample {
+                timestamp_secs: i as f64,
+                raw: 826.0,
+                hr_bpm: Some(60.0),
+            })
             .collect();
         // Off-wrist raw values, well outside the WHOOP4 worn band, must be dropped before conversion.
         for i in 0..50 {
-            samples.push(SkinTempSample { timestamp_secs: 300.0 + i as f64, raw: 10.0, hr_bpm: Some(60.0) });
+            samples.push(SkinTempSample {
+                timestamp_secs: 300.0 + i as f64,
+                raw: 10.0,
+                hr_bpm: Some(60.0),
+            });
         }
-        let mean = nightly_mean(&samples, 0.0, 1000.0, DeviceFamily::Whoop4, &Whoop4Calibration::provisional());
+        let mean = nightly_mean(
+            &samples,
+            0.0,
+            1000.0,
+            DeviceFamily::Whoop4,
+            &Whoop4Calibration::provisional(),
+        );
         assert_eq!(mean, Some(33.0));
     }
 }

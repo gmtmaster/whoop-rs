@@ -7,7 +7,7 @@
 /// %HRmax band edges for zones 1..5.
 pub const ZONE_EDGES: [f64; 6] = [0.50, 0.60, 0.70, 0.80, 0.90, 1.00];
 
-pub use crate::hr_gap::{creditable_seconds, GapAccounting, GapPosition};
+pub use crate::hr_gap::{GapAccounting, GapPosition, creditable_seconds};
 pub use crate::hr_sample::HrSample;
 
 /// A single zone as a bpm interval `[lower, upper)` plus its %HRmax band.
@@ -127,7 +127,11 @@ pub fn time_in_zone(hr: &[HrSample], zone_set: &HrZoneSet) -> TimeInZone {
         // Non-positive spacing means same-second duplicates, not a gap: they get the median cadence.
         let (gap, position) = if i < sorted.len() - 1 {
             let g = (sorted[i + 1].ts - sorted[i].ts) as f64;
-            if g > 0.0 { (g, GapPosition::Interior) } else { (tail_duration, GapPosition::Interior) }
+            if g > 0.0 {
+                (g, GapPosition::Interior)
+            } else {
+                (tail_duration, GapPosition::Interior)
+            }
         } else {
             (tail_duration, GapPosition::Trailing)
         };
@@ -212,7 +216,11 @@ mod tests {
         ];
         let tiz = time_in_zone(&hr, &zs);
         assert!((tiz.total() - 3.0).abs() < 1e-9, "got {}", tiz.total()); // 1 + 1 + 0 + tail(1)
-        assert!((tiz.refused_seconds - 3600.0).abs() < 1e-9, "got {}", tiz.refused_seconds);
+        assert!(
+            (tiz.refused_seconds - 3600.0).abs() < 1e-9,
+            "got {}",
+            tiz.refused_seconds
+        );
         assert_eq!(tiz.bridged_seconds, 0.0);
         assert!((tiz.total() - tiz.seconds_in_zone(1)).abs() < 1e-9); // all zone 1
     }
@@ -230,16 +238,29 @@ mod tests {
         ];
         let tiz = time_in_zone(&hr, &zs);
         assert!((tiz.total() - 903.0).abs() < 1e-9, "got {}", tiz.total()); // 1 + 1 + 900 + tail(1)
-        assert!((tiz.bridged_seconds - 900.0).abs() < 1e-9, "got {}", tiz.bridged_seconds);
+        assert!(
+            (tiz.bridged_seconds - 900.0).abs() < 1e-9,
+            "got {}",
+            tiz.bridged_seconds
+        );
         assert_eq!(tiz.refused_seconds, 0.0);
-        assert!(tiz.bridged_seconds < tiz.total(), "bridged time is a subset of counted time");
+        assert!(
+            tiz.bridged_seconds < tiz.total(),
+            "bridged time is a subset of counted time"
+        );
     }
 
     #[test]
     fn interior_ceiling_is_inclusive_at_its_edge() {
         let zs = zones_from_max(200.0, "manual");
-        let at = [HrSample { ts: 0, bpm: 110 }, HrSample { ts: 1800, bpm: 110 }];
-        let past = [HrSample { ts: 0, bpm: 110 }, HrSample { ts: 1810, bpm: 110 }];
+        let at = [
+            HrSample { ts: 0, bpm: 110 },
+            HrSample { ts: 1800, bpm: 110 },
+        ];
+        let past = [
+            HrSample { ts: 0, bpm: 110 },
+            HrSample { ts: 1810, bpm: 110 },
+        ];
         // Two samples 1800 s apart: no plausible (0, 300 s) gap exists, so the tail falls back to 1 s.
         assert!((time_in_zone(&at, &zs).total() - 1801.0).abs() < 1e-9);
         assert!((time_in_zone(&past, &zs).total() - 1.0).abs() < 1e-9);

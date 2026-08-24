@@ -32,7 +32,11 @@ fn extreme(xs: &[f64], want_max: bool) -> f64 {
             f64::NAN
         } else if a == b {
             // Only ±0.0 compare equal while differing: max prefers +0.0, min prefers -0.0.
-            if a.is_sign_negative() == want_max { b } else { a }
+            if a.is_sign_negative() == want_max {
+                b
+            } else {
+                a
+            }
         } else if (b > a) == want_max {
             b
         } else {
@@ -59,11 +63,7 @@ pub fn population_sd(xs: &[f64]) -> f64 {
     }
     let m = mean(xs);
     let var = xs.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / xs.len() as f64;
-    if var < 0.0 {
-        0.0
-    } else {
-        var.sqrt()
-    }
+    if var < 0.0 { 0.0 } else { var.sqrt() }
 }
 
 /// OLS slope of `ys` over x = 0, 1, 2, …; `0.0` for fewer than two points or a degenerate x-spread.
@@ -79,11 +79,7 @@ pub fn least_squares_slope(ys: &[f64]) -> f64 {
         num += dx * (y - mean_y);
         den += dx * dx;
     }
-    if den == 0.0 {
-        0.0
-    } else {
-        num / den
-    }
+    if den == 0.0 { 0.0 } else { num / den }
 }
 
 /// OLS line of `ys` over x = 0, 1, 2, … as `(slope, intercept)`. `(0.0, mean)` for fewer than two points.
@@ -242,7 +238,11 @@ pub fn linear_fit(field: &[f64], reference: &[f64]) -> Option<LinearFit> {
         return None;
     }
     let scale = sfr / sff;
-    Some(LinearFit { scale, offset: mr - scale * mf, r: pearson(&field[..n], &reference[..n])? })
+    Some(LinearFit {
+        scale,
+        offset: mr - scale * mf,
+        r: pearson(&field[..n], &reference[..n])?,
+    })
 }
 
 // ── Weighted trendline over day offsets ───────────────────────────────────
@@ -490,7 +490,9 @@ mod tests {
 
     #[test]
     fn amplitude_is_p95_minus_p5() {
-        let win: Vec<f64> = std::iter::repeat_n(98.0, 10).chain(std::iter::repeat_n(102.0, 10)).collect();
+        let win: Vec<f64> = std::iter::repeat_n(98.0, 10)
+            .chain(std::iter::repeat_n(102.0, 10))
+            .collect();
         assert!((amplitude(&win) - 4.0).abs() < 1e-9);
     }
 
@@ -501,7 +503,11 @@ mod tests {
         let reference: Vec<f64> = field.iter().map(|&x| 2.0 * x + 3.0).collect();
         assert!((pearson(&field, &reference).unwrap() - 1.0).abs() < 1e-12);
         let fit = linear_fit(&field, &reference).unwrap();
-        assert!((fit.scale - 2.0).abs() < 1e-9 && (fit.offset - 3.0).abs() < 1e-9 && (fit.r - 1.0).abs() < 1e-9);
+        assert!(
+            (fit.scale - 2.0).abs() < 1e-9
+                && (fit.offset - 3.0).abs() < 1e-9
+                && (fit.r - 1.0).abs() < 1e-9
+        );
         // A flat field has no spread — nothing to calibrate.
         assert!(linear_fit(&[5.0, 5.0, 5.0], &[1.0, 2.0, 3.0]).is_none());
     }
@@ -607,7 +613,11 @@ mod tests {
     #[test]
     fn a_negative_r_bands_as_its_mirror() {
         for r in [0.05, 0.2, 0.4, 0.6, 0.9] {
-            assert_eq!(correlation_strength(-r), correlation_strength(r), "|r| = {r}");
+            assert_eq!(
+                correlation_strength(-r),
+                correlation_strength(r),
+                "|r| = {r}"
+            );
         }
     }
 
@@ -615,6 +625,9 @@ mod tests {
     #[test]
     fn the_display_gate_is_three_pairs() {
         assert_eq!(CORRELATION_MIN_PAIRS, 3);
-        assert!(pearson(&[1.0, 2.0], &[2.0, 4.0]).is_some(), "pearson itself still answers for two");
+        assert!(
+            pearson(&[1.0, 2.0], &[2.0, 4.0]).is_some(),
+            "pearson itself still answers for two"
+        );
     }
 }

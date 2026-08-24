@@ -51,6 +51,8 @@ mod device_api;
 pub use device_api::*;
 mod pack_api;
 pub use pack_api::*;
+mod cloud_sync;
+pub use cloud_sync::*;
 
 #[cfg(test)]
 mod tests {

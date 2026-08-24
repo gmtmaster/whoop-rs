@@ -113,7 +113,9 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
         return None;
     }
     let m = median(&per_window);
-    (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&m).then_some(m)
+    (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM)
+        .contains(&m)
+        .then_some(m)
 }
 
 #[cfg(test)]
@@ -122,12 +124,18 @@ mod tests {
 
     /// Synthetic tachogram: mean HR with a known-Hz RSA modulation, so the recovered rate can be
     /// cross-checked against the planted breathing frequency.
-    fn synth(breath_hz: f64, base_rr_ms: f64, amp_ms: f64, span_s: f64) -> (Vec<(i64, u16)>, i64, i64) {
+    fn synth(
+        breath_hz: f64,
+        base_rr_ms: f64,
+        amp_ms: f64,
+        span_s: f64,
+    ) -> (Vec<(i64, u16)>, i64, i64) {
         let start = 1_700_000_000_i64;
         let mut rows = Vec::new();
         let mut t_sec = 0.0_f64;
         while t_sec < span_s {
-            let rr_ms = base_rr_ms + amp_ms * (2.0 * std::f64::consts::PI * breath_hz * t_sec).sin();
+            let rr_ms =
+                base_rr_ms + amp_ms * (2.0 * std::f64::consts::PI * breath_hz * t_sec).sin();
             t_sec += rr_ms / 1000.0;
             rows.push((start + t_sec as i64, rr_ms as u16));
         }
@@ -138,7 +146,11 @@ mod tests {
     /// Planted breathing rates the sweep walks; the 10 bpm span is what no constant can cover.
     const SWEPT_BPM: [f64; 5] = [10.0, 12.0, 15.0, 18.0, 20.0];
     /// `(mean HR, RSA amplitude ms, span s)`: three tachogram densities per planted rate.
-    const SWEPT_PROFILES: [(f64, f64, f64); 3] = [(60.0, 40.0, 600.0), (55.0, 45.0, 600.0), (70.0, 30.0, 900.0)];
+    const SWEPT_PROFILES: [(f64, f64, f64); 3] = [
+        (60.0, 40.0, 600.0),
+        (55.0, 45.0, 600.0),
+        (70.0, 30.0, 900.0),
+    ];
     /// Worst measured error over the sweep is 2.0 bpm, at 18/min on the 60 bpm profile.
     const SWEPT_TOL_BPM: f64 = 2.5;
 
@@ -164,7 +176,11 @@ mod tests {
     /// what is measured is the recovery of a VARYING rate, not one lucky tone.
     #[test]
     fn tracks_a_swept_breathing_rate_across_the_band() {
-        assert!(sweep_misses(&resp_rate_from_rr).is_empty(), "{:?}", sweep_misses(&resp_rate_from_rr));
+        assert!(
+            sweep_misses(&resp_rate_from_rr).is_empty(),
+            "{:?}",
+            sweep_misses(&resp_rate_from_rr)
+        );
     }
 
     /// The null arm: no constant, and no refusal, survives the sweep. A single 15/min tone alone was
@@ -173,10 +189,16 @@ mod tests {
     fn no_constant_breathing_rate_survives_the_sweep() {
         let mut c = RESP_PLAUSIBLE_MIN_BPM;
         while c <= RESP_PLAUSIBLE_MAX_BPM {
-            assert!(!sweep_misses(&|_, _, _| Some(c)).is_empty(), "constant {c} passed the sweep");
+            assert!(
+                !sweep_misses(&|_, _, _| Some(c)).is_empty(),
+                "constant {c} passed the sweep"
+            );
             c += 0.5;
         }
-        assert!(!sweep_misses(&|_, _, _| None).is_empty(), "a refusing scorer passed the sweep");
+        assert!(
+            !sweep_misses(&|_, _, _| None).is_empty(),
+            "a refusing scorer passed the sweep"
+        );
         // The old single-tone pair was blind to exactly this value.
         assert!(!sweep_misses(&|_, _, _| Some(13.0)).is_empty());
     }
@@ -191,7 +213,10 @@ mod tests {
                 resp_rate_from_rr(&rows, s, e).expect("finite estimate")
             };
             let spread = at(20.0) - at(10.0);
-            assert!(spread >= 6.0, "HR {hr}: 10 -> 20 bpm moved the estimate only {spread}");
+            assert!(
+                spread >= 6.0,
+                "HR {hr}: 10 -> 20 bpm moved the estimate only {spread}"
+            );
         }
     }
 
@@ -206,7 +231,10 @@ mod tests {
         };
         let halved = at(24.0, 60.0, 600.0);
         assert!((halved - 12.0).abs() < 0.5, "24/min at HR 60 read {halved}");
-        assert!((RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&halved), "and it is in band");
+        assert!(
+            (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&halved),
+            "and it is in band"
+        );
         // The band ceiling sits above the peak-spacing cap, which is why the halved value stays in band.
         const { assert!(60.0 / RSA_MIN_PEAK_DISTANCE_S < RESP_PLAUSIBLE_MAX_BPM) };
         // A faster tachogram carries the same rate, so it is the beat density, not the rate.

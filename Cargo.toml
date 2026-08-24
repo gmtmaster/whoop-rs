@@ -15,6 +15,7 @@ members = [
     "crates/whoop-store",
     "crates/whoopctl",
     "crates/whoop-ffi",
+    "crates/cloud-map",
 ]
 # Toolchain: this project is pinned to MSVC via `rustup override` (in-dir). btleplug's WinRT deps build
 # cleanly on MSVC (raw-dylib, no dlltool). The pure/testable core (whoop-protocol, ble-core,
@@ -32,6 +33,7 @@ ble-btleplug = { path = "crates/ble-btleplug" }
 whoop-client = { path = "crates/whoop-client" }
 physio-algo = { path = "crates/physio-algo" }
 whoop-store = { path = "crates/whoop-store" }
+cloud-map = { path = "crates/cloud-map" }
 btleplug = "0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 futures = "0.3"

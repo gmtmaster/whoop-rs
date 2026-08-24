@@ -94,7 +94,11 @@ pub struct BandResult {
 
 fn population(value: f64, range: TypicalRange, nights: i32) -> BandResult {
     BandResult {
-        band: if range.contains(value) { Band::InRange } else { Band::OutOfRange },
+        band: if range.contains(value) {
+            Band::InRange
+        } else {
+            Band::OutOfRange
+        },
         basis: Basis::Population,
         nights,
     }
@@ -110,7 +114,11 @@ pub fn band(
     cfg: Option<&MetricCfg>,
 ) -> BandResult {
     let Some(v) = value else {
-        return BandResult { band: Band::NoData, basis: Basis::Population, nights: 0 };
+        return BandResult {
+            band: Band::NoData,
+            basis: Basis::Population,
+            nights: 0,
+        };
     };
     let Some(cfg) = cfg else {
         return population(v, population_range, 0);
@@ -119,12 +127,20 @@ pub fn band(
     // Outer guard: a value outside the physiological bounds is out of range however wide the
     // personal spread happens to be.
     if !(cfg.min_val <= v && v <= cfg.max_val) {
-        return BandResult { band: Band::OutOfRange, basis: Basis::Population, nights: state.n_valid };
+        return BandResult {
+            band: Band::OutOfRange,
+            basis: Basis::Population,
+            nights: state.n_valid,
+        };
     }
     if state.status == BaselineStatus::Trusted {
         let z = z_score(v, state.baseline, state.spread);
         return BandResult {
-            band: if z.abs() <= SIGMA_K { Band::InRange } else { Band::OutOfRange },
+            band: if z.abs() <= SIGMA_K {
+                Band::InRange
+            } else {
+                Band::OutOfRange
+            },
             basis: Basis::Personal,
             nights: state.n_valid,
         };
@@ -197,7 +213,10 @@ mod tests {
         let hist: Vec<Option<f64>> = vec![Some(35.0); 30];
         let state = baselines::fold_history(&hist, &hrv_cfg());
         let edge = state.baseline + 1.99 * 1.253 * state.spread;
-        assert_eq!(band(Some(edge), &hist, HRV_TYPICAL_MS, Some(&hrv_cfg())).band, Band::InRange);
+        assert_eq!(
+            band(Some(edge), &hist, HRV_TYPICAL_MS, Some(&hrv_cfg())).band,
+            Band::InRange
+        );
     }
 
     #[test]
@@ -213,21 +232,30 @@ mod tests {
         let r = band(Some(93.0), &[], SPO2_TYPICAL_PCT, None);
         assert_eq!(r.band, Band::OutOfRange);
         assert_eq!(r.basis, Basis::Population);
-        assert_eq!(band(Some(97.0), &[], SPO2_TYPICAL_PCT, None).band, Band::InRange);
+        assert_eq!(
+            band(Some(97.0), &[], SPO2_TYPICAL_PCT, None).band,
+            Band::InRange
+        );
     }
 
     #[test]
     fn missing_nights_do_not_count_toward_trust() {
         let mut hist: Vec<Option<f64>> = vec![Some(35.0); 13];
         hist.extend(std::iter::repeat_n(None, 10));
-        assert_eq!(band(Some(35.0), &hist, HRV_TYPICAL_MS, Some(&hrv_cfg())).basis, Basis::Population);
+        assert_eq!(
+            band(Some(35.0), &hist, HRV_TYPICAL_MS, Some(&hrv_cfg())).basis,
+            Basis::Population
+        );
     }
 
     #[test]
     fn a_stale_baseline_falls_back_to_the_population() {
         let mut hist: Vec<Option<f64>> = vec![Some(35.0); 20];
         hist.extend(std::iter::repeat_n(None, 20));
-        assert_eq!(band(Some(35.0), &hist, HRV_TYPICAL_MS, Some(&hrv_cfg())).basis, Basis::Population);
+        assert_eq!(
+            band(Some(35.0), &hist, HRV_TYPICAL_MS, Some(&hrv_cfg())).basis,
+            Basis::Population
+        );
     }
 
     #[test]
@@ -236,8 +264,14 @@ mod tests {
         assert_eq!(typical_range("spo2"), Some(TypicalRange::new(95.0, 100.0)));
         assert_eq!(typical_range("rhr"), Some(TypicalRange::new(40.0, 60.0)));
         assert_eq!(typical_range("hrv"), Some(TypicalRange::new(40.0, 120.0)));
-        assert_eq!(typical_range("skin_abs"), Some(TypicalRange::new(33.0, 36.0)));
-        assert_eq!(typical_range("skin_dev"), Some(TypicalRange::new(-0.6, 0.6)));
+        assert_eq!(
+            typical_range("skin_abs"),
+            Some(TypicalRange::new(33.0, 36.0))
+        );
+        assert_eq!(
+            typical_range("skin_dev"),
+            Some(TypicalRange::new(-0.6, 0.6))
+        );
         assert_eq!(typical_range("nope"), None);
     }
 
@@ -252,8 +286,14 @@ mod tests {
     #[test]
     fn skin_temp_history_partitions_the_two_scales() {
         let mixed = [Some(34.1), Some(0.2), None, Some(33.8), Some(-0.1)];
-        assert_eq!(skin_temp_history(0.3, &mixed), vec![None, Some(0.2), None, None, Some(-0.1)]);
-        assert_eq!(skin_temp_history(34.0, &mixed), vec![Some(34.1), None, None, Some(33.8), None]);
+        assert_eq!(
+            skin_temp_history(0.3, &mixed),
+            vec![None, Some(0.2), None, None, Some(-0.1)]
+        );
+        assert_eq!(
+            skin_temp_history(34.0, &mixed),
+            vec![Some(34.1), None, None, Some(33.8), None]
+        );
     }
 
     #[test]

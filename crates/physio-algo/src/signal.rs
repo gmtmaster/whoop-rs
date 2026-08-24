@@ -109,7 +109,9 @@ pub fn moving_average_reflect(x: &[f64], len: usize) -> Vec<f64> {
         prefix[i + 1] = prefix[i] + padded[i];
     }
     let w = 2 * half + 1;
-    (0..n).map(|i| (prefix[i + w] - prefix[i]) / w as f64).collect()
+    (0..n)
+        .map(|i| (prefix[i + w] - prefix[i]) / w as f64)
+        .collect()
 }
 
 /// Running median over a centred, reflect-padded window of `len` samples. A despiker: it deletes a
@@ -148,7 +150,10 @@ mod tests {
         assert_eq!(find_peaks(&x, 1, f64::NEG_INFINITY), vec![1, 3]);
         assert_eq!(find_peaks(&x, 3, f64::NEG_INFINITY), vec![3]);
         // A flat top reports its centre once, not twice.
-        assert_eq!(find_peaks(&[0.0, 4.0, 4.0, 0.0], 1, f64::NEG_INFINITY), vec![1]);
+        assert_eq!(
+            find_peaks(&[0.0, 4.0, 4.0, 0.0], 1, f64::NEG_INFINITY),
+            vec![1]
+        );
         // Height gate rejects.
         assert!(find_peaks(&x, 1, 6.0).contains(&3) && !find_peaks(&x, 1, 6.0).contains(&1));
         // Degenerate inputs are empty, never a panic.
@@ -174,7 +179,10 @@ mod tests {
         assert_eq!(reflect_index(-2, 5), 2);
         assert_eq!(reflect_index(5, 5), 3);
         assert_eq!(reflect_index(0, 1), 0); // degenerate length never panics
-        assert_eq!(reflect_pad(&[1.0, 2.0, 3.0], 2), vec![3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 1.0]);
+        assert_eq!(
+            reflect_pad(&[1.0, 2.0, 3.0], 2),
+            vec![3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 1.0]
+        );
     }
 
     #[test]
@@ -199,7 +207,10 @@ mod tests {
         let mut x = vec![1.0; 9];
         x[4] = 100.0;
         let med = median_filter_reflect(&x, 3);
-        assert!(med.iter().all(|v| (*v - 1.0).abs() < 1e-12), "spike survived: {med:?}");
+        assert!(
+            med.iter().all(|v| (*v - 1.0).abs() < 1e-12),
+            "spike survived: {med:?}"
+        );
         // The mean leaves a third of the spike in all three samples it touches.
         let avg = moving_average_reflect(&x, 3);
         assert!((avg[4] - 34.0).abs() < 1e-12 && (avg[3] - 34.0).abs() < 1e-12);

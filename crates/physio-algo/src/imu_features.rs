@@ -132,7 +132,14 @@ mod tests {
         (0..n)
             .map(|i| {
                 let az = 1.0 + amp * (2.0 * PI * cadence * i as f64 / rate).sin();
-                ImuSample { ax: 0.0, ay: 0.0, az, gx: gyro_dps, gy: 0.0, gz: 0.0 }
+                ImuSample {
+                    ax: 0.0,
+                    ay: 0.0,
+                    az,
+                    gx: gyro_dps,
+                    gy: 0.0,
+                    gz: 0.0,
+                }
             })
             .collect()
     }
@@ -144,15 +151,28 @@ mod tests {
             let c = f
                 .cadence_hz
                 .unwrap_or_else(|| panic!("cadence {target} Hz should be detected"));
-            assert!((c - target).abs() <= 0.15, "recovered {c} vs injected {target}");
-            assert!(f.cadence_strength > 0.4, "clean sinusoid should read rhythmic");
+            assert!(
+                (c - target).abs() <= 0.15,
+                "recovered {c} vs injected {target}"
+            );
+            assert!(
+                f.cadence_strength > 0.4,
+                "clean sinusoid should read rhythmic"
+            );
         }
     }
 
     #[test]
     fn still_has_no_cadence_and_low_energy() {
         let still: Vec<ImuSample> = (0..600)
-            .map(|_| ImuSample { ax: 0.0, ay: 0.0, az: 1.0, gx: 0.0, gy: 0.0, gz: 0.0 })
+            .map(|_| ImuSample {
+                ax: 0.0,
+                ay: 0.0,
+                az: 1.0,
+                gx: 0.0,
+                gy: 0.0,
+                gz: 0.0,
+            })
             .collect();
         let f = extract(&still, 100);
         assert!(f.cadence_hz.is_none(), "still wrist has no gait cadence");
@@ -171,7 +191,10 @@ mod tests {
     #[test]
     fn gyro_energy_reflects_rotation() {
         let f = extract(&gait_samples(2.0, 0.2, 6.0, 45.0), 100);
-        assert!((f.gyro_energy_dps - 45.0).abs() <= 1.0, "constant 45 dps should read back");
+        assert!(
+            (f.gyro_energy_dps - 45.0).abs() <= 1.0,
+            "constant 45 dps should read back"
+        );
     }
 
     /// Guards the on-chip ENMO channel against being fed here for cadence: at 1 Hz the gait-band lag window
@@ -189,8 +212,14 @@ mod tests {
             })
             .collect();
         let f = extract(&enmo, 1);
-        assert!(f.accel_energy_g > 0.05, "the input must vary, or this passes for the wrong reason");
-        assert!(f.cadence_hz.is_none(), "0.5 Hz Nyquist cannot carry a 1.2-3.5 Hz cadence");
+        assert!(
+            f.accel_energy_g > 0.05,
+            "the input must vary, or this passes for the wrong reason"
+        );
+        assert!(
+            f.cadence_hz.is_none(),
+            "0.5 Hz Nyquist cannot carry a 1.2-3.5 Hz cadence"
+        );
         assert_eq!(f.cadence_strength, 0.0);
     }
 

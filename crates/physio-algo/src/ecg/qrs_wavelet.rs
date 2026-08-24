@@ -5,7 +5,7 @@
 //! Nothing here is squared or rectified before the decision, so the criterion is a signed slope reversal
 //! inside one QRS width — a question Pan-Tompkins cannot ask and does not answer.
 
-use super::{samples_for_ms, sanitized, usable_rate, MAX_QRS_MS, REFRACTORY_MS};
+use super::{MAX_QRS_MS, REFRACTORY_MS, samples_for_ms, sanitized, usable_rate};
 use crate::signal::{find_peaks, robust_sigma};
 
 /// Modulus-maximum threshold in robust sigmas of the scale's own detail. 3 sigma is the ordinary outlier
@@ -137,7 +137,11 @@ fn zero_crossing(detail: &[f64], a: usize, b: usize) -> Option<usize> {
 /// strongest-first, then drop what is left of the T waves. The kept fiducial is the cluster's STRONGEST
 /// hit, which is the R itself — taking the earliest instead drags the mark onto the Q and can push the
 /// following T wave back outside the refractory.
-fn coherent_clusters(hits: &[(usize, usize, f64)], coherence: usize, refractory: usize) -> Vec<usize> {
+fn coherent_clusters(
+    hits: &[(usize, usize, f64)],
+    coherence: usize,
+    refractory: usize,
+) -> Vec<usize> {
     let mut clusters: Vec<Cluster> = Vec::new();
     for &(idx, rank, strength) in hits {
         match clusters.last_mut() {
@@ -162,7 +166,11 @@ fn coherent_clusters(hits: &[(usize, usize, f64)], coherence: usize, refractory:
     }
 
     let floor = t_wave_floor(&kept);
-    let mut out: Vec<usize> = kept.into_iter().filter(|&(_, s)| s >= floor).map(|(i, _)| i).collect();
+    let mut out: Vec<usize> = kept
+        .into_iter()
+        .filter(|&(_, s)| s >= floor)
+        .map(|(i, _)| i)
+        .collect();
     out.sort_unstable();
     out
 }
@@ -209,7 +217,12 @@ struct Cluster {
 
 impl Cluster {
     fn new(idx: usize, rank: usize, strength: f64) -> Self {
-        let mut c = Cluster { fiducial: idx, best: 0.0, ranks: Vec::new(), strength: 0.0 };
+        let mut c = Cluster {
+            fiducial: idx,
+            best: 0.0,
+            ranks: Vec::new(),
+            strength: 0.0,
+        };
         c.absorb(idx, rank, strength);
         c
     }
@@ -231,7 +244,6 @@ impl Cluster {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::super::test_signals::{constant, synthetic_ecg};
@@ -242,7 +254,13 @@ mod tests {
         for fs in [100.0, 200.0, 250.0, 500.0, 1000.0] {
             let (x, truth) = synthetic_ecg(fs, 20.0, 60.0, 1.0, 0.01, 11);
             let peaks = detect_wavelet(&x, fs);
-            assert_eq!(peaks.len(), truth.len(), "fs {fs}: got {} want {}", peaks.len(), truth.len());
+            assert_eq!(
+                peaks.len(),
+                truth.len(),
+                "fs {fs}: got {} want {}",
+                peaks.len(),
+                truth.len()
+            );
             for (p, t) in peaks.iter().zip(&truth) {
                 let err_ms = (*p as f64 - *t as f64).abs() / fs * 1000.0;
                 assert!(err_ms <= 30.0, "fs {fs}: fiducial off by {err_ms:.1} ms");
@@ -294,7 +312,10 @@ mod tests {
         for fs in [100.0, 200.0, 250.0, 500.0, 1000.0] {
             let centre = scale_ladder(fs)[1];
             let peak_hz = fs / (4.0 * (1usize << (centre - 1)) as f64);
-            assert!((8.0..=25.0).contains(&peak_hz), "fs {fs}: centre scale peaks at {peak_hz} Hz");
+            assert!(
+                (8.0..=25.0).contains(&peak_hz),
+                "fs {fs}: centre scale peaks at {peak_hz} Hz"
+            );
         }
     }
 }

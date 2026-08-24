@@ -51,7 +51,10 @@ mod tests {
         for stops in [&RECOVERY_STOPS[..], &STRAIN_STOPS[..]] {
             assert_eq!(stops.first().copied(), Some(0.0));
             assert_eq!(stops.last().copied(), Some(1.0));
-            assert!(stops.windows(2).all(|w| w[1] > w[0]), "{stops:?} is not strictly increasing");
+            assert!(
+                stops.windows(2).all(|w| w[1] > w[0]),
+                "{stops:?} is not strictly increasing"
+            );
         }
     }
 

@@ -5,7 +5,7 @@
 //! from two centred moving averages sized in Hz. Centred means zero phase, so no group delay has to be
 //! subtracted back off the peak positions.
 
-use super::{band_limited, qt_end_ms, samples_for_ms, sanitized, usable_rate, REFRACTORY_MS};
+use super::{REFRACTORY_MS, band_limited, qt_end_ms, samples_for_ms, sanitized, usable_rate};
 use crate::signal::{find_peaks, moving_average_centred};
 use crate::stats::mean;
 
@@ -86,10 +86,16 @@ fn integrated_energy(band: &[f64], fs_hz: f64, integration: usize) -> Vec<f64> {
 
 /// Dual-threshold scan over the energy peaks: running signal / noise levels, a 200 ms refractory, a
 /// T-wave slope test inside 360 ms, and a searchback at 1.66x the recent mean R-R.
-fn adaptive_threshold(energy: &[f64], candidates: &[usize], fs_hz: f64, refractory: usize) -> Vec<usize> {
+fn adaptive_threshold(
+    energy: &[f64],
+    candidates: &[usize],
+    fs_hz: f64,
+    refractory: usize,
+) -> Vec<usize> {
     let learn = ((LEARNING_S * fs_hz) as usize).min(energy.len()).max(1);
     let head = &energy[..learn];
-    let mut signal_level = head.iter().copied().fold(f64::MIN, f64::max).max(0.0) * THRESHOLD_FRACTION;
+    let mut signal_level =
+        head.iter().copied().fold(f64::MIN, f64::max).max(0.0) * THRESHOLD_FRACTION;
     let mut noise_level = mean(head) * 0.5;
 
     let mut accepted: Vec<usize> = Vec::new();
@@ -111,8 +117,17 @@ fn adaptive_threshold(energy: &[f64], candidates: &[usize], fs_hz: f64, refracto
         if let (Some(&last), true) = (accepted.last(), rr.len() >= 2) {
             let expected = mean(&rr) * SEARCHBACK_RR_MULTIPLE;
             if (idx - last) as f64 > expected {
-                if let Some(found) = search_back(energy, candidates, ci, last, refractory, threshold * 0.5, threshold) {
-                    signal_level = SEARCHBACK_WEIGHT * energy[found] + (1.0 - SEARCHBACK_WEIGHT) * signal_level;
+                if let Some(found) = search_back(
+                    energy,
+                    candidates,
+                    ci,
+                    last,
+                    refractory,
+                    threshold * 0.5,
+                    threshold,
+                ) {
+                    signal_level = SEARCHBACK_WEIGHT * energy[found]
+                        + (1.0 - SEARCHBACK_WEIGHT) * signal_level;
                     push_beat(&mut accepted, &mut rr, found);
                     continue; // re-test the current candidate against the new refractory
                 }
@@ -141,7 +156,11 @@ fn adaptive_threshold(energy: &[f64], candidates: &[usize], fs_hz: f64, refracto
 /// T-wave guard in samples: the published 360 ms, widened to Bazett's QT once there is a rhythm to
 /// measure. A 48 bpm rhythm puts the T at ~450 ms, outside the fixed guard and counted as a second beat.
 fn twave_guard(rr: &[f64], fs_hz: f64) -> usize {
-    let qt_ms = if rr.is_empty() { 0.0 } else { qt_end_ms(mean(rr) / fs_hz * 1000.0) };
+    let qt_ms = if rr.is_empty() {
+        0.0
+    } else {
+        qt_end_ms(mean(rr) / fs_hz * 1000.0)
+    };
     samples_for_ms(TWAVE_GUARD_MS.max(qt_ms), fs_hz, 1)
 }
 
@@ -204,7 +223,13 @@ mod tests {
         for fs in [100.0, 200.0, 250.0, 500.0, 1000.0] {
             let (x, truth) = synthetic_ecg(fs, 20.0, 60.0, 1.0, 0.0, 1);
             let peaks = detect_pan_tompkins(&x, fs);
-            assert_eq!(peaks.len(), truth.len(), "fs {fs}: got {} want {}", peaks.len(), truth.len());
+            assert_eq!(
+                peaks.len(),
+                truth.len(),
+                "fs {fs}: got {} want {}",
+                peaks.len(),
+                truth.len()
+            );
             for (p, t) in peaks.iter().zip(&truth) {
                 let err_ms = (*p as f64 - *t as f64).abs() / fs * 1000.0;
                 assert!(err_ms <= 30.0, "fs {fs}: fiducial off by {err_ms:.1} ms");
@@ -231,7 +256,12 @@ mod tests {
         let (mut x, truth) = synthetic_ecg(200.0, 20.0, 60.0, 1.0, 0.0, 3);
         x[1234] = f64::NAN;
         let peaks = detect_pan_tompkins(&x, 200.0);
-        assert!(peaks.len() >= truth.len() - 1, "got {} want ~{}", peaks.len(), truth.len());
+        assert!(
+            peaks.len() >= truth.len() - 1,
+            "got {} want ~{}",
+            peaks.len(),
+            truth.len()
+        );
     }
 
     #[test]

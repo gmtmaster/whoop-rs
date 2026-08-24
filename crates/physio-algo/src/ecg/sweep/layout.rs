@@ -56,7 +56,12 @@ pub const MAX_INTERLEAVE: usize = 4;
 
 impl Layout {
     pub fn shape(&self) -> LayoutShape {
-        LayoutShape { bits: self.bits, signed: self.signed, order: self.order, stride_bits: self.stride_bits }
+        LayoutShape {
+            bits: self.bits,
+            signed: self.signed,
+            order: self.order,
+            stride_bits: self.stride_bits,
+        }
     }
 
     /// How many whole samples this rule reads out of `len_bytes`.
@@ -73,13 +78,19 @@ impl Layout {
     /// reads nothing.
     pub fn decode(&self, bytes: &[u8]) -> Vec<f64> {
         let n = self.sample_count(bytes.len());
-        (0..n).map(|i| self.value_at(bytes, self.start_bit + i * self.stride_bits)).collect()
+        (0..n)
+            .map(|i| self.value_at(bytes, self.start_bit + i * self.stride_bits))
+            .collect()
     }
 
     /// One field starting at absolute bit `start`. The caller has already bounded `start`.
     fn value_at(&self, bytes: &[u8], start: usize) -> f64 {
         let bits = self.bits as usize;
-        let mask = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        let mask = if bits >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << bits) - 1
+        };
         let byte = start >> 3;
         let skew = start & 7;
         let raw = match self.order {
@@ -126,7 +137,11 @@ pub fn candidates() -> Vec<Layout> {
     let mut out = Vec::new();
     for &bits in &WIDTHS_BITS {
         let w = bits as usize;
-        let containers = if w.is_multiple_of(8) { vec![w] } else { vec![w, w.div_ceil(8) * 8] };
+        let containers = if w.is_multiple_of(8) {
+            vec![w]
+        } else {
+            vec![w, w.div_ceil(8) * 8]
+        };
         let mut seen_stride = Vec::new();
         for &c in &containers {
             for k in 1..=MAX_INTERLEAVE {
@@ -146,7 +161,13 @@ pub fn candidates() -> Vec<Layout> {
                 for &start_bit in &starts {
                     for signed in [false, true] {
                         for order in [BitOrder::LsbFirst, BitOrder::MsbFirst] {
-                            out.push(Layout { bits, signed, order, start_bit, stride_bits: stride });
+                            out.push(Layout {
+                                bits,
+                                signed,
+                                order,
+                                start_bit,
+                                stride_bits: stride,
+                            });
                         }
                     }
                 }
@@ -166,7 +187,11 @@ pub fn encode(layout: &Layout, values: &[i64], len_bytes: usize) -> Vec<u8> {
         if start + bits > len_bytes * 8 {
             break;
         }
-        let mask = if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 };
+        let mask = if bits >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << bits) - 1
+        };
         let raw = (v as u64) & mask;
         for k in 0..bits {
             let bit = match layout.order {
@@ -190,8 +215,20 @@ pub fn encode(layout: &Layout, values: &[i64], len_bytes: usize) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn lay(bits: u8, signed: bool, order: BitOrder, start_bit: usize, stride_bits: usize) -> Layout {
-        Layout { bits, signed, order, start_bit, stride_bits }
+    fn lay(
+        bits: u8,
+        signed: bool,
+        order: BitOrder,
+        start_bit: usize,
+        stride_bits: usize,
+    ) -> Layout {
+        Layout {
+            bits,
+            signed,
+            order,
+            start_bit,
+            stride_bits,
+        }
     }
 
     #[test]
@@ -204,7 +241,10 @@ mod tests {
         assert_eq!(be.decode(&bytes), vec![0x3412 as f64, 0xCDAB as f64]);
         // Signed reads the same bits as two's complement: 0xABCD is negative.
         let s = lay(16, true, BitOrder::LsbFirst, 0, 16);
-        assert_eq!(s.decode(&bytes), vec![0x1234 as f64, 0xABCD as f64 - 65536.0]);
+        assert_eq!(
+            s.decode(&bytes),
+            vec![0x1234 as f64, 0xABCD as f64 - 65536.0]
+        );
     }
 
     #[test]
@@ -215,7 +255,10 @@ mod tests {
             let l = lay(18, true, order, 0, 18);
             let bytes = encode(&l, &values, 32);
             let got = l.decode(&bytes);
-            assert_eq!(&got[..values.len()], &values.iter().map(|&v| v as f64).collect::<Vec<_>>()[..]);
+            assert_eq!(
+                &got[..values.len()],
+                &values.iter().map(|&v| v as f64).collect::<Vec<_>>()[..]
+            );
         }
         // The same field carried in a 24-bit container, data at the low end, is a different rule.
         let dense = lay(18, true, BitOrder::LsbFirst, 0, 18);
@@ -244,10 +287,21 @@ mod tests {
     #[test]
     fn a_rule_that_does_not_fit_reads_nothing_rather_than_panicking() {
         assert_eq!(lay(32, true, BitOrder::LsbFirst, 0, 32).sample_count(3), 0);
-        assert!(lay(32, true, BitOrder::LsbFirst, 0, 32).decode(&[1, 2, 3]).is_empty());
-        assert!(lay(16, false, BitOrder::LsbFirst, 200, 16).decode(&[1, 2, 3, 4]).is_empty());
+        assert!(
+            lay(32, true, BitOrder::LsbFirst, 0, 32)
+                .decode(&[1, 2, 3])
+                .is_empty()
+        );
+        assert!(
+            lay(16, false, BitOrder::LsbFirst, 200, 16)
+                .decode(&[1, 2, 3, 4])
+                .is_empty()
+        );
         // A stride narrower than the field is not a packing, it is nonsense.
-        assert_eq!(lay(24, false, BitOrder::LsbFirst, 0, 16).sample_count(64), 0);
+        assert_eq!(
+            lay(24, false, BitOrder::LsbFirst, 0, 16).sample_count(64),
+            0
+        );
         // Reading right up to the end pads with zeros rather than indexing off it.
         let l = lay(24, false, BitOrder::MsbFirst, 0, 24);
         assert_eq!(l.decode(&[0xFF, 0xFF, 0xFF]), vec![16_777_215.0]);
@@ -262,7 +316,10 @@ mod tests {
         assert_eq!(seen.len(), c.len(), "candidates must not repeat a rule");
         assert_eq!(c, candidates(), "enumeration order must be stable");
         for &bits in &WIDTHS_BITS {
-            assert!(c.iter().any(|l| l.bits == bits && l.stride_bits == bits as usize));
+            assert!(
+                c.iter()
+                    .any(|l| l.bits == bits && l.stride_bits == bits as usize)
+            );
         }
         // The 18-bit-in-24 container and the non-aligned channel start both have to be reachable.
         assert!(c.iter().any(|l| l.bits == 18 && l.stride_bits == 24));

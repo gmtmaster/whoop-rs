@@ -8,11 +8,11 @@ mod daily;
 mod index;
 mod window;
 
-pub use daily::{daily_stress, StressDay};
-pub use index::{components_raw, stress_index_raw, StressComponents, MIN_BEATS};
+pub use daily::{StressDay, daily_stress};
+pub use index::{MIN_BEATS, StressComponents, components_raw, stress_index_raw};
 pub use window::{
-    daytime_stress, sleep_stress, windowed_stress, HourPoint, ScoredHour, SpanMs, StressWindowCfg,
-    StressWindows, Suppression, SuppressedBucket, ACTIVITY_GATE_G,
+    ACTIVITY_GATE_G, HourPoint, ScoredHour, SpanMs, StressWindowCfg, StressWindows,
+    SuppressedBucket, Suppression, daytime_stress, sleep_stress, windowed_stress,
 };
 
 /// Score ceiling. The three bands split it into thirds, and a zero z-sum lands mid-scale at 1.5.
@@ -51,7 +51,11 @@ pub fn squash(raw: f64) -> f64 {
 /// Arithmetic mean, `None` on empty — distinct from [`crate::stats::mean`], which reads 0.0 there.
 /// An absent reference must not become a zero one.
 pub(crate) fn mean_opt(xs: &[f64]) -> Option<f64> {
-    if xs.is_empty() { None } else { Some(xs.iter().sum::<f64>() / xs.len() as f64) }
+    if xs.is_empty() {
+        None
+    } else {
+        Some(xs.iter().sum::<f64>() / xs.len() as f64)
+    }
 }
 
 /// Population standard deviation about `m`; 0.0 with no mean or fewer than two values.
