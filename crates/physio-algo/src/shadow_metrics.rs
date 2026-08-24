@@ -3,7 +3,7 @@
 use crate::hrv::{MIN_BEATS, clean_rr_gap_aware_breaking, report_seam_breaks};
 use crate::sleep::{AccelSample, HrSample, RrRun, SleepStage, StageSegment};
 
-pub const ALGORITHM_VERSION: &str = "physiology-dynamic-rhr-final-sws-hrv-v2";
+pub const ALGORITHM_VERSION: &str = "physiology-dynamic-rhr-final-sws-hrv-v3";
 
 const EPOCH_SECONDS: i64 = 30;
 const MIN_EPISODE_COVERAGE: f64 = 0.80;
@@ -13,6 +13,8 @@ const MAX_RR_ARTIFACT_REJECTION: f64 = 0.35;
 const MIN_RR_BEAT_TIME_RATIO: f64 = 0.70;
 const MAX_RR_BEAT_TIME_RATIO: f64 = 1.10;
 const MAX_RR_PAIR_CHANGE_MS: i32 = 200;
+const PRIMARY_MIN_DEEP_SECONDS: u32 = 600;
+const FALLBACK_MIN_DEEP_SECONDS: u32 = 360;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QualityHrSample {
@@ -180,7 +182,7 @@ pub struct NightlyPhysiologyResult {
     pub deep_episodes: Vec<DeepEpisodeQuality>,
 }
 
-/// Computes both immutable v2 nightly metrics from one staged sleep span and its raw streams.
+/// Computes both immutable v3 nightly metrics from one staged sleep span and its raw streams.
 pub fn nightly_physiology(
     sleep_start: i64,
     sleep_end: i64,
@@ -234,8 +236,25 @@ pub fn nightly_physiology(
 
 /// Exact immutable episode-level gates, exposed for provenance/reporting only.
 pub fn episode_gate_failures(e: &DeepEpisodeQuality) -> Vec<&'static str> {
+    episode_gate_failures_with_minimum(e, PRIMARY_MIN_DEEP_SECONDS)
+}
+
+pub fn fallback_episode_gate_failures(e: &DeepEpisodeQuality) -> Vec<&'static str> {
+    episode_gate_failures_with_minimum(e, FALLBACK_MIN_DEEP_SECONDS)
+}
+
+fn episode_gate_failures_with_minimum(
+    e: &DeepEpisodeQuality,
+    minimum_seconds: u32,
+) -> Vec<&'static str> {
     let mut failures = Vec::new();
-    if e.end.saturating_sub(e.start) < 600 { failures.push("duration_lt_600_seconds"); }
+    if e.end.saturating_sub(e.start) < minimum_seconds {
+        failures.push(if minimum_seconds == PRIMARY_MIN_DEEP_SECONDS {
+            "duration_lt_600_seconds"
+        } else {
+            "duration_lt_360_seconds"
+        });
+    }
     if e.hr_coverage < MIN_EPISODE_COVERAGE { failures.push("hr_coverage"); }
     if e.accelerometer_coverage < MIN_EPISODE_COVERAGE { failures.push("accelerometer_coverage"); }
     if e.clean_hr_coverage < MIN_EPISODE_COVERAGE { failures.push("clean_hr_coverage"); }
@@ -565,6 +584,8 @@ pub struct QualityRrReport {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HrvUnavailableReason {
     NoDeepEpisode,
+    NoQualifyingTenMinuteDeepEpisode,
+    NoQualifyingSixMinuteDeepEpisode,
     NoReliableDeepEpisode,
     InsufficientReportCoverage,
     InsufficientCleanIntervals,
@@ -572,9 +593,20 @@ pub enum HrvUnavailableReason {
     NoQualityValidFiveMinuteWindow,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HrvMeasurementMode {
+    PrimaryFinalSws,
+    FallbackShortSws,
+}
+
+impl HrvMeasurementMode {
+    pub fn baseline_eligible(self) -> bool {
+        self == Self::PrimaryFinalSws
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
-pub struct FinalSwsHrvResult {
-    pub algorithm_version: &'static str,
+pub struct HrvSelectionAttempt {
     pub rmssd_ms: Option<f64>,
     pub selected_episode: Option<(u32, u32)>,
     pub selected_episode_quality: Option<DeepEpisodeQuality>,
@@ -587,7 +619,25 @@ pub struct FinalSwsHrvResult {
     pub rejection_reason: Option<HrvUnavailableReason>,
 }
 
-/// RMSSD from the final five minutes of the chronologically last reliable Deep episode, with no fallback.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalSwsHrvResult {
+    pub algorithm_version: &'static str,
+    pub measurement_mode: Option<HrvMeasurementMode>,
+    pub primary_attempt: HrvSelectionAttempt,
+    pub fallback_attempt: Option<HrvSelectionAttempt>,
+    pub rmssd_ms: Option<f64>,
+    pub selected_episode: Option<(u32, u32)>,
+    pub selected_episode_quality: Option<DeepEpisodeQuality>,
+    pub selected_window: Option<(u32, u32)>,
+    pub usable_report_seconds: u32,
+    pub input_rr_intervals: u32,
+    pub clean_rr_intervals: u32,
+    pub contiguous_pairs: u32,
+    pub sudden_change_pairs_rejected: u32,
+    pub rejection_reason: Option<HrvUnavailableReason>,
+}
+
+/// Primary final-SWS RMSSD with the six-minute short-SWS fallback whenever primary is unavailable.
 pub fn final_sws_last_five_hrv(
     episodes: &[DeepEpisodeQuality],
     reports: &[QualityRrReport],
@@ -631,27 +681,114 @@ fn final_sws_last_five_hrv_inner<F>(
     quality_for_window: F,
 ) -> FinalSwsHrvResult
 where
+    F: Fn(&DeepEpisodeQuality, u32, u32) -> DeepEpisodeQuality + Copy,
+{
+    let primary = select_primary(episodes, reports, quality_for_window);
+    if primary.rmssd_ms.is_some() {
+        return from_attempt(HrvMeasurementMode::PrimaryFinalSws, primary, None);
+    }
+    let fallback = select_fallback(episodes, reports, quality_for_window, &primary);
+    if fallback.rmssd_ms.is_some() {
+        return from_attempt(
+            HrvMeasurementMode::FallbackShortSws,
+            primary,
+            Some(fallback),
+        );
+    }
+    from_attempt_without_value(primary, Some(fallback))
+}
+
+fn select_primary<F>(
+    episodes: &[DeepEpisodeQuality],
+    reports: &[QualityRrReport],
+    quality_for_window: F,
+) -> HrvSelectionAttempt
+where
     F: Fn(&DeepEpisodeQuality, u32, u32) -> DeepEpisodeQuality,
 {
-    let selected = episodes
+    if episodes.is_empty() {
+        return unavailable_attempt(HrvUnavailableReason::NoDeepEpisode);
+    }
+    if !episodes
         .iter()
-        .filter(|e| reliable_episode(e))
-        .max_by_key(|e| e.end);
-    let Some(episode) = selected else {
-        return unavailable(if episodes.is_empty() {
+        .any(|e| e.end.saturating_sub(e.start) >= PRIMARY_MIN_DEEP_SECONDS)
+    {
+        return unavailable_attempt(HrvUnavailableReason::NoQualifyingTenMinuteDeepEpisode);
+    }
+    let Some(episode) = episodes
+        .iter()
+        .filter(|e| reliable_episode(e, PRIMARY_MIN_DEEP_SECONDS))
+        .max_by_key(|e| e.end)
+    else {
+        return unavailable_attempt(HrvUnavailableReason::NoReliableDeepEpisode);
+    };
+    select_window(episode, reports, quality_for_window)
+}
+
+fn select_fallback<F>(
+    episodes: &[DeepEpisodeQuality],
+    reports: &[QualityRrReport],
+    quality_for_window: F,
+    primary_attempt: &HrvSelectionAttempt,
+) -> HrvSelectionAttempt
+where
+    F: Fn(&DeepEpisodeQuality, u32, u32) -> DeepEpisodeQuality + Copy,
+{
+    let mut candidates: Vec<&DeepEpisodeQuality> = episodes
+        .iter()
+        .filter(|e| e.end.saturating_sub(e.start) >= FALLBACK_MIN_DEEP_SECONDS)
+        .collect();
+    if candidates.is_empty() {
+        return unavailable_attempt(if episodes.is_empty() {
             HrvUnavailableReason::NoDeepEpisode
         } else {
-            HrvUnavailableReason::NoReliableDeepEpisode
+            HrvUnavailableReason::NoQualifyingSixMinuteDeepEpisode
         });
-    };
+    }
+    candidates.retain(|episode| {
+        primary_attempt.selected_episode != Some((episode.start, episode.end))
+    });
+    if candidates.is_empty() {
+        return primary_attempt.clone();
+    }
+    candidates.sort_by_key(|e| std::cmp::Reverse(e.end));
+    let mut latest_refusal = None;
+    for episode in candidates {
+        if !reliable_episode(episode, FALLBACK_MIN_DEEP_SECONDS) {
+            continue;
+        }
+        let attempt = select_window(episode, reports, quality_for_window);
+        if attempt.rmssd_ms.is_some() {
+            return attempt;
+        }
+        if latest_refusal.is_none() {
+            latest_refusal = Some(attempt);
+        }
+    }
+    latest_refusal.unwrap_or_else(|| {
+        if primary_attempt.selected_episode.is_some() {
+            primary_attempt.clone()
+        } else {
+            unavailable_attempt(HrvUnavailableReason::NoReliableDeepEpisode)
+        }
+    })
+}
+
+fn select_window<F>(
+    episode: &DeepEpisodeQuality,
+    reports: &[QualityRrReport],
+    quality_for_window: F,
+) -> HrvSelectionAttempt
+where
+    F: Fn(&DeepEpisodeQuality, u32, u32) -> DeepEpisodeQuality,
+{
     let mut window_end = episode.end;
     while window_end >= episode.start.saturating_add(300) {
         let window_start = window_end - 300;
         let quality = quality_for_window(episode, window_start, window_end);
         let rr = rr_window_quality(window_start, window_end, reports);
         if reliable_window(&quality, &rr) {
-            return FinalSwsHrvResult {
-                algorithm_version: ALGORITHM_VERSION,
+            return HrvSelectionAttempt {
                 rmssd_ms: rr.rmssd_ms,
                 selected_episode: Some((episode.start, episode.end)),
                 selected_episode_quality: Some(*episode),
@@ -683,8 +820,8 @@ where
     hrv_refusal(episode, window, rr, reason)
 }
 
-fn reliable_episode(e: &DeepEpisodeQuality) -> bool {
-    e.end.saturating_sub(e.start) >= 600
+fn reliable_episode(e: &DeepEpisodeQuality, minimum_seconds: u32) -> bool {
+    e.end.saturating_sub(e.start) >= minimum_seconds
         && e.hr_coverage >= MIN_EPISODE_COVERAGE
         && e.accelerometer_coverage >= MIN_EPISODE_COVERAGE
         && e.clean_hr_coverage >= MIN_EPISODE_COVERAGE
@@ -712,9 +849,8 @@ fn reliable_window(quality: &DeepEpisodeQuality, rr: &RrWindowQuality) -> bool {
         && rr.rmssd_ms.is_some()
 }
 
-fn unavailable(reason: HrvUnavailableReason) -> FinalSwsHrvResult {
-    FinalSwsHrvResult {
-        algorithm_version: ALGORITHM_VERSION,
+fn unavailable_attempt(reason: HrvUnavailableReason) -> HrvSelectionAttempt {
+    HrvSelectionAttempt {
         rmssd_ms: None,
         selected_episode: None,
         selected_episode_quality: None,
@@ -733,9 +869,8 @@ fn hrv_refusal(
     window: (u32, u32),
     rr: RrWindowQuality,
     reason: HrvUnavailableReason,
-) -> FinalSwsHrvResult {
-    FinalSwsHrvResult {
-        algorithm_version: ALGORITHM_VERSION,
+) -> HrvSelectionAttempt {
+    HrvSelectionAttempt {
         rmssd_ms: None,
         selected_episode: Some((e.start, e.end)),
         selected_episode_quality: Some(*e),
@@ -746,6 +881,59 @@ fn hrv_refusal(
         contiguous_pairs: rr.contiguous_pairs,
         sudden_change_pairs_rejected: rr.sudden_change_pairs_rejected,
         rejection_reason: Some(reason),
+    }
+}
+
+fn from_attempt(
+    mode: HrvMeasurementMode,
+    primary_attempt: HrvSelectionAttempt,
+    fallback_attempt: Option<HrvSelectionAttempt>,
+) -> FinalSwsHrvResult {
+    let selected = fallback_attempt
+        .as_ref()
+        .unwrap_or(&primary_attempt)
+        .clone();
+    FinalSwsHrvResult {
+        algorithm_version: ALGORITHM_VERSION,
+        measurement_mode: Some(mode),
+        primary_attempt,
+        fallback_attempt,
+        rmssd_ms: selected.rmssd_ms,
+        selected_episode: selected.selected_episode,
+        selected_episode_quality: selected.selected_episode_quality,
+        selected_window: selected.selected_window,
+        usable_report_seconds: selected.usable_report_seconds,
+        input_rr_intervals: selected.input_rr_intervals,
+        clean_rr_intervals: selected.clean_rr_intervals,
+        contiguous_pairs: selected.contiguous_pairs,
+        sudden_change_pairs_rejected: selected.sudden_change_pairs_rejected,
+        rejection_reason: None,
+    }
+}
+
+fn from_attempt_without_value(
+    primary_attempt: HrvSelectionAttempt,
+    fallback_attempt: Option<HrvSelectionAttempt>,
+) -> FinalSwsHrvResult {
+    let selected = fallback_attempt
+        .as_ref()
+        .unwrap_or(&primary_attempt)
+        .clone();
+    FinalSwsHrvResult {
+        algorithm_version: ALGORITHM_VERSION,
+        measurement_mode: None,
+        primary_attempt,
+        fallback_attempt,
+        rmssd_ms: None,
+        selected_episode: selected.selected_episode,
+        selected_episode_quality: selected.selected_episode_quality,
+        selected_window: selected.selected_window,
+        usable_report_seconds: selected.usable_report_seconds,
+        input_rr_intervals: selected.input_rr_intervals,
+        clean_rr_intervals: selected.clean_rr_intervals,
+        contiguous_pairs: selected.contiguous_pairs,
+        sudden_change_pairs_rejected: selected.sudden_change_pairs_rejected,
+        rejection_reason: selected.rejection_reason,
     }
 }
 
@@ -844,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn aug_18_hrv_is_unavailable_when_deep_is_only_fragments() {
+    fn short_sws_fallback_uses_a_valid_six_minute_deep_episode() {
         let episodes = [
             DeepEpisodeQuality {
                 start: 0,
@@ -871,13 +1059,15 @@ mod tests {
                 rr_beat_time_ratio: 1.0,
             },
         ];
-        let result = final_sws_last_five_hrv(&episodes, &[]);
-        assert_eq!(result.rmssd_ms, None);
+        let reports = reports(120, 420, 10);
+        let result = final_sws_last_five_hrv(&episodes, &reports);
+        assert!(result.rmssd_ms.is_some());
         assert_eq!(
-            result.rejection_reason,
-            Some(HrvUnavailableReason::NoReliableDeepEpisode)
+            result.measurement_mode,
+            Some(HrvMeasurementMode::FallbackShortSws)
         );
-        assert_eq!(result.selected_window, None);
+        assert_eq!(result.selected_episode, Some((0, 420)));
+        assert_eq!(result.selected_window, Some((120, 420)));
     }
 
     #[test]
@@ -892,6 +1082,11 @@ mod tests {
             })
             .collect();
         let result = final_sws_last_five_hrv(&episodes, &reports);
+        assert_eq!(
+            result.measurement_mode,
+            Some(HrvMeasurementMode::PrimaryFinalSws)
+        );
+        assert!(result.fallback_attempt.is_none());
         assert_eq!(result.selected_episode, Some((1_000, 1_900)));
         assert_eq!(result.selected_window, Some((1_600, 1_900)));
         assert_eq!(result.usable_report_seconds, 300);
@@ -1004,5 +1199,138 @@ mod tests {
         let hrv = final_sws_last_five_hrv(&[], &[]);
         assert_eq!(rhr.algorithm_version, ALGORITHM_VERSION);
         assert_eq!(hrv.algorithm_version, ALGORITHM_VERSION);
+    }
+
+    fn reports(start: u32, end: u32, delta: u16) -> Vec<QualityRrReport> {
+        (start..end)
+            .map(|unix| QualityRrReport {
+                unix,
+                rr: vec![800 + (unix % 2) as u16 * delta],
+                optical_signal_poor: None,
+                quality_valid: true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fallback_selects_latest_eligible_episode_not_lowest_hrv() {
+        let episodes = [quality(0, 390), quality(1_000, 1_390)];
+        let mut rr = reports(90, 390, 2);
+        rr.extend(reports(1_090, 1_390, 30));
+        let result = final_sws_last_five_hrv(&episodes, &rr);
+        assert_eq!(
+            result.measurement_mode,
+            Some(HrvMeasurementMode::FallbackShortSws)
+        );
+        assert_eq!(result.selected_episode, Some((1_000, 1_390)));
+        assert!(result.rmssd_ms.unwrap() > 20.0);
+    }
+
+    #[test]
+    fn fallback_runs_when_ten_minute_episodes_fail_primary_quality() {
+        let mut unreliable_primary = quality(0, 600);
+        unreliable_primary.wrist_off_fraction = 0.02;
+        let episodes = [unreliable_primary, quality(1_000, 1_360)];
+        let result = final_sws_last_five_hrv(&episodes, &reports(1_060, 1_360, 10));
+        assert_eq!(
+            result.measurement_mode,
+            Some(HrvMeasurementMode::FallbackShortSws)
+        );
+        assert_eq!(result.selected_episode, Some((1_000, 1_360)));
+    }
+
+    #[test]
+    fn fallback_runs_after_primary_has_no_quality_valid_window() {
+        let episodes = [quality(0, 360), quality(1_000, 1_600)];
+        let result = final_sws_last_five_hrv(&episodes, &reports(60, 360, 10));
+        assert_eq!(
+            result.primary_attempt.rejection_reason,
+            Some(HrvUnavailableReason::InsufficientReportCoverage)
+        );
+        assert_eq!(
+            result.measurement_mode,
+            Some(HrvMeasurementMode::FallbackShortSws)
+        );
+        assert_eq!(result.selected_episode, Some((0, 360)));
+        assert_eq!(result.selected_window, Some((60, 360)));
+    }
+
+    #[test]
+    fn fallback_refuses_six_minutes_without_a_quality_valid_window() {
+        let result = final_sws_last_five_hrv(&[quality(0, 360)], &[]);
+        assert_eq!(result.measurement_mode, None);
+        assert_eq!(
+            result.primary_attempt.rejection_reason,
+            Some(HrvUnavailableReason::NoQualifyingTenMinuteDeepEpisode)
+        );
+        assert_eq!(
+            result.rejection_reason,
+            Some(HrvUnavailableReason::InsufficientReportCoverage)
+        );
+    }
+
+    #[test]
+    fn fallback_refuses_deep_fragments_shorter_than_six_minutes() {
+        let result = final_sws_last_five_hrv(&[quality(0, 359)], &reports(59, 359, 10));
+        assert_eq!(result.measurement_mode, None);
+        assert_eq!(
+            result.rejection_reason,
+            Some(HrvUnavailableReason::NoQualifyingSixMinuteDeepEpisode)
+        );
+    }
+
+    #[test]
+    fn fallback_does_not_bypass_wrist_off_or_rr_quality_gates() {
+        let mut off_wrist = quality(0, 360);
+        off_wrist.wrist_off_fraction = 0.02;
+        let wrist_result = final_sws_last_five_hrv(&[off_wrist], &reports(60, 360, 10));
+        assert_eq!(wrist_result.measurement_mode, None);
+        assert_eq!(
+            wrist_result.rejection_reason,
+            Some(HrvUnavailableReason::NoReliableDeepEpisode)
+        );
+
+        let poor_rr: Vec<QualityRrReport> = reports(60, 360, 10)
+            .into_iter()
+            .map(|mut report| {
+                report.optical_signal_poor = Some(true);
+                report
+            })
+            .collect();
+        let rr_result = final_sws_last_five_hrv(&[quality(0, 360)], &poor_rr);
+        assert_eq!(rr_result.measurement_mode, None);
+        assert_eq!(
+            rr_result.rejection_reason,
+            Some(HrvUnavailableReason::InsufficientReportCoverage)
+        );
+    }
+
+    #[test]
+    fn only_primary_measurements_are_baseline_eligible() {
+        assert!(HrvMeasurementMode::PrimaryFinalSws.baseline_eligible());
+        assert!(!HrvMeasurementMode::FallbackShortSws.baseline_eligible());
+    }
+
+    #[test]
+    fn fallback_measurement_remains_recovery_eligible() {
+        let result = final_sws_last_five_hrv(&[quality(0, 360)], &reports(60, 360, 20));
+        assert_eq!(
+            result.measurement_mode,
+            Some(HrvMeasurementMode::FallbackShortSws)
+        );
+        let score = crate::recovery::recovery(&crate::recovery::RecoveryInput {
+            hrv: result.rmssd_ms.unwrap(),
+            rhr: 50.0,
+            hrv_baseline: Some(crate::recovery::DriverBaseline {
+                mean: 50.0,
+                spread: 10.0,
+            }),
+            rhr_baseline: Some(crate::recovery::DriverBaseline {
+                mean: 55.0,
+                spread: 5.0,
+            }),
+            ..Default::default()
+        });
+        assert!(score.is_some());
     }
 }
