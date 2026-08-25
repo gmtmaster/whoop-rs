@@ -779,6 +779,126 @@ mod tests {
         assert_eq!((u.n_valid, u.status), (2, BaselineStatus::Calibrating));
     }
 
+    // ── Physiology-algorithm-version transition regression tests ───────────────
+    //
+    // The caller (noop-backend's DailyComputationService) is responsible for nulling out any
+    // history night computed under an older PhysiologyAlgorithmVersion before it ever reaches
+    // `fold_history` - see `versionFilteredHistory` there. These tests simulate that filtering
+    // directly (an "older-version" night is `None` in the series) and assert that
+    // MIN_NIGHTS_SEED, which this module alone owns, is the only rule deciding usability: an
+    // older-version night must skip-and-hold, never poison the numeric baseline and never by
+    // its mere presence disqualify an otherwise-sufficient current-version baseline.
+
+    /// Builds a nightly value series: `n_old` older-version nights (nulled, as the Java-side
+    /// filter would produce) followed by `new_values`, current-version, oldest-first.
+    fn versioned_series(n_old: usize, new_values: &[f64]) -> Vec<Option<f64>> {
+        std::iter::repeat_n(None, n_old)
+            .chain(new_values.iter().copied().map(Some))
+            .collect()
+    }
+
+    /// A) v2,v2,v3,v3,v3 (2 old nulled + 3 current) - only 3 valid current-version nights, so a
+    /// MIN_NIGHTS_SEED=4 baseline is not yet usable.
+    #[test]
+    fn scenario_a_three_current_version_nights_not_yet_usable() {
+        let cfg = MetricCfg::hrv();
+        let s = fold_history(&versioned_series(2, &[45.0, 46.0, 44.0]), &cfg);
+        assert_eq!(s.n_valid, 3);
+        assert!(!s.usable(), "3 valid nights must stay below MIN_NIGHTS_SEED");
+    }
+
+    /// B) v2,v2,v3,v3,v3,v3 (2 old nulled + 4 current) - exactly MIN_NIGHTS_SEED valid
+    /// current-version nights, so the baseline is usable.
+    #[test]
+    fn scenario_b_four_current_version_nights_usable() {
+        let cfg = MetricCfg::hrv();
+        let s = fold_history(&versioned_series(2, &[45.0, 46.0, 44.0, 45.5]), &cfg);
+        assert_eq!(s.n_valid, 4);
+        assert!(s.usable(), "4 valid nights meets MIN_NIGHTS_SEED");
+    }
+
+    /// C) many v2 nights + >=4 valid v3 nights - the v2 numeric values must never be folded into
+    /// the v3 baseline: a series of 20 nulled (old-version) nights followed by 4 real values
+    /// reaches the exact same baseline/spread as those 4 values folded on their own, proving the
+    /// nulled nights contributed nothing numeric (only `n_valid`/staleness bookkeeping, which
+    /// `usable()` doesn't care about here).
+    #[test]
+    fn scenario_c_older_version_values_excluded_from_current_baseline() {
+        let cfg = MetricCfg::hrv();
+        let new_values = [45.0, 30.0, 60.0, 50.0];
+        let with_old_history = fold_history(&versioned_series(20, &new_values), &cfg);
+        let without_old_history = fold_history(
+            &new_values.iter().copied().map(Some).collect::<Vec<_>>(),
+            &cfg,
+        );
+        assert_eq!(with_old_history.n_valid, without_old_history.n_valid);
+        assert!(
+            (with_old_history.baseline - without_old_history.baseline).abs() < 1e-12,
+            "old-version nights (nulled) must not shift the baseline: {} vs {}",
+            with_old_history.baseline,
+            without_old_history.baseline
+        );
+        assert!(
+            (with_old_history.spread - without_old_history.spread).abs() < 1e-12,
+            "old-version nights (nulled) must not shift the spread: {} vs {}",
+            with_old_history.spread,
+            without_old_history.spread
+        );
+    }
+
+    /// D) Four current-version rows but one is physiologically implausible (out of
+    /// `MetricCfg::hrv()`'s valid range) - that night must skip-and-hold like a missing one, so
+    /// only 3 nights actually count toward MIN_NIGHTS_SEED, not 4.
+    #[test]
+    fn scenario_d_implausible_current_version_night_not_counted_as_valid() {
+        let cfg = MetricCfg::hrv();
+        let mut series = versioned_series(0, &[45.0, 46.0, 44.0]);
+        series.push(Some(999.0)); // outside hrv's [5.0, 250.0] range - rejected by the plausibility gate.
+        let s = fold_history(&series, &cfg);
+        assert_eq!(
+            s.n_valid, 3,
+            "the implausible fourth night must not be counted as a fourth valid night"
+        );
+        assert!(!s.usable());
+    }
+
+    /// E) Brand-new user: no history at all, first four real nights immediately establish a
+    /// usable baseline - there is no 21/30-day blackout, only the real MIN_NIGHTS_SEED minimum.
+    #[test]
+    fn scenario_e_brand_new_user_bootstraps_from_min_nights_seed() {
+        let cfg = MetricCfg::hrv();
+        let mut state: Option<BaselineState> = None;
+        for (i, v) in [50.0, 48.0, 52.0, 49.0].into_iter().enumerate() {
+            state = Some(update(state, Some(v), &cfg));
+            let s = state.unwrap();
+            if i < MIN_NIGHTS_SEED as usize - 1 {
+                assert!(!s.usable(), "night {} must not be usable yet", i + 1);
+            } else {
+                assert!(s.usable(), "night {} must be usable (MIN_NIGHTS_SEED reached)", i + 1);
+            }
+        }
+    }
+
+    /// F) Algorithm version bump: a long-established user with a full trusted history of
+    /// older-version nights (all nulled by the caller's version filter) must NOT face a
+    /// multi-week Recovery blackout - exactly MIN_NIGHTS_SEED current-version nights after the
+    /// bump is enough, identical to scenario B regardless of how much older-version history
+    /// precedes it.
+    #[test]
+    fn scenario_f_version_bump_does_not_cause_multi_week_blackout() {
+        let cfg = MetricCfg::hrv();
+        let long_old_history = 60; // ~2 months of nightly older-version data, all nulled.
+        let s = fold_history(
+            &versioned_series(long_old_history, &[45.0, 46.0, 44.0, 45.5]),
+            &cfg,
+        );
+        assert_eq!(s.n_valid, 4);
+        assert!(
+            s.usable(),
+            "4 current-version nights must be usable no matter how much older-version history precedes them"
+        );
+    }
+
     fn good_night() -> NightChannels {
         NightChannels {
             hrv_ms: Some(45.0),
