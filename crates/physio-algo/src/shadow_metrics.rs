@@ -985,6 +985,338 @@ fn median_f64(values: &[f64]) -> f64 {
     }
 }
 
+// ============================================================================================
+// RHR v4 — SHADOW ONLY. Not called from `nightly_physiology`, not wired into `noop-engine`, and
+// never persisted. Exists purely for offline replay/calibration against future WHOOP reference
+// data (see analysis/rhr_v4_benchmark/). Production RHR remains exactly `dynamic_rhr` above.
+//
+// Design (episode-level, not epoch-level, unlike v3): for every qualifying Deep/SWS episode,
+// compute one robust HR value H_i (10% trimmed mean of quality-valid samples) and one reliability
+// score Q_i derived ONLY from coverage/duration/dispersion — never from the HR value itself. Then
+// compare the FINAL qualifying episode (F) against the LOWEST-valued qualifying episode (L) and
+// either use one (if they coincide, or only one/no second candidate exists) or blend both.
+//
+// All duration/coverage/weighting constants below are explicitly provisional — see the
+// "provisional" doc comment on each — and are only defensible pending real WHOOP reference data.
+// ============================================================================================
+
+/// Current algorithm version string for this shadow, kept distinct from `ALGORITHM_VERSION` at the
+/// top of this file so it can never be confused with — or accidentally stamped as — the production
+/// v3 identifier. Never written to canonical storage; carried only on `RhrV4ShadowResult`.
+pub const ALGORITHM_VERSION_V4_SHADOW: &str = "physiology-rhr-v4-shadow";
+
+/// Provisional: minimum Deep-episode duration to be considered "reliable" for v4. Matches the
+/// 300-second floor used in the offline benchmark (analysis/rhr_v4_benchmark/rhr_v4_benchmark.py).
+const V4_MIN_EPISODE_DURATION_SECONDS: i64 = 300;
+
+/// Provisional: minimum quality-valid HR coverage fraction within an episode to be "reliable".
+/// Reuses `MIN_EPISODE_COVERAGE` (line 9) — the same constant HRV episode gating already uses in
+/// this file — rather than inventing a second, RHR-specific coverage threshold.
+const V4_MIN_EPISODE_COVERAGE: f64 = MIN_EPISODE_COVERAGE;
+
+/// Provisional: the 10% trim applied to an episode's quality-valid HR samples to form H_i.
+const V4_TRIM_FRACTION: f64 = 0.10;
+
+/// Provisional: duration (seconds) at which `duration_confidence` saturates to 1.0. A 30-minute
+/// episode gets the same duration_confidence as a 10-minute one once both clear this floor — this
+/// is the mechanism that stops a long early Deep episode from automatically outweighing a shorter,
+/// equally-clean later one just by being longer. Value chosen to match the same order of magnitude
+/// as `V4_MIN_EPISODE_DURATION_SECONDS` (2x it); not derived from data.
+const V4_DURATION_SATURATION_SECONDS: f64 = 600.0;
+
+/// Provisional: the disagreement collapse is intentionally absent here — v4 always blends F and L
+/// when they differ (Tier 1) rather than testing a threshold to decide whether to blend at all.
+/// A disagreement-triggered reconsideration policy was discussed as a design option but is NOT
+/// implemented in this shadow; it remains an open question pending WHOOP data (see report).
+
+/// One Deep/SWS episode's contribution to v4: a robust value paired with a reliability score that
+/// is provably independent of that value (nothing in `quality_confidence` below reads `value`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RhrV4Candidate {
+    /// H_i: 10%-trimmed mean of quality-valid HR samples in this episode. Never rounded.
+    pub value: f64,
+    /// Q_i in (0, 1]: `coverage * duration_confidence * stability_confidence`. See
+    /// `episode_quality_score` for the exact formula. HR value has zero influence on this.
+    pub quality: f64,
+    pub start: i64,
+    pub end: i64,
+    pub duration_seconds: i64,
+    /// Fraction of this episode's seconds that were quality-valid (in-range, not wrist-off, not
+    /// contamination-flagged) — the same `quality_valid` semantics `dynamic_rhr` uses.
+    pub coverage: f64,
+    /// MAD (median absolute deviation, bpm) of the episode's quality-valid samples — the
+    /// dispersion/stability signal. Lower = more stable. Independent of the episode's HR level.
+    pub stability_mad: f64,
+    pub sample_count: usize,
+}
+
+/// Which tier of the fallback hierarchy produced a given `RhrV4ShadowResult`. See the module doc
+/// on `dynamic_rhr_v4_shadow` for the full trigger/estimator/rationale table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RhrV4Tier {
+    /// >=2 reliable Deep episodes, final != lowest -> blend F and L.
+    FinalAndLowestDistinct,
+    /// >=2 reliable Deep episodes, final == lowest -> that episode alone, not double-counted.
+    FinalEqualsLowest,
+    /// Exactly 1 reliable Deep episode -> its H_i alone.
+    SingleReliableEpisode,
+    /// No individually reliable episode, but >=300s of pooled quality-valid Deep HR exists.
+    PooledDeep,
+    /// No usable Deep at all -> quality-filtered whole-sleep (non-Wake) robust estimate.
+    WholeSleep,
+    /// Not enough data anywhere to produce a value.
+    Unavailable,
+}
+
+/// Full shadow result: both blend variants (fixed 60/40 and reliability-weighted), full
+/// provenance for debugging/replay, and nothing written to canonical storage. `fixed_v4`/
+/// `quality_v4` collapse to the SAME single value outside Tier 1 (no second candidate to blend
+/// against), which is intentional — they only diverge from each other when F and L are both
+/// present and distinct.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RhrV4ShadowResult {
+    pub algorithm_version: &'static str,
+    pub tier: RhrV4Tier,
+    /// Unrounded. `0.60*H_F + 0.40*H_L` in Tier 1; the tier's single value otherwise.
+    pub fixed_v4_raw: Option<f64>,
+    /// Unrounded. `(Q_F*H_F + Q_L*H_L) / (Q_F+Q_L)` in Tier 1; the tier's single value otherwise.
+    pub quality_v4_raw: Option<f64>,
+    /// Half-up rounded presentation values — the ONLY rounding boundary in this pipeline.
+    pub fixed_v4: Option<i32>,
+    pub quality_v4: Option<i32>,
+    pub final_candidate: Option<RhrV4Candidate>,
+    pub lowest_candidate: Option<RhrV4Candidate>,
+    pub final_equals_lowest: bool,
+    pub qualifying_deep_episodes: usize,
+}
+
+fn v4_round_half_up(x: f64) -> i32 {
+    (x + 0.5).floor() as i32
+}
+
+fn v4_trimmed_mean(mut values: Vec<i32>) -> f64 {
+    values.sort_unstable();
+    let n = values.len();
+    let trim = ((n as f64 * V4_TRIM_FRACTION).floor() as usize).min(n / 2);
+    let kept = &values[trim..n - trim];
+    kept.iter().map(|&v| v as f64).sum::<f64>() / kept.len() as f64
+}
+
+/// MAD of a bpm sample set, computed the same way `weighted_huber_location` computes its residual
+/// scale elsewhere in this file (sort, median, absolute deviations, median of those) — reused here
+/// as a stability signal rather than inventing a second dispersion measure for this module.
+fn v4_mad(values: &[i32]) -> f64 {
+    let floats: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+    let mut sorted = floats.clone();
+    sorted.sort_by(f64::total_cmp);
+    let med = median_f64(&sorted);
+    let mut deviations: Vec<f64> = floats.iter().map(|&v| (v - med).abs()).collect();
+    deviations.sort_by(f64::total_cmp);
+    median_f64(&deviations)
+}
+
+/// `Q_i = coverage * duration_confidence * stability_confidence`. Every factor is derived only
+/// from reliability information (coverage, duration, dispersion) — NEVER from the episode's HR
+/// value — so a low-HR episode can never score higher quality purely for being low.
+/// `duration_confidence` saturates at `V4_DURATION_SATURATION_SECONDS` so a long episode cannot
+/// automatically out-rank a shorter, equally clean one. `stability_confidence = 1/(1+MAD)` is a
+/// simple, bounded, monotonically-decreasing-in-dispersion mapping — deliberately not a more
+/// elaborate model, per the "keep it small and explainable" brief.
+fn v4_quality_score(duration_seconds: i64, coverage: f64, stability_mad: f64) -> f64 {
+    let duration_confidence = (duration_seconds as f64 / V4_DURATION_SATURATION_SECONDS).min(1.0);
+    let stability_confidence = 1.0 / (1.0 + stability_mad);
+    coverage * duration_confidence * stability_confidence
+}
+
+/// Builds one `RhrV4Candidate` for a Deep span if it qualifies (duration + coverage gates), else
+/// `None`. `quality_hr` is the same `quality_gated_hr` output `dynamic_rhr`/`nightly_physiology`
+/// already compute — no separate quality pass is run for v4.
+fn v4_episode_candidate(
+    span_start: i64,
+    span_end: i64,
+    sleep_start: i64,
+    sleep_end: i64,
+    quality_hr: &[QualityHrSample],
+) -> Option<RhrV4Candidate> {
+    let start = span_start.max(sleep_start);
+    let end = span_end.min(sleep_end);
+    let duration_seconds = end - start;
+    if duration_seconds < V4_MIN_EPISODE_DURATION_SECONDS {
+        return None;
+    }
+    let valid: Vec<i32> = quality_hr
+        .iter()
+        .filter(|s| s.unix >= start && s.unix < end && s.quality_valid)
+        .map(|s| s.bpm)
+        .collect();
+    if valid.is_empty() {
+        return None;
+    }
+    let coverage = valid.len() as f64 / duration_seconds as f64;
+    if coverage < V4_MIN_EPISODE_COVERAGE {
+        return None;
+    }
+    let stability_mad = v4_mad(&valid);
+    let sample_count = valid.len();
+    let value = v4_trimmed_mean(valid);
+    let quality = v4_quality_score(duration_seconds, coverage, stability_mad);
+    Some(RhrV4Candidate {
+        value,
+        quality,
+        start,
+        end,
+        duration_seconds,
+        coverage,
+        stability_mad,
+        sample_count,
+    })
+}
+
+/// The v4 shadow entry point. Same raw-stream inputs as `nightly_physiology` (so it can be called
+/// side-by-side in a replay harness with no separate quality pass), but computed and returned
+/// independently — nothing here feeds back into `nightly_physiology`, `dynamic_rhr`, or any
+/// persisted value. See the module banner above for the full design rationale.
+///
+/// Fallback hierarchy (see `RhrV4Tier` for the enum, this is the trigger/estimator/rationale):
+///
+/// | Tier | Trigger                                                          | Estimator                          |
+/// |------|-------------------------------------------------------------------|-------------------------------------|
+/// | 1    | >=2 reliable Deep episodes, final != lowest                       | blend of H_F and H_L (both variants)|
+/// | 2    | >=2 reliable Deep episodes, final == lowest                       | H of that one episode               |
+/// | 3    | exactly 1 reliable Deep episode                                   | its H_i                             |
+/// | 4    | no reliable episode, but >=300s pooled quality-valid Deep HR       | trimmed mean of pooled Deep samples |
+/// | 5    | no usable Deep at all                                             | trimmed mean of whole-sleep (non-Wake) quality-valid samples |
+/// | 6    | insufficient data anywhere                                        | `None`                              |
+///
+/// Never falls back to a raw minimum at any tier.
+pub fn dynamic_rhr_v4_shadow(
+    sleep_start: i64,
+    sleep_end: i64,
+    hr: &[HrSample],
+    accel: &[AccelSample],
+    wrist_off: &[(i64, i64)],
+    stages: &[StageSegment],
+) -> RhrV4ShadowResult {
+    let quality_hr = quality_gated_hr(sleep_start, sleep_end, hr, accel, wrist_off);
+
+    let mut candidates: Vec<RhrV4Candidate> = stages
+        .iter()
+        .filter(|s| s.stage == SleepStage::Deep)
+        .filter_map(|s| v4_episode_candidate(s.start, s.end, sleep_start, sleep_end, &quality_hr))
+        .collect();
+    candidates.sort_by_key(|c| c.start);
+
+    let empty_result = |tier: RhrV4Tier, value: Option<f64>| RhrV4ShadowResult {
+        algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+        tier,
+        fixed_v4_raw: value,
+        quality_v4_raw: value,
+        fixed_v4: value.map(v4_round_half_up),
+        quality_v4: value.map(v4_round_half_up),
+        final_candidate: None,
+        lowest_candidate: None,
+        final_equals_lowest: false,
+        qualifying_deep_episodes: 0,
+    };
+
+    if candidates.is_empty() {
+        // Tier 4: pooled Deep, regardless of any single episode's own reliability.
+        let pooled: Vec<i32> = stages
+            .iter()
+            .filter(|s| s.stage == SleepStage::Deep)
+            .flat_map(|s| {
+                let start = s.start.max(sleep_start);
+                let end = s.end.min(sleep_end);
+                quality_hr
+                    .iter()
+                    .filter(move |q| q.unix >= start && q.unix < end && q.quality_valid)
+                    .map(|q| q.bpm)
+            })
+            .collect();
+        if pooled.len() as i64 >= V4_MIN_EPISODE_DURATION_SECONDS {
+            return empty_result(RhrV4Tier::PooledDeep, Some(v4_trimmed_mean(pooled)));
+        }
+        // Tier 5: whole-sleep (non-Wake) quality-valid samples.
+        let stage_at = |unix: i64| {
+            stages
+                .iter()
+                .find(|segment| unix >= segment.start && unix < segment.end)
+                .map(|segment| segment.stage)
+        };
+        let whole: Vec<i32> = quality_hr
+            .iter()
+            .filter(|q| {
+                q.quality_valid && stage_at(q.unix).is_some_and(|st| st != SleepStage::Wake)
+            })
+            .map(|q| q.bpm)
+            .collect();
+        if whole.is_empty() {
+            return empty_result(RhrV4Tier::Unavailable, None);
+        }
+        return empty_result(RhrV4Tier::WholeSleep, Some(v4_trimmed_mean(whole)));
+    }
+
+    if candidates.len() == 1 {
+        let only = candidates.into_iter().next().unwrap();
+        let value = only.value;
+        return RhrV4ShadowResult {
+            algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+            tier: RhrV4Tier::SingleReliableEpisode,
+            fixed_v4_raw: Some(value),
+            quality_v4_raw: Some(value),
+            fixed_v4: Some(v4_round_half_up(value)),
+            quality_v4: Some(v4_round_half_up(value)),
+            final_candidate: Some(only.clone()),
+            lowest_candidate: Some(only),
+            final_equals_lowest: true,
+            qualifying_deep_episodes: 1,
+        };
+    }
+
+    let qualifying_deep_episodes = candidates.len();
+    let final_candidate = candidates.last().cloned().unwrap();
+    let lowest_candidate = candidates
+        .iter()
+        .cloned()
+        .min_by(|a, b| a.value.total_cmp(&b.value))
+        .unwrap();
+    let final_equals_lowest = final_candidate.start == lowest_candidate.start;
+
+    if final_equals_lowest {
+        let value = final_candidate.value;
+        return RhrV4ShadowResult {
+            algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+            tier: RhrV4Tier::FinalEqualsLowest,
+            fixed_v4_raw: Some(value),
+            quality_v4_raw: Some(value),
+            fixed_v4: Some(v4_round_half_up(value)),
+            quality_v4: Some(v4_round_half_up(value)),
+            final_candidate: Some(final_candidate),
+            lowest_candidate: Some(lowest_candidate),
+            final_equals_lowest: true,
+            qualifying_deep_episodes,
+        };
+    }
+
+    let (h_f, h_l) = (final_candidate.value, lowest_candidate.value);
+    let (q_f, q_l) = (final_candidate.quality, lowest_candidate.quality);
+    let fixed_raw = 0.60 * h_f + 0.40 * h_l;
+    let quality_raw = (q_f * h_f + q_l * h_l) / (q_f + q_l);
+
+    RhrV4ShadowResult {
+        algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+        tier: RhrV4Tier::FinalAndLowestDistinct,
+        fixed_v4_raw: Some(fixed_raw),
+        quality_v4_raw: Some(quality_raw),
+        fixed_v4: Some(v4_round_half_up(fixed_raw)),
+        quality_v4: Some(v4_round_half_up(quality_raw)),
+        final_candidate: Some(final_candidate),
+        lowest_candidate: Some(lowest_candidate),
+        final_equals_lowest: false,
+        qualifying_deep_episodes,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1332,5 +1664,200 @@ mod tests {
             ..Default::default()
         });
         assert!(score.is_some());
+    }
+}
+
+#[cfg(test)]
+mod rhr_v4_shadow_tests {
+    use super::*;
+
+    /// One second of HR per tick across `[start, end)`, all at `bpm` — the plain building block
+    /// every fixture below composes from.
+    fn flat_hr(start: i64, end: i64, bpm: u16) -> Vec<HrSample> {
+        (start..end).map(|ts| HrSample { ts, bpm }).collect()
+    }
+
+    fn deep(start: i64, end: i64) -> StageSegment {
+        StageSegment { start, end, stage: SleepStage::Deep }
+    }
+
+    fn light(start: i64, end: i64) -> StageSegment {
+        StageSegment { start, end, stage: SleepStage::Light }
+    }
+
+    const NO_ACCEL: &[AccelSample] = &[];
+    const NO_WRIST_OFF: &[(i64, i64)] = &[];
+
+    #[test]
+    fn final_and_lowest_distinct_blends_both_variants() {
+        // Episode 1 (early, warm, 600s): H ~60. Episode 2 (final, cooler, 600s): H ~50.
+        // Final (ep2) != lowest (ep2 is also the lowest here would collapse to Tier 2, so make a
+        // THIRD, middle episode the lowest instead, keeping final (ep3, warmer again) distinct.
+        let hr = [flat_hr(0, 600, 60), flat_hr(1200, 1800, 48), flat_hr(2400, 3000, 55)].concat();
+        let stages = [deep(0, 600), deep(1200, 1800), deep(2400, 3000)];
+        let r = dynamic_rhr_v4_shadow(0, 3000, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::FinalAndLowestDistinct);
+        assert_eq!(r.qualifying_deep_episodes, 3);
+        let f = r.final_candidate.as_ref().unwrap();
+        let l = r.lowest_candidate.as_ref().unwrap();
+        assert_eq!(f.start, 2400, "final must be the chronologically last qualifying episode");
+        assert_eq!(l.start, 1200, "lowest must be the lowest-valued qualifying episode, not ep1");
+        assert!(!r.final_equals_lowest);
+        let expected_fixed = 0.60 * f.value + 0.40 * l.value;
+        assert!((r.fixed_v4_raw.unwrap() - expected_fixed).abs() < 1e-9);
+        assert_eq!(r.fixed_v4, Some(v4_round_half_up(expected_fixed)));
+        // quality-weighted variant differs from the fixed one whenever Q_F != Q_L (same duration
+        // here, so this mainly documents that both variants are computed and both are present).
+        assert!(r.quality_v4_raw.is_some());
+    }
+
+    #[test]
+    fn final_equals_lowest_uses_the_single_value_without_double_counting() {
+        // Three qualifying episodes; the LAST one is also the lowest-valued one.
+        let hr = [flat_hr(0, 600, 60), flat_hr(1200, 1800, 55), flat_hr(2400, 3000, 47)].concat();
+        let stages = [deep(0, 600), deep(1200, 1800), deep(2400, 3000)];
+        let r = dynamic_rhr_v4_shadow(0, 3000, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::FinalEqualsLowest);
+        assert_eq!(r.qualifying_deep_episodes, 3, "all 3 episodes were seen, not collapsed away");
+        let f = r.final_candidate.as_ref().unwrap();
+        let l = r.lowest_candidate.as_ref().unwrap();
+        assert_eq!(f.start, l.start, "final and lowest must be the SAME episode");
+        assert!(r.final_equals_lowest);
+        assert_eq!(r.fixed_v4_raw, r.quality_v4_raw);
+        assert!((r.fixed_v4_raw.unwrap() - 47.0).abs() < 1e-9);
+        assert_eq!(r.fixed_v4, Some(47));
+        assert_eq!(r.quality_v4, Some(47));
+    }
+
+    #[test]
+    fn exactly_one_reliable_deep_episode_uses_its_own_value() {
+        let hr = flat_hr(0, 600, 51);
+        let stages = [deep(0, 600)];
+        let r = dynamic_rhr_v4_shadow(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::SingleReliableEpisode);
+        assert_eq!(r.qualifying_deep_episodes, 1);
+        assert_eq!(r.fixed_v4, Some(51));
+        assert_eq!(r.quality_v4, Some(51));
+        assert!(r.final_equals_lowest);
+    }
+
+    #[test]
+    fn short_final_deep_fragment_is_never_selected_merely_for_being_low() {
+        // A long, reliable early episode at 55, then a 120-second (< 300s floor) FINAL fragment
+        // at a much lower 40 bpm. The fragment must be rejected outright, not chosen as "final".
+        let hr = [flat_hr(0, 600, 55), flat_hr(900, 1020, 40)].concat();
+        let stages = [deep(0, 600), deep(900, 1020)];
+        let r = dynamic_rhr_v4_shadow(0, 1020, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::SingleReliableEpisode, "the 120s fragment must not qualify");
+        assert_eq!(r.qualifying_deep_episodes, 1);
+        assert_eq!(r.fixed_v4, Some(55), "must reflect the long episode, not the rejected 40bpm fragment");
+    }
+
+    #[test]
+    fn fragmented_deep_with_no_reliable_episode_falls_back_to_pooled_deep() {
+        // Five Deep fragments, each 120s (< 300s floor) so none is individually reliable, but
+        // their pooled quality-valid seconds (600s) clears the 300s pooled-Deep floor.
+        let mut hr = Vec::new();
+        let mut stages = Vec::new();
+        for i in 0..5 {
+            let start = i * 300;
+            hr.extend(flat_hr(start, start + 120, 48));
+            stages.push(deep(start, start + 120));
+        }
+        let r = dynamic_rhr_v4_shadow(0, 1500, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::PooledDeep);
+        assert_eq!(r.qualifying_deep_episodes, 0);
+        assert_eq!(r.fixed_v4, Some(48));
+    }
+
+    #[test]
+    fn no_deep_at_all_falls_back_to_whole_sleep_not_raw_minimum() {
+        let hr = [flat_hr(0, 600, 58), flat_hr(600, 1200, 62)].concat();
+        let stages = [light(0, 1200)];
+        let r = dynamic_rhr_v4_shadow(0, 1200, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::WholeSleep);
+        assert_eq!(r.qualifying_deep_episodes, 0);
+        // trimmed mean of {58*600, 62*600} must sit near 60, nowhere near the raw min (58).
+        assert!(r.fixed_v4.unwrap() >= 59);
+    }
+
+    #[test]
+    fn wrist_off_contamination_can_drop_an_episode_below_the_coverage_gate() {
+        // A 600s Deep episode where 200s (33%) is wrist-off: coverage drops to ~0.67, below the
+        // 0.80 floor, so it must NOT qualify, even though 300s of raw duration is enough on paper.
+        let hr = flat_hr(0, 600, 50);
+        let stages = [deep(0, 600)];
+        let wrist_off = [(0i64, 200i64)];
+        let r = dynamic_rhr_v4_shadow(0, 600, &hr, NO_ACCEL, &wrist_off, &stages);
+        assert_ne!(r.tier, RhrV4Tier::SingleReliableEpisode, "contaminated episode must not qualify");
+        assert_eq!(r.qualifying_deep_episodes, 0);
+    }
+
+    #[test]
+    fn poor_sample_coverage_is_rejected_even_with_enough_duration() {
+        // 600s span, but only every 3rd second has a sample -> ~33% coverage, well under 0.80.
+        let hr: Vec<HrSample> = (0..600).step_by(3).map(|ts| HrSample { ts, bpm: 49 }).collect();
+        let stages = [deep(0, 600)];
+        let r = dynamic_rhr_v4_shadow(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.qualifying_deep_episodes, 0, "sparse coverage must fail the reliability gate");
+    }
+
+    #[test]
+    fn duration_confidence_saturates_instead_of_growing_without_bound() {
+        // Same coverage (1.0) and stability (0.0 MAD, flat bpm) at three durations either side of
+        // the saturation point: a 10-min episode must NOT score 3x a 30-min one.
+        let q_10min = v4_quality_score(600, 1.0, 0.0);
+        let q_20min = v4_quality_score(1200, 1.0, 0.0);
+        let q_30min = v4_quality_score(1800, 1.0, 0.0);
+        assert!((q_10min - 1.0).abs() < 1e-9, "600s == the saturation point -> confidence 1.0");
+        assert!((q_20min - 1.0).abs() < 1e-9);
+        assert!((q_30min - 1.0).abs() < 1e-9, "no unbounded growth past saturation");
+        assert_eq!(q_10min, q_30min, "a 3x-longer episode must not get 3x the confidence");
+        // Below saturation, confidence scales linearly, not to zero and not to 1.0 early.
+        let q_5min = v4_quality_score(300, 1.0, 0.0);
+        assert!((q_5min - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn low_hr_does_not_increase_quality() {
+        // Two episodes, identical duration/coverage/dispersion, differing ONLY in absolute HR
+        // level (45 vs 65). Their quality scores must be exactly equal.
+        let hr = [flat_hr(0, 600, 45), flat_hr(1200, 1800, 65)].concat();
+        let stages = [deep(0, 600), deep(1200, 1800)];
+        let r = dynamic_rhr_v4_shadow(0, 1800, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let f = r.final_candidate.as_ref().unwrap();
+        let l = r.lowest_candidate.as_ref().unwrap();
+        assert!((f.value - 65.0).abs() < 1e-9);
+        assert!((l.value - 45.0).abs() < 1e-9);
+        assert!(
+            (f.quality - l.quality).abs() < 1e-9,
+            "the 45bpm episode must not score higher quality merely for being lower: {} vs {}",
+            l.quality, f.quality
+        );
+    }
+
+    #[test]
+    fn intermediate_candidate_values_are_never_pre_rounded() {
+        // 300 samples: 240 at 47bpm, 60 at 50bpm -> 10%-trimmed mean is a genuine non-integer
+        // (47.375), not something that happens to land on a whole number.
+        let mut hr: Vec<HrSample> = (0..240).map(|ts| HrSample { ts, bpm: 47 }).collect();
+        hr.extend((240..300).map(|ts| HrSample { ts, bpm: 50 }));
+        let stages = [deep(0, 300)];
+        let r = dynamic_rhr_v4_shadow(0, 300, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let value = r.final_candidate.as_ref().unwrap().value;
+        assert!((value - 47.375).abs() < 1e-9, "got {value}");
+        assert!(r.fixed_v4_raw.unwrap().fract().abs() > 1e-9, "raw value must retain its fraction");
+        assert_eq!(r.fixed_v4, Some(47), "only the FINAL presentation value is rounded");
+    }
+
+    #[test]
+    fn final_rounding_is_deterministic_half_up() {
+        assert_eq!(v4_round_half_up(49.5), 50, "ties round toward positive infinity");
+        assert_eq!(v4_round_half_up(49.4999), 49);
+        assert_eq!(v4_round_half_up(49.5001), 50);
+        assert_eq!(v4_round_half_up(-0.5), 0, "the ties-up convention applies uniformly");
+        // Same input rounded twice must be bit-for-bit identical (no hidden nondeterminism from
+        // iteration order, hashing, or float-summation order across repeated calls).
+        assert_eq!(v4_round_half_up(52.5), v4_round_half_up(52.5));
     }
 }

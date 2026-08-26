@@ -42,7 +42,3 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 
-# Local override: btleplug fork implementing the WinRT `add_peripheral` (connect-by-address) fix, so a
-# bonded/connected band is reachable without an advertisement. Pending upstream PR to deviceplug/btleplug.
-[patch.crates-io]
-btleplug = { path = "../btleplug" }
