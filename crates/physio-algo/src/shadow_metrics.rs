@@ -176,13 +176,21 @@ pub fn dynamic_rhr(
 #[derive(Clone, Debug, PartialEq)]
 pub struct NightlyPhysiologyResult {
     pub algorithm_version: &'static str,
+    /// v3 dynamic-RHR output. Kept for research/testing (see the v3-vs-v4 parity benchmark) and no
+    /// longer read by noop-engine for the authoritative nightly RHR - see `rhr_v4` for that.
     pub rhr: Option<DynamicRhrResult>,
+    /// v4 quality-weighted RHR output - the authoritative nightly RHR as of
+    /// `ALGORITHM_VERSION_V4`. `rhr_v4.quality_v4` is the production value; `rhr_v4.fixed_v4` is
+    /// the fixed-60/40 variant, kept for research/debug only and never used as authoritative.
+    pub rhr_v4: RhrV4Result,
     pub hrv: FinalSwsHrvResult,
     /// Audit-only quality facts for every Deep episode considered by final-SWS HRV.
     pub deep_episodes: Vec<DeepEpisodeQuality>,
 }
 
-/// Computes both immutable v3 nightly metrics from one staged sleep span and its raw streams.
+/// Computes the immutable nightly physiology metrics from one staged sleep span and its raw
+/// streams: authoritative v4 RHR (`rhr_v4`, see `dynamic_rhr_v4`), the v3 RHR kept for research/
+/// parity (`rhr`, see `dynamic_rhr`, unchanged), and final-SWS HRV (`hrv`, unchanged).
 pub fn nightly_physiology(
     sleep_start: i64,
     sleep_end: i64,
@@ -221,8 +229,13 @@ pub fn nightly_physiology(
         })
         .collect();
     NightlyPhysiologyResult {
-        algorithm_version: ALGORITHM_VERSION,
+        // The bundle-level stamp: what noop-engine emits as `algorithm_version` (and what
+        // ultimately reaches daily_metrics/daily_canonical/sleep_sessions) now that v4 RHR is
+        // authoritative. The nested `hrv` result below keeps its own, unrelated v3 stamp - see
+        // `ALGORITHM_VERSION` and `final_sws_last_five_hrv_with_streams`, both unchanged.
+        algorithm_version: ALGORITHM_VERSION_V4,
         rhr: dynamic_rhr(sleep_start, sleep_end, &quality_hr, stages),
+        rhr_v4: dynamic_rhr_v4(sleep_start, sleep_end, hr, accel, wrist_off, stages),
         hrv: final_sws_last_five_hrv_with_streams(
             &episodes,
             &reports,
@@ -986,9 +999,10 @@ fn median_f64(values: &[f64]) -> f64 {
 }
 
 // ============================================================================================
-// RHR v4 — SHADOW ONLY. Not called from `nightly_physiology`, not wired into `noop-engine`, and
-// never persisted. Exists purely for offline replay/calibration against future WHOOP reference
-// data (see analysis/rhr_v4_benchmark/). Production RHR remains exactly `dynamic_rhr` above.
+// RHR v4 — AUTHORITATIVE. Called from `nightly_physiology` (via `dynamic_rhr_v4`, below) and wired
+// into `noop-engine` as the nightly RHR that is persisted to `daily_metrics`/`daily_canonical`
+// (and, per-session, to `sleep_sessions`). `dynamic_rhr` (v3, above) is kept unchanged and directly
+// callable/testable for research and parity comparison, but is no longer read by noop-engine.
 //
 // Design (episode-level, not epoch-level, unlike v3): for every qualifying Deep/SWS episode,
 // compute one robust HR value H_i (10% trimmed mean of quality-valid samples) and one reliability
@@ -996,14 +1010,17 @@ fn median_f64(values: &[f64]) -> f64 {
 // compare the FINAL qualifying episode (F) against the LOWEST-valued qualifying episode (L) and
 // either use one (if they coincide, or only one/no second candidate exists) or blend both.
 //
-// All duration/coverage/weighting constants below are explicitly provisional — see the
-// "provisional" doc comment on each — and are only defensible pending real WHOOP reference data.
+// The AUTHORITATIVE nightly RHR is `quality_v4` — the reliability-weighted blend
+// `(Q_F*H_F + Q_L*H_L) / (Q_F+Q_L)`. `fixed_v4` (the fixed-60/40 blend) is kept only for
+// research/debug comparison and is never read as the production value.
 // ============================================================================================
 
-/// Current algorithm version string for this shadow, kept distinct from `ALGORITHM_VERSION` at the
-/// top of this file so it can never be confused with — or accidentally stamped as — the production
-/// v3 identifier. Never written to canonical storage; carried only on `RhrV4ShadowResult`.
-pub const ALGORITHM_VERSION_V4_SHADOW: &str = "physiology-rhr-v4-shadow";
+/// Algorithm version string for the v4 nightly-RHR pipeline. Distinct from `ALGORITHM_VERSION`
+/// (the v3 identifier, kept unchanged above) so the two can never be confused. This is the
+/// identifier `nightly_physiology`/`noop-engine` now stamp as the immutable physiology algorithm
+/// version, and the one persisted to `daily_metrics.physiology_algorithm_version` /
+/// `daily_canonical.algorithm_version` / `sleep_sessions.algorithm_version`.
+pub const ALGORITHM_VERSION_V4: &str = "physiology-dynamic-rhr-sws-v4";
 
 /// Provisional: minimum Deep-episode duration to be considered "reliable" for v4. Matches the
 /// 300-second floor used in the offline benchmark (analysis/rhr_v4_benchmark/rhr_v4_benchmark.py).
@@ -1050,8 +1067,8 @@ pub struct RhrV4Candidate {
     pub sample_count: usize,
 }
 
-/// Which tier of the fallback hierarchy produced a given `RhrV4ShadowResult`. See the module doc
-/// on `dynamic_rhr_v4_shadow` for the full trigger/estimator/rationale table.
+/// Which tier of the fallback hierarchy produced a given `RhrV4Result`. See the module doc
+/// on `dynamic_rhr_v4` for the full trigger/estimator/rationale table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RhrV4Tier {
     /// >=2 reliable Deep episodes, final != lowest -> blend F and L.
@@ -1068,13 +1085,14 @@ pub enum RhrV4Tier {
     Unavailable,
 }
 
-/// Full shadow result: both blend variants (fixed 60/40 and reliability-weighted), full
-/// provenance for debugging/replay, and nothing written to canonical storage. `fixed_v4`/
-/// `quality_v4` collapse to the SAME single value outside Tier 1 (no second candidate to blend
-/// against), which is intentional — they only diverge from each other when F and L are both
-/// present and distinct.
+/// Full v4 result: both blend variants (fixed 60/40 and reliability-weighted) plus full provenance
+/// for debugging/replay. `quality_v4` is the authoritative nightly RHR persisted to canonical
+/// storage; `fixed_v4` is kept for research/debug comparison only and is never used as the
+/// authoritative value. `fixed_v4`/`quality_v4` collapse to the SAME single value outside Tier 1
+/// (no second candidate to blend against), which is intentional — they only diverge from each
+/// other when F and L are both present and distinct.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RhrV4ShadowResult {
+pub struct RhrV4Result {
     pub algorithm_version: &'static str,
     pub tier: RhrV4Tier,
     /// Unrounded. `0.60*H_F + 0.40*H_L` in Tier 1; the tier's single value otherwise.
@@ -1172,10 +1190,11 @@ fn v4_episode_candidate(
     })
 }
 
-/// The v4 shadow entry point. Same raw-stream inputs as `nightly_physiology` (so it can be called
-/// side-by-side in a replay harness with no separate quality pass), but computed and returned
-/// independently — nothing here feeds back into `nightly_physiology`, `dynamic_rhr`, or any
-/// persisted value. See the module banner above for the full design rationale.
+/// The v4 entry point — the authoritative nightly RHR. Called directly from `nightly_physiology`
+/// (see the `rhr_v4` field it populates), and also directly callable on its own for research/
+/// replay with the same raw-stream inputs `nightly_physiology` takes. `dynamic_rhr` (v3, above)
+/// remains fully independent of this function and is unaffected by it. See the module banner
+/// above for the full design rationale.
 ///
 /// Fallback hierarchy (see `RhrV4Tier` for the enum, this is the trigger/estimator/rationale):
 ///
@@ -1189,14 +1208,14 @@ fn v4_episode_candidate(
 /// | 6    | insufficient data anywhere                                        | `None`                              |
 ///
 /// Never falls back to a raw minimum at any tier.
-pub fn dynamic_rhr_v4_shadow(
+pub fn dynamic_rhr_v4(
     sleep_start: i64,
     sleep_end: i64,
     hr: &[HrSample],
     accel: &[AccelSample],
     wrist_off: &[(i64, i64)],
     stages: &[StageSegment],
-) -> RhrV4ShadowResult {
+) -> RhrV4Result {
     let quality_hr = quality_gated_hr(sleep_start, sleep_end, hr, accel, wrist_off);
 
     let mut candidates: Vec<RhrV4Candidate> = stages
@@ -1206,8 +1225,8 @@ pub fn dynamic_rhr_v4_shadow(
         .collect();
     candidates.sort_by_key(|c| c.start);
 
-    let empty_result = |tier: RhrV4Tier, value: Option<f64>| RhrV4ShadowResult {
-        algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+    let empty_result = |tier: RhrV4Tier, value: Option<f64>| RhrV4Result {
+        algorithm_version: ALGORITHM_VERSION_V4,
         tier,
         fixed_v4_raw: value,
         quality_v4_raw: value,
@@ -1259,8 +1278,8 @@ pub fn dynamic_rhr_v4_shadow(
     if candidates.len() == 1 {
         let only = candidates.into_iter().next().unwrap();
         let value = only.value;
-        return RhrV4ShadowResult {
-            algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+        return RhrV4Result {
+            algorithm_version: ALGORITHM_VERSION_V4,
             tier: RhrV4Tier::SingleReliableEpisode,
             fixed_v4_raw: Some(value),
             quality_v4_raw: Some(value),
@@ -1284,8 +1303,8 @@ pub fn dynamic_rhr_v4_shadow(
 
     if final_equals_lowest {
         let value = final_candidate.value;
-        return RhrV4ShadowResult {
-            algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+        return RhrV4Result {
+            algorithm_version: ALGORITHM_VERSION_V4,
             tier: RhrV4Tier::FinalEqualsLowest,
             fixed_v4_raw: Some(value),
             quality_v4_raw: Some(value),
@@ -1303,8 +1322,8 @@ pub fn dynamic_rhr_v4_shadow(
     let fixed_raw = 0.60 * h_f + 0.40 * h_l;
     let quality_raw = (q_f * h_f + q_l * h_l) / (q_f + q_l);
 
-    RhrV4ShadowResult {
-        algorithm_version: ALGORITHM_VERSION_V4_SHADOW,
+    RhrV4Result {
+        algorithm_version: ALGORITHM_VERSION_V4,
         tier: RhrV4Tier::FinalAndLowestDistinct,
         fixed_v4_raw: Some(fixed_raw),
         quality_v4_raw: Some(quality_raw),
@@ -1668,7 +1687,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod rhr_v4_shadow_tests {
+mod rhr_v4_tests {
     use super::*;
 
     /// One second of HR per tick across `[start, end)`, all at `bpm` — the plain building block
@@ -1695,7 +1714,7 @@ mod rhr_v4_shadow_tests {
         // THIRD, middle episode the lowest instead, keeping final (ep3, warmer again) distinct.
         let hr = [flat_hr(0, 600, 60), flat_hr(1200, 1800, 48), flat_hr(2400, 3000, 55)].concat();
         let stages = [deep(0, 600), deep(1200, 1800), deep(2400, 3000)];
-        let r = dynamic_rhr_v4_shadow(0, 3000, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 3000, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.tier, RhrV4Tier::FinalAndLowestDistinct);
         assert_eq!(r.qualifying_deep_episodes, 3);
         let f = r.final_candidate.as_ref().unwrap();
@@ -1716,7 +1735,7 @@ mod rhr_v4_shadow_tests {
         // Three qualifying episodes; the LAST one is also the lowest-valued one.
         let hr = [flat_hr(0, 600, 60), flat_hr(1200, 1800, 55), flat_hr(2400, 3000, 47)].concat();
         let stages = [deep(0, 600), deep(1200, 1800), deep(2400, 3000)];
-        let r = dynamic_rhr_v4_shadow(0, 3000, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 3000, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.tier, RhrV4Tier::FinalEqualsLowest);
         assert_eq!(r.qualifying_deep_episodes, 3, "all 3 episodes were seen, not collapsed away");
         let f = r.final_candidate.as_ref().unwrap();
@@ -1733,7 +1752,7 @@ mod rhr_v4_shadow_tests {
     fn exactly_one_reliable_deep_episode_uses_its_own_value() {
         let hr = flat_hr(0, 600, 51);
         let stages = [deep(0, 600)];
-        let r = dynamic_rhr_v4_shadow(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.tier, RhrV4Tier::SingleReliableEpisode);
         assert_eq!(r.qualifying_deep_episodes, 1);
         assert_eq!(r.fixed_v4, Some(51));
@@ -1747,7 +1766,7 @@ mod rhr_v4_shadow_tests {
         // at a much lower 40 bpm. The fragment must be rejected outright, not chosen as "final".
         let hr = [flat_hr(0, 600, 55), flat_hr(900, 1020, 40)].concat();
         let stages = [deep(0, 600), deep(900, 1020)];
-        let r = dynamic_rhr_v4_shadow(0, 1020, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 1020, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.tier, RhrV4Tier::SingleReliableEpisode, "the 120s fragment must not qualify");
         assert_eq!(r.qualifying_deep_episodes, 1);
         assert_eq!(r.fixed_v4, Some(55), "must reflect the long episode, not the rejected 40bpm fragment");
@@ -1764,7 +1783,7 @@ mod rhr_v4_shadow_tests {
             hr.extend(flat_hr(start, start + 120, 48));
             stages.push(deep(start, start + 120));
         }
-        let r = dynamic_rhr_v4_shadow(0, 1500, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 1500, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.tier, RhrV4Tier::PooledDeep);
         assert_eq!(r.qualifying_deep_episodes, 0);
         assert_eq!(r.fixed_v4, Some(48));
@@ -1774,7 +1793,7 @@ mod rhr_v4_shadow_tests {
     fn no_deep_at_all_falls_back_to_whole_sleep_not_raw_minimum() {
         let hr = [flat_hr(0, 600, 58), flat_hr(600, 1200, 62)].concat();
         let stages = [light(0, 1200)];
-        let r = dynamic_rhr_v4_shadow(0, 1200, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 1200, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.tier, RhrV4Tier::WholeSleep);
         assert_eq!(r.qualifying_deep_episodes, 0);
         // trimmed mean of {58*600, 62*600} must sit near 60, nowhere near the raw min (58).
@@ -1788,7 +1807,7 @@ mod rhr_v4_shadow_tests {
         let hr = flat_hr(0, 600, 50);
         let stages = [deep(0, 600)];
         let wrist_off = [(0i64, 200i64)];
-        let r = dynamic_rhr_v4_shadow(0, 600, &hr, NO_ACCEL, &wrist_off, &stages);
+        let r = dynamic_rhr_v4(0, 600, &hr, NO_ACCEL, &wrist_off, &stages);
         assert_ne!(r.tier, RhrV4Tier::SingleReliableEpisode, "contaminated episode must not qualify");
         assert_eq!(r.qualifying_deep_episodes, 0);
     }
@@ -1798,7 +1817,7 @@ mod rhr_v4_shadow_tests {
         // 600s span, but only every 3rd second has a sample -> ~33% coverage, well under 0.80.
         let hr: Vec<HrSample> = (0..600).step_by(3).map(|ts| HrSample { ts, bpm: 49 }).collect();
         let stages = [deep(0, 600)];
-        let r = dynamic_rhr_v4_shadow(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         assert_eq!(r.qualifying_deep_episodes, 0, "sparse coverage must fail the reliability gate");
     }
 
@@ -1824,7 +1843,7 @@ mod rhr_v4_shadow_tests {
         // level (45 vs 65). Their quality scores must be exactly equal.
         let hr = [flat_hr(0, 600, 45), flat_hr(1200, 1800, 65)].concat();
         let stages = [deep(0, 600), deep(1200, 1800)];
-        let r = dynamic_rhr_v4_shadow(0, 1800, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 1800, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         let f = r.final_candidate.as_ref().unwrap();
         let l = r.lowest_candidate.as_ref().unwrap();
         assert!((f.value - 65.0).abs() < 1e-9);
@@ -1843,7 +1862,7 @@ mod rhr_v4_shadow_tests {
         let mut hr: Vec<HrSample> = (0..240).map(|ts| HrSample { ts, bpm: 47 }).collect();
         hr.extend((240..300).map(|ts| HrSample { ts, bpm: 50 }));
         let stages = [deep(0, 300)];
-        let r = dynamic_rhr_v4_shadow(0, 300, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        let r = dynamic_rhr_v4(0, 300, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
         let value = r.final_candidate.as_ref().unwrap().value;
         assert!((value - 47.375).abs() < 1e-9, "got {value}");
         assert!(r.fixed_v4_raw.unwrap().fract().abs() > 1e-9, "raw value must retain its fraction");
@@ -1859,5 +1878,102 @@ mod rhr_v4_shadow_tests {
         // Same input rounded twice must be bit-for-bit identical (no hidden nondeterminism from
         // iteration order, hashing, or float-summation order across repeated calls).
         assert_eq!(v4_round_half_up(52.5), v4_round_half_up(52.5));
+    }
+
+    /// Tier 6: no Deep at all AND no whole-sleep quality-valid samples either -> `None` outright,
+    /// never a fabricated number.
+    #[test]
+    fn insufficient_data_anywhere_is_unavailable_not_a_fabricated_value() {
+        let hr: Vec<HrSample> = Vec::new();
+        let stages = [light(0, 600)];
+        let r = dynamic_rhr_v4(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(r.tier, RhrV4Tier::Unavailable);
+        assert_eq!(r.qualifying_deep_episodes, 0);
+        assert_eq!(r.fixed_v4, None);
+        assert_eq!(r.quality_v4, None);
+        assert_eq!(r.fixed_v4_raw, None);
+        assert_eq!(r.quality_v4_raw, None);
+    }
+
+    /// The emitted `algorithm_version` on every `RhrV4Result` - regardless of tier - is the v4
+    /// identifier, and it is textually distinct from the v3 identifier `dynamic_rhr` still emits.
+    #[test]
+    fn emitted_algorithm_version_is_the_v4_identifier() {
+        assert_ne!(ALGORITHM_VERSION_V4, ALGORITHM_VERSION);
+        assert_eq!(ALGORITHM_VERSION_V4, "physiology-dynamic-rhr-sws-v4");
+
+        let hr = flat_hr(0, 600, 51);
+        let stages = [deep(0, 600)];
+        let single = dynamic_rhr_v4(0, 600, &hr, NO_ACCEL, NO_WRIST_OFF, &stages);
+        assert_eq!(single.algorithm_version, ALGORITHM_VERSION_V4);
+
+        let unavailable = dynamic_rhr_v4(0, 600, &[], NO_ACCEL, NO_WRIST_OFF, &[light(0, 600)]);
+        assert_eq!(unavailable.algorithm_version, ALGORITHM_VERSION_V4);
+    }
+}
+
+/// Proves the v4 pipeline is actually wired into `nightly_physiology` - the entry point
+/// `noop-engine` calls for both the per-session and the grouped/authoritative nightly RHR - and
+/// that doing so leaves the v3 helper and the unrelated HRV pipeline untouched.
+#[cfg(test)]
+mod nightly_physiology_v4_wiring_tests {
+    use super::*;
+
+    fn flat_hr(start: i64, end: i64, bpm: u16) -> Vec<HrSample> {
+        (start..end).map(|ts| HrSample { ts, bpm }).collect()
+    }
+
+    /// `nightly_physiology`'s `rhr_v4` field must be bit-for-bit identical to calling
+    /// `dynamic_rhr_v4` directly on the same inputs - `nightly_physiology` must not be running a
+    /// second, divergent copy of the v4 pipeline.
+    #[test]
+    fn nightly_physiology_rhr_v4_matches_a_direct_call() {
+        let stages = [StageSegment { start: 0, end: 600, stage: SleepStage::Deep }];
+        let hr = flat_hr(0, 600, 52);
+        let night = nightly_physiology(0, 600, &hr, &[], &[], &[], &stages);
+
+        let direct = dynamic_rhr_v4(0, 600, &hr, &[], &[], &stages);
+        assert_eq!(night.rhr_v4, direct);
+        assert_eq!(night.rhr_v4.algorithm_version, ALGORITHM_VERSION_V4);
+        assert_eq!(night.rhr_v4.quality_v4, Some(52));
+    }
+
+    /// Promoting v4 must not perturb the v3 `dynamic_rhr` helper still riding along on `rhr`: same
+    /// inputs, same v3-only formula, same v3 version stamp, still directly testable.
+    #[test]
+    fn nightly_physiology_rhr_v3_field_is_unaffected_by_the_v4_addition() {
+        let stages = [StageSegment { start: 0, end: 600, stage: SleepStage::Deep }];
+        let hr = flat_hr(0, 600, 52);
+        let night = nightly_physiology(0, 600, &hr, &[], &[], &[], &stages);
+
+        let quality_hr: Vec<QualityHrSample> = (0..600)
+            .map(|unix| QualityHrSample { unix, bpm: 52, quality_valid: true })
+            .collect();
+        let direct_v3 = dynamic_rhr(0, 600, &quality_hr, &stages);
+        assert_eq!(night.rhr, direct_v3);
+        assert_eq!(night.rhr.as_ref().unwrap().algorithm_version, ALGORITHM_VERSION);
+    }
+
+    /// The bundled nightly-physiology version stamp (what noop-engine actually emits as
+    /// `algorithm_version`, and what feeds `daily_metrics`/`daily_canonical`/`sleep_sessions`) is
+    /// the v4 identifier now that v4 is authoritative.
+    #[test]
+    fn nightly_physiology_algorithm_version_is_v4() {
+        let stages = [StageSegment { start: 0, end: 600, stage: SleepStage::Deep }];
+        let hr = flat_hr(0, 600, 52);
+        let night = nightly_physiology(0, 600, &hr, &[], &[], &[], &stages);
+        assert_eq!(night.algorithm_version, ALGORITHM_VERSION_V4);
+    }
+
+    /// HRV is explicitly "unrelated physiology" for this change: same formula, same reliability
+    /// gates, same v3 version stamp it always emitted - completely untouched by the RHR promotion.
+    #[test]
+    fn nightly_physiology_hrv_is_unaffected_by_the_v4_addition() {
+        let stages = [StageSegment { start: 0, end: 600, stage: SleepStage::Deep }];
+        let hr = flat_hr(0, 600, 52);
+        let night = nightly_physiology(0, 600, &hr, &[], &[], &[], &stages);
+        // No RR data supplied, so HRV must refuse the same way it always has - unrelated to RHR.
+        assert!(night.hrv.rmssd_ms.is_none());
+        assert_eq!(night.hrv.algorithm_version, ALGORITHM_VERSION);
     }
 }

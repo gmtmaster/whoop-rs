@@ -105,7 +105,10 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             &streams.wrist_off,
             &segments,
         );
-        let resting_hr = physiology.rhr.map(|result| result.rounded_bpm);
+        // Authoritative per-session RHR: v4 quality-weighted (`quality_v4`), matching the v4
+        // promotion in noop-engine's grouped/authoritative nightly RHR. `physiology.rhr` (v3) is
+        // still computed on `physiology` for research/parity but no longer read here.
+        let resting_hr = physiology.rhr_v4.quality_v4;
         let efficiency = detect::efficiency(span.start, span.end, &segments);
         let avg_hrv = physiology.hrv.rmssd_ms;
         let motion_grid = detect::session_epoch_motion(span.start, span.end, &streams.accel);

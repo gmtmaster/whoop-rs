@@ -29,6 +29,7 @@ pub mod illness;
 pub mod imu_features;
 pub mod nap;
 pub mod personal_cardio;
+pub mod movement_effort;
 #[path = "shadow_metrics.rs"]
 pub mod nightly_physiology;
 pub mod ppg;
