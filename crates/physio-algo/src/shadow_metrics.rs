@@ -16,6 +16,13 @@ const MAX_RR_PAIR_CHANGE_MS: i32 = 200;
 const PRIMARY_MIN_DEEP_SECONDS: u32 = 600;
 const FALLBACK_MIN_DEEP_SECONDS: u32 = 360;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RrDeviceGeneration {
+    Whoop4,
+    #[default]
+    Whoop5Mg,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QualityHrSample {
     pub unix: i64,
@@ -200,6 +207,24 @@ pub fn nightly_physiology(
     wrist_off: &[(i64, i64)],
     stages: &[StageSegment],
 ) -> NightlyPhysiologyResult {
+    nightly_physiology_for_generation(
+        sleep_start, sleep_end, hr, accel, rr, wrist_off, stages,
+        RrDeviceGeneration::Whoop5Mg,
+    )
+}
+
+/// Generation-aware nightly entry point. WHOOP 5/MG deliberately takes the historical path
+/// byte-for-byte; only explicitly identified WHOOP 4 rolling reports are normalized.
+pub fn nightly_physiology_for_generation(
+    sleep_start: i64,
+    sleep_end: i64,
+    hr: &[HrSample],
+    accel: &[AccelSample],
+    rr: &[RrRun],
+    wrist_off: &[(i64, i64)],
+    stages: &[StageSegment],
+    rr_generation: RrDeviceGeneration,
+) -> NightlyPhysiologyResult {
     let quality_hr = quality_gated_hr(sleep_start, sleep_end, hr, accel, wrist_off);
     let valid_hr_seconds: std::collections::HashSet<i64> = quality_hr
         .iter()
@@ -218,6 +243,10 @@ pub fn nightly_physiology(
             })
         })
         .collect();
+    let reports = match rr_generation {
+        RrDeviceGeneration::Whoop4 => normalize_whoop4_rr_reports(&reports),
+        RrDeviceGeneration::Whoop5Mg => reports,
+    };
     let episodes: Vec<DeepEpisodeQuality> = stages
         .iter()
         .filter(|segment| segment.stage == SleepStage::Deep)
@@ -245,6 +274,66 @@ pub fn nightly_physiology(
         ),
         deep_episodes: episodes,
     }
+}
+
+/// WHOOP 4 emits a rolling interval window each second. Anchor each report to its wall-clock
+/// second, walk its intervals backwards from the end of that second, and retain only intervals
+/// whose end falls in that report's own second. Thus a beat is retained because it advances time,
+/// never because its numeric R-R value happens to differ from a previous value.
+fn normalize_whoop4_rr_reports(reports: &[QualityRrReport]) -> Vec<QualityRrReport> {
+    let mut ordered: Vec<&QualityRrReport> = reports.iter().collect();
+    ordered.sort_by_key(|report| report.unix);
+    let mut out = Vec::with_capacity(ordered.len());
+    let mut previous_report_second: Option<u32> = None;
+    let mut previous_values: Vec<u16> = Vec::new();
+    let mut run_reports = 0u64;
+    let mut retained_beat_time_ms = 0u64;
+    for report in ordered {
+        if previous_report_second.is_none_or(|previous| report.unix > previous.saturating_add(1)) {
+            // A missing report is a real seam. Do not use the new rolling prefix to backfill it.
+            run_reports = 0;
+            retained_beat_time_ms = 0;
+        }
+        run_reports += 1;
+        let target_ms = run_reports * 1_000;
+        let valid: Vec<u16> = report.rr.iter().copied().filter(|v| (300..=2_000).contains(v)).collect();
+        let consecutive = previous_report_second.is_some_and(|p| report.unix == p.saturating_add(1));
+        let max_overlap = previous_values.len().min(valid.len().saturating_sub(1));
+        let overlap = if consecutive {
+            (1..=max_overlap)
+                .rev()
+                .find(|&n| previous_values[previous_values.len() - n..] == valid[..n])
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let advancing = &valid[overlap..];
+        // The newest beats are the suffix of a rolling report. Retain the suffix length that makes
+        // cumulative beat time track cumulative wall time most closely; zero is allowed, so a slow
+        // pulse does not force one fabricated beat into every wall-clock second.
+        let mut suffix_ms = 0u64;
+        let mut best_len = 0usize;
+        let mut best_error = retained_beat_time_ms.abs_diff(target_ms);
+        for len in 1..=advancing.len() {
+            suffix_ms += u64::from(advancing[advancing.len() - len]);
+            let error = (retained_beat_time_ms + suffix_ms).abs_diff(target_ms);
+            if error < best_error {
+                best_error = error;
+                best_len = len;
+            }
+        }
+        let retained = advancing[advancing.len().saturating_sub(best_len)..].to_vec();
+        retained_beat_time_ms += retained.iter().map(|&v| u64::from(v)).sum::<u64>();
+        previous_report_second = Some(report.unix);
+        previous_values = valid;
+        out.push(QualityRrReport {
+            unix: report.unix,
+            rr: retained,
+            optical_signal_poor: report.optical_signal_poor,
+            quality_valid: report.quality_valid,
+        });
+    }
+    out
 }
 
 /// Exact immutable episode-level gates, exposed for provenance/reporting only.
@@ -1339,6 +1428,58 @@ pub fn dynamic_rhr_v4(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rr_report(unix: u32, rr: &[u16]) -> QualityRrReport {
+        QualityRrReport {
+            unix,
+            rr: rr.to_vec(),
+            optical_signal_poor: None,
+            quality_valid: true,
+        }
+    }
+
+    #[test]
+    fn whoop4_rolling_reports_are_normalized_by_time_not_value() {
+        let raw = vec![
+            rr_report(100, &[800, 810, 820]),
+            rr_report(101, &[810, 820, 830]),
+            rr_report(102, &[820, 830, 840]),
+            rr_report(103, &[830, 840, 850]),
+        ];
+        let normalized = normalize_whoop4_rr_reports(&raw);
+        let retained: Vec<u16> = normalized.iter().flat_map(|r| r.rr.iter().copied()).collect();
+        let beat_time: u64 = retained.iter().map(|&v| u64::from(v)).sum();
+        assert!((beat_time as f64 / 4_000.0 - 1.0).abs() < 0.20);
+        assert!(retained.len() < raw.iter().map(|r| r.rr.len()).sum());
+        assert_eq!(retained, vec![820, 830, 840, 850]);
+    }
+
+    #[test]
+    fn whoop4_equal_real_beats_are_not_value_deduplicated() {
+        let raw = vec![rr_report(100, &[800, 800, 800]), rr_report(101, &[800, 800, 800])];
+        let normalized = normalize_whoop4_rr_reports(&raw);
+        assert_eq!(normalized.iter().flat_map(|r| &r.rr).copied().collect::<Vec<_>>(), vec![800, 800]);
+    }
+
+    #[test]
+    fn whoop4_gap_is_not_backfilled_from_the_next_rolling_report() {
+        let raw = vec![rr_report(100, &[800, 810, 820]), rr_report(103, &[810, 820, 830])];
+        let normalized = normalize_whoop4_rr_reports(&raw);
+        assert_eq!(normalized[0].rr, vec![820]);
+        assert_eq!(normalized[1].rr, vec![830]);
+        let quality = rr_window_quality(100, 104, &normalized);
+        assert_eq!(quality.contiguous_pairs, 0, "the missing report seconds must remain an RMSSD seam");
+    }
+
+    #[test]
+    fn whoop5_path_is_value_for_value_unchanged() {
+        let raw = vec![rr_report(100, &[800, 810, 820]), rr_report(101, &[810, 820, 830])];
+        let unchanged = match RrDeviceGeneration::Whoop5Mg {
+            RrDeviceGeneration::Whoop4 => normalize_whoop4_rr_reports(&raw),
+            RrDeviceGeneration::Whoop5Mg => raw.clone(),
+        };
+        assert_eq!(unchanged, raw);
+    }
 
     fn quality(start: u32, end: u32) -> DeepEpisodeQuality {
         DeepEpisodeQuality {

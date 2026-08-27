@@ -78,6 +78,13 @@ pub struct Session {
 /// Detect in-bed spans from a window's streams and stage each with the V2 recipe + motion-aware wake
 /// refinement, returning one [`Session`] per accepted span with its resting HR and windowed average HRV.
 pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
+    analyze_for_rr_generation(streams, crate::nightly_physiology::RrDeviceGeneration::Whoop5Mg)
+}
+
+pub fn analyze_for_rr_generation(
+    streams: &SleepStreams,
+    rr_generation: crate::nightly_physiology::RrDeviceGeneration,
+) -> Vec<Session> {
     let spans = detect::detect_sessions(
         &streams.hr,
         &streams.accel,
@@ -96,7 +103,7 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             accel: streams.accel.clone(),
         };
         let segments = refine::refine(&v2::stage(&input), &streams.accel, &streams.steps);
-        let physiology = crate::nightly_physiology::nightly_physiology(
+        let physiology = crate::nightly_physiology::nightly_physiology_for_generation(
             span.start,
             span.end,
             &streams.hr,
@@ -104,6 +111,7 @@ pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
             &streams.rr,
             &streams.wrist_off,
             &segments,
+            rr_generation,
         );
         // Authoritative per-session RHR: v4 quality-weighted (`quality_v4`), matching the v4
         // promotion in noop-engine's grouped/authoritative nightly RHR. `physiology.rhr` (v3) is
