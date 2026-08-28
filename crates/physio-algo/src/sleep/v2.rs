@@ -18,6 +18,8 @@ use super::{SleepStage, StageSegment};
 const SUSTAINED_ONSET_EPOCHS: usize = 10;
 /// One epoch in minutes, the unit the onset-anchored REM guard grades over.
 const EPOCH_MIN: f64 = 0.5;
+const LATE_DEEP_INTERACTION_START: f64 = 0.65;
+const LATE_DEEP_INTERACTION_SUPPORT: f64 = 0.4;
 
 // Stage indices for the emission/transition arrays: order [deep, rem, light, awake].
 const DEEP: usize = 0;
@@ -581,6 +583,24 @@ fn idx_to_stage(i: usize) -> SleepStage {
     }
 }
 
+fn late_deep_interaction(
+    clock: f64,
+    zhr: f64,
+    zhrv: f64,
+    zmotion: Option<f64>,
+    zrsa: Option<f64>,
+    deep_hr_weight: f64,
+) -> f64 {
+    if clock < LATE_DEEP_INTERACTION_START
+        || zhrv >= 0.0
+        || !zmotion.is_some_and(|z| z <= 0.0)
+        || !zrsa.is_some_and(|z| z > 0.0)
+    {
+        return 0.0;
+    }
+    -deep_hr_weight * zhr.min(0.0) + LATE_DEEP_INTERACTION_SUPPORT
+}
+
 /// The log-emissions the decoder is handed, under whichever anchor `p` selects. An onset-anchored prior
 /// needs a staging to find the onset, so it stages once with the guard off first.
 fn final_emissions(feats: &[Epoch], p: &Params) -> Vec<[f64; 4]> {
@@ -669,6 +689,14 @@ fn emissions(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<[f64; 4]> {
             let z = zrg.apply(Some(rg));
             em[DEEP] += p.resp_weight * z;
             em[REM] -= p.resp_weight * z;
+            em[DEEP] += late_deep_interaction(
+                f.clock,
+                zhrv,
+                zhvv,
+                f.move_frac.map(|_| zmvv),
+                Some(z),
+                p.deep_hr,
+            );
         }
         seq.push(em);
     }
@@ -715,6 +743,52 @@ mod tests {
             &[],
             &Params::SHIPPED,
         )
+    }
+
+    #[test]
+    fn late_deep_interaction_removes_the_low_hr_penalty_when_all_channels_agree() {
+        let got = late_deep_interaction(0.80, -1.2, -0.5, Some(-0.1), Some(0.2), 0.5);
+        assert!((got - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn late_deep_interaction_requires_favorable_rsa() {
+        assert_eq!(
+            0.0,
+            late_deep_interaction(0.80, -1.2, -0.5, Some(-0.1), Some(-0.1), 0.5)
+        );
+    }
+
+    #[test]
+    fn late_deep_interaction_requires_low_observed_motion() {
+        assert_eq!(
+            0.0,
+            late_deep_interaction(0.80, -1.2, -0.5, Some(0.1), Some(0.2), 0.5)
+        );
+    }
+
+    #[test]
+    fn late_deep_interaction_requires_rsa_measurement() {
+        assert_eq!(
+            0.0,
+            late_deep_interaction(0.80, -1.2, -0.5, Some(-0.1), None, 0.5)
+        );
+    }
+
+    #[test]
+    fn late_deep_interaction_does_not_apply_before_sixty_five_percent() {
+        assert_eq!(
+            0.0,
+            late_deep_interaction(0.649, -1.2, -0.5, Some(-0.1), Some(0.2), 0.5)
+        );
+    }
+
+    #[test]
+    fn late_rem_like_hr_variability_does_not_receive_deep_support() {
+        assert_eq!(
+            0.0,
+            late_deep_interaction(0.80, -1.2, 0.5, Some(-0.1), Some(0.2), 0.5)
+        );
     }
 
     #[test]
