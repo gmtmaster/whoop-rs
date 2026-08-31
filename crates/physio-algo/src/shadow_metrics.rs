@@ -7,7 +7,6 @@ pub const ALGORITHM_VERSION: &str = "physiology-dynamic-rhr-final-sws-hrv-v3";
 
 const EPOCH_SECONDS: i64 = 30;
 const MIN_EPISODE_COVERAGE: f64 = 0.80;
-const MIN_HRV_REPORT_SECONDS: u32 = 240;
 const MAX_WRIST_OFF_FRACTION: f64 = 0.01;
 const MAX_RR_ARTIFACT_REJECTION: f64 = 0.35;
 const MIN_RR_BEAT_TIME_RATIO: f64 = 0.70;
@@ -360,7 +359,6 @@ fn episode_gate_failures_with_minimum(
     if e.hr_coverage < MIN_EPISODE_COVERAGE { failures.push("hr_coverage"); }
     if e.accelerometer_coverage < MIN_EPISODE_COVERAGE { failures.push("accelerometer_coverage"); }
     if e.clean_hr_coverage < MIN_EPISODE_COVERAGE { failures.push("clean_hr_coverage"); }
-    if e.rr_report_coverage < MIN_EPISODE_COVERAGE { failures.push("rr_report_coverage"); }
     if e.wrist_off_fraction > MAX_WRIST_OFF_FRACTION { failures.push("wrist_off_fraction"); }
     if e.rr_artifact_rejection > MAX_RR_ARTIFACT_REJECTION { failures.push("rr_artifact_rejection"); }
     if e.rr_hr_agreement.is_some_and(|v| v < MIN_EPISODE_COVERAGE) { failures.push("rr_hr_agreement"); }
@@ -689,7 +687,6 @@ pub enum HrvUnavailableReason {
     NoQualifyingTenMinuteDeepEpisode,
     NoQualifyingSixMinuteDeepEpisode,
     NoReliableDeepEpisode,
-    InsufficientReportCoverage,
     InsufficientCleanIntervals,
     NoContiguousPairs,
     NoQualityValidFiveMinuteWindow,
@@ -910,9 +907,7 @@ where
     }
     let window = (episode.end.saturating_sub(300), episode.end);
     let rr = rr_window_quality(window.0, window.1, reports);
-    let reason = if rr.report_seconds < MIN_HRV_REPORT_SECONDS {
-        HrvUnavailableReason::InsufficientReportCoverage
-    } else if rr.clean_intervals < MIN_BEATS as u32 {
+    let reason = if rr.clean_intervals < MIN_BEATS as u32 {
         HrvUnavailableReason::InsufficientCleanIntervals
     } else if rr.contiguous_pairs == 0 {
         HrvUnavailableReason::NoContiguousPairs
@@ -927,7 +922,6 @@ fn reliable_episode(e: &DeepEpisodeQuality, minimum_seconds: u32) -> bool {
         && e.hr_coverage >= MIN_EPISODE_COVERAGE
         && e.accelerometer_coverage >= MIN_EPISODE_COVERAGE
         && e.clean_hr_coverage >= MIN_EPISODE_COVERAGE
-        && e.rr_report_coverage >= MIN_EPISODE_COVERAGE
         && e.wrist_off_fraction <= MAX_WRIST_OFF_FRACTION
         && e.rr_artifact_rejection <= MAX_RR_ARTIFACT_REJECTION
         && e.rr_hr_agreement
@@ -939,7 +933,6 @@ fn reliable_window(quality: &DeepEpisodeQuality, rr: &RrWindowQuality) -> bool {
     quality.hr_coverage >= MIN_EPISODE_COVERAGE
         && quality.accelerometer_coverage >= MIN_EPISODE_COVERAGE
         && quality.clean_hr_coverage >= MIN_EPISODE_COVERAGE
-        && quality.rr_report_coverage >= MIN_EPISODE_COVERAGE
         && quality.wrist_off_fraction <= MAX_WRIST_OFF_FRACTION
         && quality.rr_artifact_rejection <= MAX_RR_ARTIFACT_REJECTION
         && quality
@@ -1602,8 +1595,29 @@ mod tests {
     }
 
     #[test]
-    fn final_sws_hrv_rejects_sub_80_percent_coverage_and_wrist_off() {
+    fn final_sws_hrv_rejects_wrist_off() {
         let reports: Vec<QualityRrReport> = (300..540)
+            .map(|unix| QualityRrReport {
+                unix,
+                rr: vec![800],
+                optical_signal_poor: None,
+                quality_valid: true,
+            })
+            .collect();
+        let mut off_wrist = quality(0, 600);
+        off_wrist.wrist_off_fraction = 0.02;
+        assert_eq!(
+            final_sws_last_five_hrv(&[off_wrist], &reports).rejection_reason,
+            Some(HrvUnavailableReason::NoReliableDeepEpisode)
+        );
+    }
+
+    /// `rr_report_coverage` counts distinct report-second density, not RR temporal coverage: at
+    /// low HR a report arrives roughly once per beat, so this alone is naturally low even at 100%
+    /// beat-time coverage. It must not, by itself, make an otherwise-clean episode/window unreliable.
+    #[test]
+    fn sub_80_percent_report_coverage_alone_does_not_reject_a_deep_episode() {
+        let reports: Vec<QualityRrReport> = (300..600)
             .map(|unix| QualityRrReport {
                 unix,
                 rr: vec![800],
@@ -1613,16 +1627,177 @@ mod tests {
             .collect();
         let mut low_coverage = quality(0, 600);
         low_coverage.rr_report_coverage = 0.79;
-        assert_eq!(
-            final_sws_last_five_hrv(&[low_coverage], &reports).rejection_reason,
-            Some(HrvUnavailableReason::NoReliableDeepEpisode)
+        let result = final_sws_last_five_hrv(&[low_coverage], &reports);
+        assert_eq!(result.measurement_mode, Some(HrvMeasurementMode::PrimaryFinalSws));
+        assert!(result.rmssd_ms.is_some());
+    }
+
+    /// Production regression: ~45bpm cadence yields ~75% distinct report-second density even
+    /// though RR beat-time coverage is ~100% (interval ~1333ms matches average HR of 45bpm).
+    /// Must be accepted at both episode and window reliability, not refused for report density.
+    #[test]
+    fn low_hr_rr_stream_with_full_beat_time_coverage_is_not_rejected_for_report_density() {
+        let reports: Vec<QualityRrReport> = (0u32..1080)
+            .filter(|unix| unix % 4 != 3)
+            .map(|unix| QualityRrReport {
+                unix,
+                rr: vec![1333],
+                optical_signal_poor: None,
+                quality_valid: true,
+            })
+            .collect();
+        let episode = quality(0, 1080);
+        let result = final_sws_last_five_hrv(&[episode], &reports);
+        assert_eq!(result.measurement_mode, Some(HrvMeasurementMode::PrimaryFinalSws));
+        assert!(result.rmssd_ms.is_some());
+        // `selected_episode_quality` is the passed-through INPUT episode struct (see
+        // `select_window`'s success branch), not the recomputed per-window quality - it is not the
+        // right field to check real report density on. The real recomputed count is
+        // `usable_report_seconds` (`rr.report_seconds` for the actual 300s window selected).
+        let window_seconds = result.selected_window.map(|(s, e)| e - s).unwrap();
+        let actual_coverage = result.usable_report_seconds as f64 / window_seconds as f64;
+        assert!(
+            actual_coverage < 0.80,
+            "must actually exercise the low report-density regime: got {actual_coverage} ({}/{window_seconds})",
+            result.usable_report_seconds
         );
-        let mut off_wrist = quality(0, 600);
-        off_wrist.wrist_off_fraction = 0.02;
+    }
+
+    /// Production regression for the absolute-count guard: a 300s HRV window at ~45bpm carries
+    /// only ~225 distinct RR report timestamps (well under the old 240 floor), but beat-time
+    /// coverage is ~100%, artifact rejection is low, and RR/HR agreement and HR/accel/clean-HR/
+    /// wrist-off quality are all good. `MIN_HRV_REPORT_SECONDS` must no longer refuse this window.
+    #[test]
+    fn low_report_second_count_under_the_old_240_floor_still_produces_hrv() {
+        let reports: Vec<QualityRrReport> = (0u32..600)
+            .filter(|unix| unix % 4 != 3) // 75% density -> 225 report-seconds in any 300s span
+            .map(|unix| QualityRrReport {
+                unix,
+                rr: vec![1333], // ~45.01bpm, matching the ~100% beat-time-coverage production case
+                optical_signal_poor: None,
+                quality_valid: true,
+            })
+            .collect();
+        let episode = quality(0, 600);
+        let result = final_sws_last_five_hrv(&[episode], &reports);
+        assert_eq!(result.measurement_mode, Some(HrvMeasurementMode::PrimaryFinalSws));
+        assert!(result.rmssd_ms.is_some());
         assert_eq!(
-            final_sws_last_five_hrv(&[off_wrist], &reports).rejection_reason,
-            Some(HrvUnavailableReason::NoReliableDeepEpisode)
+            result.usable_report_seconds, 225,
+            "must land under the old 240-report-second floor"
         );
+        // `selected_episode_quality` is the passed-through INPUT episode struct, not the recomputed
+        // per-window quality (see the sibling low-report-density test above) - recompute the real
+        // window quality directly to check beat-time ratio and artifact rejection for real.
+        let (window_start, window_end) = result.selected_window.unwrap();
+        let rr = rr_window_quality(window_start, window_end, &reports);
+        let beat_time_ratio = rr.beat_time_ms as f64 / 1000.0 / f64::from(window_end - window_start);
+        assert!(beat_time_ratio > 0.95, "beat-time coverage must be near-complete: got {beat_time_ratio}");
+        assert!(rr.artifact_rejection < 0.05, "artifact rejection must be low: got {}", rr.artifact_rejection);
+    }
+
+    /// Negative counterpart: genuinely sparse/interrupted RR data (bad beat-time ratio) must still
+    /// be refused. Removing the report-second-count guard must not make sparse RR data eligible -
+    /// temporal RR coverage stays protected by `rr_beat_time_ratio` (see also
+    /// `final_sws_hrv_rejects_bad_rr_beat_time_ratio`, `reliable_window_rejects_bad_rr_beat_time_ratio`).
+    #[test]
+    fn sparse_rr_coverage_is_still_rejected_via_beat_time_ratio_not_report_count() {
+        // Same 75%-density report pattern as the positive case above, but each report's interval
+        // is tiny (100ms), so beat-time coverage collapses far below MIN_RR_BEAT_TIME_RATIO even
+        // though the report-second count (225) is identical to the accepted production case.
+        let reports: Vec<QualityRrReport> = (0u32..600)
+            .filter(|unix| unix % 4 != 3)
+            .map(|unix| QualityRrReport {
+                unix,
+                rr: vec![100],
+                optical_signal_poor: None,
+                quality_valid: true,
+            })
+            .collect();
+        let episode = quality(0, 600);
+        let result = final_sws_last_five_hrv(&[episode], &reports);
+        assert_eq!(result.measurement_mode, None);
+        assert!(result.rmssd_ms.is_none());
+    }
+
+    #[test]
+    fn reliable_episode_rejects_bad_rr_beat_time_ratio() {
+        let mut e = quality(0, 600);
+        e.rr_beat_time_ratio = 0.5;
+        assert!(!reliable_episode(&e, 600));
+        e.rr_beat_time_ratio = 1.0;
+        assert!(reliable_episode(&e, 600));
+    }
+
+    #[test]
+    fn reliable_window_rejects_bad_rr_beat_time_ratio() {
+        let mut q = quality(0, 600);
+        let rr = RrWindowQuality {
+            report_seconds: 300,
+            input_intervals: 300,
+            clean_intervals: 300,
+            contiguous_pairs: 299,
+            sudden_change_pairs_rejected: 0,
+            beat_time_ms: 90_000,
+            artifact_rejection: 0.0,
+            rmssd_ms: Some(5.0),
+        };
+        q.rr_beat_time_ratio = 0.3;
+        assert!(!reliable_window(&q, &rr));
+        q.rr_beat_time_ratio = 1.5;
+        assert!(!reliable_window(&q, &rr));
+        q.rr_beat_time_ratio = 1.0;
+        assert!(reliable_window(&q, &rr));
+    }
+
+    #[test]
+    fn reliable_episode_ignores_rr_report_coverage() {
+        let mut e = quality(0, 600);
+        e.rr_report_coverage = 0.0;
+        assert!(reliable_episode(&e, 600), "rr_report_coverage must no longer gate episode reliability");
+    }
+
+    #[test]
+    fn reliable_window_ignores_rr_report_coverage() {
+        let mut q = quality(0, 600);
+        q.rr_report_coverage = 0.0;
+        let rr = RrWindowQuality {
+            report_seconds: 300,
+            input_intervals: 300,
+            clean_intervals: 300,
+            contiguous_pairs: 299,
+            sudden_change_pairs_rejected: 0,
+            beat_time_ms: 270_000,
+            artifact_rejection: 0.0,
+            rmssd_ms: Some(5.0),
+        };
+        assert!(reliable_window(&q, &rr), "rr_report_coverage must no longer gate window reliability");
+    }
+
+    #[test]
+    fn final_sws_hrv_rejects_bad_rr_beat_time_ratio() {
+        let reports: Vec<QualityRrReport> = (300..600)
+            .map(|unix| QualityRrReport {
+                unix,
+                rr: vec![300],
+                optical_signal_poor: None,
+                quality_valid: true,
+            })
+            .collect();
+        let episode = quality(0, 600);
+        let result = final_sws_last_five_hrv(&[episode], &reports);
+        assert_eq!(result.measurement_mode, None);
+        assert!(result.rmssd_ms.is_none());
+    }
+
+    #[test]
+    fn episode_gate_failures_no_longer_flags_report_coverage_but_still_flags_beat_time_ratio() {
+        let mut e = quality(0, 600);
+        e.rr_report_coverage = 0.5;
+        assert!(!episode_gate_failures(&e).contains(&"rr_report_coverage"));
+        e.rr_report_coverage = 1.0;
+        e.rr_beat_time_ratio = 0.5;
+        assert!(episode_gate_failures(&e).contains(&"rr_beat_time_ratio"));
     }
 
     #[test]
@@ -1737,7 +1912,8 @@ mod tests {
         let result = final_sws_last_five_hrv(&episodes, &reports(60, 360, 10));
         assert_eq!(
             result.primary_attempt.rejection_reason,
-            Some(HrvUnavailableReason::InsufficientReportCoverage)
+            Some(HrvUnavailableReason::InsufficientCleanIntervals),
+            "the primary episode's window has zero overlapping RR reports"
         );
         assert_eq!(
             result.measurement_mode,
@@ -1757,7 +1933,8 @@ mod tests {
         );
         assert_eq!(
             result.rejection_reason,
-            Some(HrvUnavailableReason::InsufficientReportCoverage)
+            Some(HrvUnavailableReason::InsufficientCleanIntervals),
+            "no reports were supplied at all"
         );
     }
 
@@ -1793,7 +1970,8 @@ mod tests {
         assert_eq!(rr_result.measurement_mode, None);
         assert_eq!(
             rr_result.rejection_reason,
-            Some(HrvUnavailableReason::InsufficientReportCoverage)
+            Some(HrvUnavailableReason::InsufficientCleanIntervals),
+            "optical_signal_poor reports are untrusted, leaving zero clean intervals"
         );
     }
 
