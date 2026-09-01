@@ -107,6 +107,173 @@ pub fn epoch_starts(prep: &Prepared) -> Vec<i64> {
     prep.feats.iter().map(|f| f.start).collect()
 }
 
+/// One epoch's full diagnostic trace: every raw/derived feature, z-score, gate and prior term
+/// [`emissions`] computes internally, plus the final per-stage log-emission it hands the decoder.
+/// Forensic-only export — mirrors `emissions()`'s arithmetic exactly (same anchor selection via
+/// `final_emissions`), so `[em_deep, em_rem, em_light, em_awake]` here equals the corresponding row of
+/// [`emissions_prepared`]. Adds no behaviour; changes nothing production reads.
+#[derive(Debug, Clone, Copy)]
+pub struct EpochDiagnostic {
+    pub start: i64,
+    /// Raw per-epoch mean HR (bpm), and the windowed HR std/HR-flatness features feeding the deep gate.
+    pub hr: Option<f64>,
+    pub hr_var: Option<f64>,
+    pub hr_flat11: Option<f64>,
+    /// This epoch's HR-flatness percentile rank within the night (0..1) — what `deep_gate_slope` reads.
+    pub hr_flat11_pct: f64,
+    pub move_frac: Option<f64>,
+    pub jerk_max: f64,
+    pub jerk_scale: f64,
+    pub resp_reg: Option<f64>,
+    /// Fraction of the WINDOW (or, under the onset anchor, of the sleep period) this epoch sits at.
+    pub clock: f64,
+    /// Per-night z-scores of HR, HR-variability, motion fraction and RSA regularity.
+    pub z_hr: f64,
+    pub z_hr_var: f64,
+    pub z_move: f64,
+    pub z_resp_reg: f64,
+    /// The deep-eligibility HR-flatness gate penalty (subtracted from the deep emission).
+    pub deep_gate: f64,
+    /// The sleep-cycle prior's deep/REM terms this epoch received (already net of the REM guard).
+    pub cycle_prior_deep: f64,
+    pub cycle_prior_rem: f64,
+    /// The early-REM suppression subtracted from `cycle_prior_rem` above, reported separately so a
+    /// caller can see the guard's own size.
+    pub rem_guard: f64,
+    /// True when this epoch's peak jerk cleared the motion gate, adding `motion_gate_boost` to awake.
+    pub motion_gate_boost_applied: bool,
+    /// The late-deep-interaction bonus folded into `em_deep` when RSA + motion + HRV all agree (0 else).
+    pub late_deep_bonus: f64,
+    /// Final per-stage log-emissions handed to the decoder — identical to `emissions_prepared`'s row.
+    pub em_deep: f64,
+    pub em_rem: f64,
+    pub em_light: f64,
+    pub em_awake: f64,
+}
+
+/// Every intermediate term [`emissions_prepared`] computes but does not expose, one row per prepared
+/// epoch, under the same onset-anchor selection `final_emissions` uses. Forensic replay only.
+pub fn diagnostics_prepared(prep: &Prepared, p: &Params) -> Vec<EpochDiagnostic> {
+    if prep.feats.is_empty() {
+        return Vec::new();
+    }
+    let anchor = if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
+        let probe = viterbi(&emissions(&prep.feats, p, Anchor::Probe), &p.transition);
+        Anchor::Onset(sustained_onset(&probe).unwrap_or(0))
+    } else {
+        Anchor::Window
+    };
+    diagnostics(&prep.feats, p, anchor)
+}
+
+/// The diagnostic trace under an explicit anchor — [`diagnostics_prepared`]'s inner loop, duplicated from
+/// `emissions()` term-for-term so a forensic row and the real emission it explains can never drift apart
+/// silently: `tests::diagnostics_matches_emissions` pins the two identical.
+fn diagnostics(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<EpochDiagnostic> {
+    let blp = p.base_log_prior();
+    let zhr = ZScore::build(&feats.iter().map(|f| f.hr).collect::<Vec<_>>());
+    let zhv = ZScore::build(&feats.iter().map(|f| f.hr_var).collect::<Vec<_>>());
+    let zmv = ZScore::build(&feats.iter().map(|f| f.move_frac).collect::<Vec<_>>());
+    let zrg = ZScore::build(&feats.iter().map(|f| f.resp_reg).collect::<Vec<_>>());
+
+    let mut fsorted: Vec<f64> = feats.iter().filter_map(|f| f.hr_flat11).collect();
+    fsorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let fpct = |value: Option<f64>| -> f64 {
+        match value {
+            Some(v) if !fsorted.is_empty() => {
+                let mut lo = 0usize;
+                let mut hi = fsorted.len();
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if fsorted[mid] <= v {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                lo as f64 / fsorted.len() as f64
+            }
+            _ => 0.5,
+        }
+    };
+
+    let mut out = Vec::with_capacity(feats.len());
+    for (i, f) in feats.iter().enumerate() {
+        let zhrv = zhr.apply(f.hr);
+        let zhvv = zhv.apply(f.hr_var);
+        let zmvv = zmv.apply(f.move_frac);
+        let hr_flat11_pct = fpct(f.hr_flat11);
+        let gate = p.deep_gate_slope * (hr_flat11_pct - p.deep_gate_thresh).max(0.0);
+        let awake_cardiac0 =
+            p.awake_hrv * dz(zhvv, p.awake_deadzone) + p.awake_hr * dz(zhrv, p.awake_deadzone);
+        let awake_cardiac = if motion_quiescent(f, p) {
+            awake_cardiac0.min(0.0)
+        } else {
+            awake_cardiac0
+        };
+
+        let mut em = [0.0f64; 4];
+        em[DEEP] = p.deep_hrv * zhvv + p.deep_hr * zhrv + p.deep_motion * zmvv - gate + blp[DEEP];
+        em[REM] = p.rem_hrv * zhvv + p.rem_motion * zmvv + p.rem_hr * zhrv + blp[REM];
+        em[LIGHT] = blp[LIGHT];
+        em[AWAKE] = p.awake_motion * zmvv + awake_cardiac + blp[AWAKE];
+
+        let clock = cycle_clock(f.clock, feats, anchor, p);
+        let guard = rem_guard(i, f.clock, anchor, p);
+        let pr = cycle_prior(clock, guard, p);
+        for (s, pv) in pr.iter().enumerate() {
+            em[s] += pv;
+        }
+        let motion_gate_boost_applied = f.jerk_max > f.jerk_scale * p.jerk_gate_mult;
+        if motion_gate_boost_applied {
+            em[AWAKE] += p.motion_gate_boost;
+        }
+        let mut late_deep_bonus = 0.0;
+        if let Some(rg) = f.resp_reg {
+            let z = zrg.apply(Some(rg));
+            em[DEEP] += p.resp_weight * z;
+            em[REM] -= p.resp_weight * z;
+            late_deep_bonus = late_deep_interaction(
+                f.clock,
+                zhrv,
+                zhvv,
+                f.move_frac.map(|_| zmvv),
+                Some(z),
+                p.deep_hr,
+            );
+            em[DEEP] += late_deep_bonus;
+        }
+
+        out.push(EpochDiagnostic {
+            start: f.start,
+            hr: f.hr,
+            hr_var: f.hr_var,
+            hr_flat11: f.hr_flat11,
+            hr_flat11_pct,
+            move_frac: f.move_frac,
+            jerk_max: f.jerk_max,
+            jerk_scale: f.jerk_scale,
+            resp_reg: f.resp_reg,
+            clock: f.clock,
+            z_hr: zhrv,
+            z_hr_var: zhvv,
+            z_move: zmvv,
+            z_resp_reg: f.resp_reg.map(|rg| zrg.apply(Some(rg))).unwrap_or(0.0),
+            deep_gate: gate,
+            cycle_prior_deep: pr[DEEP],
+            cycle_prior_rem: pr[REM],
+            rem_guard: guard,
+            motion_gate_boost_applied,
+            late_deep_bonus,
+            em_deep: em[DEEP],
+            em_rem: em[REM],
+            em_light: em[LIGHT],
+            em_awake: em[AWAKE],
+        });
+    }
+    out
+}
+
 /// Tile the prepared span from one label per epoch — staging's last step, so a caller that decoded its own
 /// path gets the segments [`stage_prepared`] would have returned. `labels` must be one per prepared epoch.
 pub fn segments_of(prep: &Prepared, labels: &[SleepStage]) -> Vec<StageSegment> {
@@ -1073,6 +1240,23 @@ mod tests {
             accel,
         };
         prepare(&input, &Params::SHIPPED)
+    }
+
+    #[test]
+    fn diagnostics_matches_emissions() {
+        // The forensic export must never drift from the emissions the decoder actually scores.
+        let prep = crafted_night();
+        let p = Params::SHIPPED;
+        let em = emissions_prepared(&prep, &p);
+        let diag = diagnostics_prepared(&prep, &p);
+        assert_eq!(em.len(), diag.len());
+        for (row, d) in em.iter().zip(&diag) {
+            assert_eq!(row[DEEP], d.em_deep);
+            assert_eq!(row[REM], d.em_rem);
+            assert_eq!(row[LIGHT], d.em_light);
+            assert_eq!(row[AWAKE], d.em_awake);
+        }
+        assert_eq!(epoch_starts(&prep), diag.iter().map(|d| d.start).collect::<Vec<_>>());
     }
 
     #[test]

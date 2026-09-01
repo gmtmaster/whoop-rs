@@ -42,10 +42,10 @@ pub use refine::{
     refine as refine_wake, refine_with as refine_wake_with,
 };
 pub use v2::{
-    DEEP_GATE_THRESH, Prepared, STAGE_ORDER, emissions_prepared as emissions_v2,
-    epoch_starts as epoch_starts_v2, prepare as prepare_v2, segments_of as segments_v2,
-    stage as stage_v2, stage_prepared as stage_v2_prepared, stage_with as stage_v2_with,
-    viterbi as decode_v2,
+    DEEP_GATE_THRESH, EpochDiagnostic, Prepared, STAGE_ORDER, diagnostics_prepared as diagnostics_v2,
+    emissions_prepared as emissions_v2, epoch_starts as epoch_starts_v2, prepare as prepare_v2,
+    segments_of as segments_v2, stage as stage_v2, stage_prepared as stage_v2_prepared,
+    stage_with as stage_v2_with, viterbi as decode_v2,
 };
 
 /// The stream bundle for one detection window: raw per-sample signals plus the wrist-off intervals, band
