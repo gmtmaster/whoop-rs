@@ -190,6 +190,25 @@ fn resolved_hrmax(caller: Option<f64>, samples: &[physio_algo::HrSample], age: f
     strain::resolve_hrmax(caller, &bpms, (age > 0.0).then_some(age)).0
 }
 
+#[cfg(test)]
+mod calorie_tests {
+    use super::*;
+
+    #[test]
+    fn bout_ffi_is_the_shared_physio_implementation() {
+        let ticks: Vec<HrTick> = (0..600).map(|ts| HrTick { ts, bpm: 135 }).collect();
+        let direct_samples: Vec<physio_algo::HrSample> = ticks.iter()
+            .map(|tick| physio_algo::HrSample::new(tick.ts, tick.bpm)).collect();
+        let direct = calories::estimate_bout_calories(
+            &direct_samples, 80.0, 180.0, 35.0, "male", 185.0, 55.0,
+        );
+        let ffi = calories_estimate_bout(
+            ticks, 80.0, 180.0, 35.0, "male".into(), Some(185.0), 55.0,
+        );
+        assert_eq!(ffi, vec![direct.0, direct.1]);
+    }
+}
+
 // ── Workout detection ──────────────────────────────────────────────────────
 
 /// A gravity/accel sample for workout detection.

@@ -140,11 +140,22 @@ fn bill<F: Fn(i64) -> (f64, f64)>(
     (kcal, secs)
 }
 
-/// Time-ordered borrows of `hr_samples`, the order [bill] needs.
-fn ordered(hr_samples: &[HrSample]) -> Vec<&HrSample> {
+/// Time-ordered borrows of `hr_samples`, with exactly one value per timestamp. Live transports may
+/// publish HR and R-R updates more than once in the same integer second; those callbacks are signal
+/// updates, not additional elapsed seconds. The last input value for a timestamp wins, after which
+/// [bill] integrates only positive elapsed time between distinct timestamps.
+fn ordered_unique(hr_samples: &[HrSample]) -> Vec<&HrSample> {
     let mut v: Vec<&HrSample> = hr_samples.iter().collect();
     v.sort_by_key(|s| s.ts);
-    v
+    let mut unique: Vec<&HrSample> = Vec::with_capacity(v.len());
+    for sample in v {
+        if unique.last().is_some_and(|previous| previous.ts == sample.ts) {
+            *unique.last_mut().expect("last was just checked") = sample;
+        } else {
+            unique.push(sample);
+        }
+    }
+    unique
 }
 
 /// Estimate (kcal, kJ) for a workout bout — a span the detector already confirmed motion over, so every
@@ -165,7 +176,7 @@ pub fn estimate_bout_calories(
     let coeffs = resolve_coeffs(sex);
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
     let (kcal, _) = bill(
-        &ordered(hr_samples),
+        &ordered_unique(hr_samples),
         &coeffs,
         weight_kg,
         age,
@@ -203,7 +214,7 @@ pub fn estimate_day_calories(
     let coeffs = resolve_coeffs(sex);
     let resting_rate = resting_kcal_per_s(&coeffs, weight_kg, height_cm, age);
     let (total_kcal, secs) = bill(
-        &ordered(hr_samples),
+        &ordered_unique(hr_samples),
         &coeffs,
         weight_kg,
         age,
@@ -492,6 +503,73 @@ mod tests {
         );
         assert!((sparse_kcal - dense_kcal).abs() < dense_kcal * 0.05);
         assert!(sparse_kcal > dense_kcal * 0.5);
+    }
+
+    #[test]
+    fn workout_estimate_is_deterministic_and_grows_with_a_realistic_prefix() {
+        let samples: Vec<HrSample> = (0..900)
+            .map(|i| HrSample { ts: i, bpm: 105 + (i / 180) as i32 * 8 })
+            .collect();
+        let first = estimate_bout_calories(&samples, 80.0, 180.0, 35.0, "male", 185.0, 55.0).0;
+        let second = estimate_bout_calories(&samples, 80.0, 180.0, 35.0, "male", 185.0, 55.0).0;
+        assert_eq!(first, second);
+        let shorter = estimate_bout_calories(
+            &samples[..450], 80.0, 180.0, 35.0, "male", 185.0, 55.0,
+        ).0;
+        assert!(shorter >= 0.0 && first >= shorter);
+    }
+
+    fn workout_kcal(samples: &[HrSample]) -> f64 {
+        estimate_bout_calories(samples, 80.0, 180.0, 35.0, "male", 185.0, 55.0).0
+    }
+
+    #[test]
+    fn one_sample_per_second_integrates_the_elapsed_series() {
+        let samples: Vec<HrSample> = (0..600).map(|ts| HrSample { ts, bpm: 135 }).collect();
+        assert!(workout_kcal(&samples) > 0.0);
+        assert_eq!(workout_kcal(&samples), workout_kcal(&samples));
+    }
+
+    #[test]
+    fn duplicate_timestamps_do_not_add_billable_seconds() {
+        let unique = vec![
+            HrSample { ts: 10, bpm: 120 },
+            HrSample { ts: 11, bpm: 130 },
+            HrSample { ts: 12, bpm: 140 },
+        ];
+        let duplicated = vec![
+            HrSample { ts: 10, bpm: 100 },
+            HrSample { ts: 10, bpm: 110 },
+            HrSample { ts: 10, bpm: 120 },
+            HrSample { ts: 11, bpm: 125 },
+            HrSample { ts: 11, bpm: 130 },
+            HrSample { ts: 12, bpm: 140 },
+        ];
+        assert_eq!(workout_kcal(&duplicated), workout_kcal(&unique));
+    }
+
+    #[test]
+    fn out_of_order_samples_match_their_time_ordered_equivalent() {
+        let ordered = vec![
+            HrSample { ts: 10, bpm: 120 },
+            HrSample { ts: 11, bpm: 130 },
+            HrSample { ts: 12, bpm: 140 },
+        ];
+        let out_of_order = vec![ordered[2], ordered[0], ordered[1]];
+        assert_eq!(workout_kcal(&out_of_order), workout_kcal(&ordered));
+    }
+
+    #[test]
+    fn realistic_high_frequency_capture_matches_one_value_per_second() {
+        let unique: Vec<HrSample> = (0..900)
+            .map(|ts| HrSample { ts, bpm: 105 + (ts / 180) as i32 * 8 })
+            .collect();
+        let high_frequency: Vec<HrSample> = unique.iter().flat_map(|sample| [
+            HrSample { ts: sample.ts, bpm: sample.bpm - 1 },
+            HrSample { ts: sample.ts, bpm: sample.bpm },
+            *sample,
+        ]).collect();
+        assert_eq!(workout_kcal(&high_frequency), workout_kcal(&unique));
     }
 
     #[test]
