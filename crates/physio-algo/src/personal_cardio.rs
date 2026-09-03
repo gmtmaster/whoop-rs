@@ -9,9 +9,12 @@
 //! consumers of it (see `hrr_zones.rs` and `healthspan_intensity.rs`).
 //!
 //! Deliberately reuses rather than re-derives: `strain::pct_hrr` is THE %HRR formula (no second
-//! implementation here); `strain::tanaka_hrmax`/`estimate_hrmax` for the population prior and the
-//! percentile idea this module extends into a persisted, multi-session form; `hr_recovery::calculate`
-//! and `hr_gap` for evidence corroboration, unchanged.
+//! implementation here); `strain::estimate_hrmax`'s percentile idea this module extends into a
+//! persisted, multi-session form (see `SESSION_HRMAX_PERCENTILE`'s doc); `hr_recovery::calculate`
+//! and `hr_gap` for evidence corroboration, unchanged. The cold-start/insufficient-evidence
+//! population prior is Gellish(age) (`gellish_hrmax`, below) - deliberately NOT
+//! `strain::tanaka_hrmax`, which remains that module's own separate, unrelated fallback (see
+//! `gellish_hrmax`'s doc for why the two are not the same authority).
 //!
 //! CONFIDENCE NOTE (read before tuning constants): the recency window, decay half-life, and the
 //! MEDIUM/HIGH corroboration thresholds below are ENGINEERING JUDGMENT, not literature-derived
@@ -33,7 +36,19 @@
 
 pub use crate::hr_gap::{GapPosition, classify as gap_classify};
 pub use crate::hr_sample::HrSample;
-use crate::strain::{percentile_pct, tanaka_hrmax};
+use crate::strain::percentile_pct;
+
+/// Gellish et al. (2011) age-predicted Max HR: 207 - 0.7 x age. THE canonical cold-start/
+/// insufficient-evidence prior for the Personal Cardiovascular Profile (product decision,
+/// superseding the Tanaka formula `strain::tanaka_hrmax` still uses for its own, separate,
+/// unrelated fallback path - see that function's doc; this module never calls it). Not claimed to
+/// be WHOOP's own exact cold-start formula - WHOOP's public material confirms age-based
+/// initialization with later personalization but does not establish its precise equation. Any
+/// Swift/local mirror of this constant must stay in lockstep by hand (see `Profile.swift`'s doc) -
+/// this Rust function is the one authority it mirrors.
+pub fn gellish_hrmax(age: f64) -> f64 {
+    207.0 - 0.7 * age
+}
 
 // ── HRR primitive (delegates to `strain::pct_hrr`; nothing new is computed here) ──────────────────
 
@@ -347,11 +362,11 @@ pub struct MaxHrProfile {
 }
 
 impl MaxHrProfile {
-    /// Cold start: Tanaka(age), no evidence. `age` must be the user's real age (Part 3 of the
+    /// Cold start: Gellish(age), no evidence. `age` must be the user's real age (Part 3 of the
     /// implementation request: no more hardcoded 26).
     pub fn cold_start(age: f64) -> Self {
         Self {
-            max_hr: tanaka_hrmax(age),
+            max_hr: gellish_hrmax(age),
             source: MaxHrSource::AgeEstimate,
             confidence: Confidence::Low,
             observed_peak: None,
@@ -531,7 +546,7 @@ pub fn apply_age_decay(profile: &MaxHrProfile, new_age: f64) -> MaxHrProfile {
         return profile.clone();
     }
     let mut next = profile.clone();
-    next.max_hr = tanaka_hrmax(new_age);
+    next.max_hr = gellish_hrmax(new_age);
     next
 }
 
@@ -606,6 +621,24 @@ pub const HR_ONLY_SPAN_MODALITY_CONFIDENCE: f64 = 0.6;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Cold-start authority: Gellish, not Tanaka ─────────────────────────────────────────────
+
+    #[test]
+    fn gellish_hrmax_formula() {
+        assert!((gellish_hrmax(30.0) - 186.0).abs() < 1e-9); // 207 - 0.7*30
+        assert!((gellish_hrmax(26.0) - 188.8).abs() < 1e-9); // 207 - 0.7*26
+    }
+
+    #[test]
+    fn cold_start_uses_gellish_not_tanaka() {
+        let profile = MaxHrProfile::cold_start(26.0);
+        assert!((profile.max_hr - gellish_hrmax(26.0)).abs() < 1e-9);
+        // Must NOT match Tanaka(26) = 208 - 0.7*26 = 189.8 - the two priors differ by exactly 1.0.
+        assert!((profile.max_hr - 189.8).abs() > 1e-6, "cold start must not use the Tanaka prior");
+        assert_eq!(profile.source, MaxHrSource::AgeEstimate);
+        assert_eq!(profile.confidence, Confidence::Low);
+    }
 
     // Nonzero base, matching `hr_recovery`'s own test convention (`const END: i64 = 10_000`) -
     // `evaluate_session_evidence`'s `workout_start <= 0` sanity guard (mirroring
@@ -764,7 +797,7 @@ mod tests {
 
     #[test]
     fn a_single_strong_session_reaches_medium_not_high() {
-        let profile = MaxHrProfile::cold_start(30.0); // Tanaka(30) = 187.0
+        let profile = MaxHrProfile::cold_start(30.0); // Gellish(30) = 207 - 21 = 186.0
         let evidence = MaxHrEvidence { candidate_bpm: 192.0, observed_at: 1000, quality: 1.0 };
         let next = update_from_evidence(&profile, evidence, 1000);
         assert_eq!(next.confidence, Confidence::Medium);
@@ -775,7 +808,7 @@ mod tests {
 
     #[test]
     fn raise_is_bounded_even_under_a_large_jump() {
-        let profile = MaxHrProfile::cold_start(30.0); // 187.0
+        let profile = MaxHrProfile::cold_start(30.0); // Gellish(30) = 186.0
         let evidence = MaxHrEvidence { candidate_bpm: 230.0, observed_at: 1000, quality: 1.0 };
         let next = update_from_evidence(&profile, evidence, 1000);
         assert!(
@@ -903,7 +936,7 @@ mod tests {
     fn age_decay_only_applies_before_field_evidence() {
         let profile = MaxHrProfile::cold_start(30.0);
         let decayed = apply_age_decay(&profile, 31.0);
-        assert!((decayed.max_hr - tanaka_hrmax(31.0)).abs() < 1e-9);
+        assert!((decayed.max_hr - gellish_hrmax(31.0)).abs() < 1e-9);
 
         let mut evidenced = profile.clone();
         evidenced = update_from_evidence(

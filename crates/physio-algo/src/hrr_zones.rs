@@ -14,21 +14,27 @@
 use crate::hr_zones::{HrZone, HrZoneSet};
 use crate::personal_cardio::heart_rate_reserve;
 
-/// CONFIDENCE: MEDIUM. This is "Candidate A" from `hr-intensity-model-spec.md` Part 2.2 - the
-/// directly ACSM-aligned six-way split (moderate 40-59% HRR evenly split into Z1/Z2, vigorous
-/// 60-84% evenly split into Z3/Z4, near-maximal-to-maximal combined into Z5). It is evidence-
-/// consistent (ACSM-consistent cut points at 40/60% HRR, which the spec rates moderate-strong), but
-/// the exact even split within moderate and within vigorous, and where near-maximal/maximal get
-/// combined, are ACSM-edition-dependent / not independently outcome-validated for THIS six-way
-/// split as workout-display zones. Versioned and swappable for exactly that reason - see
-/// `WorkoutZoneModel` below. NOT the same split as Healthspan's moderate/vigorous boundary (that is
-/// intentional; see module doc).
+/// HISTORICAL, FROZEN: "Candidate A" from `hr-intensity-model-spec.md` Part 2.2 - the six-way split
+/// (moderate 40-59% HRR evenly split into Z1/Z2, vigorous 60-84% evenly split into Z3/Z4,
+/// near-maximal-to-maximal combined into Z5). SUPERSEDED as the canonical workout model by
+/// `CANONICAL_WORKOUT_EDGES`/`HRR_V2` below (product decision: align with the publicly documented
+/// WHOOP Karvonen/HRR zone convention - 40/60/70/80/90 - not this evenly-split variant). Kept, and
+/// its `hrr-v1` version tag kept, ONLY so historical `zone_model_version = "hrr-v1"` rows (persisted
+/// before this change) can still be replayed/interpreted correctly - never mutate this constant in
+/// place, and never point new computations at `HRR_V1`.
 pub const CANDIDATE_A_EDGES: [f64; 6] = [0.40, 0.50, 0.60, 0.70, 0.85, 1.00];
 
+/// CANONICAL, CURRENT: NOOP's workout Z1-5 %HRR edges - a deliberate product decision (not
+/// literature-derived like `CANDIDATE_A_EDGES` was), chosen to align with the publicly documented
+/// WHOOP Karvonen/HRR workout-zone convention: Z1 40-60%, Z2 60-70%, Z3 70-80%, Z4 80-90%, Z5
+/// 90-100% HRR. This is standard Karvonen/HRR physiology, not a reproduction of any WHOOP
+/// proprietary implementation. See `WorkoutZoneModel::HRR_V2`.
+pub const CANONICAL_WORKOUT_EDGES: [f64; 6] = [0.40, 0.60, 0.70, 0.80, 0.90, 1.00];
+
 /// A named, versioned set of %HRR edges for the six workout zones. New edge sets get a new
-/// `version` string and are additive - never mutate `CANDIDATE_A_EDGES` in place once a version has
-/// shipped, since `zone_model_version` is persisted per-day for reproducibility (see the daily
-/// canonical provenance columns in the architecture doc, Part C.4/D.5).
+/// `version` string and are additive - never mutate a shipped edge set in place, since
+/// `zone_model_version` is persisted per-day (and, going forward, per-workout - see
+/// `docs/architecture.md`'s workout-physiology-snapshot note) for reproducibility.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorkoutZoneModel {
     pub version: &'static str,
@@ -36,13 +42,26 @@ pub struct WorkoutZoneModel {
 }
 
 impl WorkoutZoneModel {
-    /// CONFIDENCE: MEDIUM (see `CANDIDATE_A_EDGES` doc). This is the v1 default, but is passed
-    /// explicitly rather than implied, so a caller/config can pin an older or alternate model
-    /// without a code change - do not hardcode this as the only option in call sites.
+    /// HISTORICAL, FROZEN: the original ACSM-evenly-split model. Do not use for new computations -
+    /// kept only so `zone_model_version = "hrr-v1"` history remains replayable. See
+    /// `CANDIDATE_A_EDGES`'s doc.
     pub const HRR_V1: WorkoutZoneModel = WorkoutZoneModel {
         version: "hrr-v1",
         edges: CANDIDATE_A_EDGES,
     };
+
+    /// CANONICAL, CURRENT default for all new workout-zone computations (live, persisted, and
+    /// daily/Healthspan aggregation alike - see `CANONICAL_WORKOUT_EDGES`'s doc for why these
+    /// specific edges). A semantic change from `HRR_V1` (different boundaries for the same bpm), so
+    /// it gets its own version string rather than silently reusing `"hrr-v1"` for different numbers.
+    pub const HRR_V2: WorkoutZoneModel = WorkoutZoneModel {
+        version: "hrr-v2",
+        edges: CANONICAL_WORKOUT_EDGES,
+    };
+
+    /// The model new computations should use. A single named spot so "which version is current"
+    /// is never duplicated/hardcoded at each call site.
+    pub const CURRENT: WorkoutZoneModel = Self::HRR_V2;
 }
 
 /// Build a personalized `HrZoneSet` (bpm-space, ready for `hr_zones::time_in_zone`) from %HRR edges,
@@ -50,8 +69,8 @@ impl WorkoutZoneModel {
 /// (`max_hr <= rhr_baseline`) - callers should fall back to the age/%MaxHR path
 /// (`hr_zones::zones_for_age`) in that case, not fabricate zones from a negative reserve.
 ///
-/// `source` on the returned `HrZoneSet` is the model's version string (e.g. `"hrr-v1"`), NOT
-/// `"tanaka"`/`"manual"` - this is what lets a daily canonical row record which zone model produced
+/// `source` on the returned `HrZoneSet` is the model's version string (e.g. `"hrr-v2"`), NOT
+/// `"tanaka"`/`"manual"` - this is what lets a daily/workout row record which zone model produced
 /// its `zone1Seconds..zone5Seconds`, per the architecture doc's provenance columns.
 pub fn zones_from_hrr(
     max_hr: f64,
@@ -86,23 +105,52 @@ mod tests {
 
     #[test]
     fn none_for_nonpositive_reserve() {
-        assert_eq!(zones_from_hrr(180.0, 180.0, WorkoutZoneModel::HRR_V1), None);
+        assert_eq!(zones_from_hrr(180.0, 180.0, WorkoutZoneModel::HRR_V2), None);
     }
 
     #[test]
     fn edges_convert_pct_hrr_into_bpm_against_the_reserve() {
-        // RHR 52, MaxHR 194 -> HRR 142. Z1 lower = 52 + 0.40*142 = 108.8.
-        let zs = zones_from_hrr(194.0, 52.0, WorkoutZoneModel::HRR_V1).unwrap();
+        // RHR 52, MaxHR 194 -> HRR 142. Z1 lower = 52 + 0.40*142 = 108.8 (unchanged: 40% floor is
+        // the same in both v1 and v2).
+        let zs = zones_from_hrr(194.0, 52.0, WorkoutZoneModel::HRR_V2).unwrap();
         assert!((zs.zones[0].lower - 108.8).abs() < 1e-9);
-        assert_eq!(zs.source, "hrr-v1");
+        assert_eq!(zs.source, "hrr-v2");
     }
 
     #[test]
     fn reuses_hr_zones_time_in_zone_unchanged() {
-        let zs = zones_from_hrr(194.0, 52.0, WorkoutZoneModel::HRR_V1).unwrap();
+        let zs = zones_from_hrr(194.0, 52.0, WorkoutZoneModel::HRR_V2).unwrap();
         let hr: Vec<HrSample> = (0..10).map(|t| HrSample { ts: t, bpm: 140 }).collect();
         let tiz = time_in_zone(&hr, &zs);
-        // 140bpm at RHR 52/HRR 142 -> 62.0% HRR -> falls in Z3 (0.60-0.70) under Candidate A.
-        assert!((tiz.seconds_in_zone(3) - 10.0).abs() < 1e-6, "{:?}", tiz);
+        // 140bpm at RHR 52/HRR 142 -> 62.0% HRR -> falls in Z2 (0.60-0.70) under the canonical v2
+        // edges (was Z3 under v1's 50/60/70 split - the exact semantic shift this version bump
+        // exists to make visible/traceable).
+        assert!((tiz.seconds_in_zone(2) - 10.0).abs() < 1e-6, "{:?}", tiz);
+    }
+
+    #[test]
+    fn v1_and_v2_are_both_still_directly_usable_and_disagree_where_expected() {
+        // Historical replay contract: HRR_V1 must still produce the OLD boundaries unchanged, so a
+        // persisted `zone_model_version = "hrr-v1"` row stays reproducible even after this change.
+        let v1 = zones_from_hrr(194.0, 52.0, WorkoutZoneModel::HRR_V1).unwrap();
+        let v2 = zones_from_hrr(194.0, 52.0, WorkoutZoneModel::HRR_V2).unwrap();
+        assert_eq!(v1.source, "hrr-v1");
+        assert_eq!(v2.source, "hrr-v2");
+        // Z2 lower edge: v1 = 52 + 0.50*142 = 123.0, v2 = 52 + 0.60*142 = 137.2 - genuinely different.
+        assert!((v1.zones[1].lower - 123.0).abs() < 1e-9);
+        assert!((v2.zones[1].lower - 137.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn current_points_at_v2() {
+        assert_eq!(WorkoutZoneModel::CURRENT.version, "hrr-v2");
+        assert_eq!(WorkoutZoneModel::CURRENT.edges, CANONICAL_WORKOUT_EDGES);
+    }
+
+    #[test]
+    fn canonical_edges_match_the_documented_whoop_hrr_convention() {
+        // 40/60/70/80/90 - see module doc: standard Karvonen/HRR physiology, a deliberate NOOP
+        // product decision aligned with (not copied from) WHOOP's publicly documented convention.
+        assert_eq!(CANONICAL_WORKOUT_EDGES, [0.40, 0.60, 0.70, 0.80, 0.90, 1.00]);
     }
 }

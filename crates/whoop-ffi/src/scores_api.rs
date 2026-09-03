@@ -350,6 +350,27 @@ pub fn hr_time_in_zone(hr: Vec<HrTick>, age: f64, max_hr_override: Option<f64>) 
     TimeInZoneInfo { seconds: t.seconds.to_vec(), below_zone1: t.below_zone1 }
 }
 
+/// Personalized, HRR-based (Karvonen) workout zones — the SAME canonical `hrr-v1` model
+/// `noop-engine` already uses server-side for daily/Healthspan zone aggregation
+/// (`physio_algo::hrr_zones::zones_from_hrr`). `None` when `max_hr <= rhr_baseline`
+/// (non-physiological reserve); callers should fall back to `hr_zones_for_age` in that case. This,
+/// not `hr_zones_for_age`/`hr_time_in_zone` above, is the model workout display/live-classification
+/// should use — those two are the legacy %MaxHR model, kept only for back-compat/shadow comparison.
+#[uniffi::export]
+pub fn hr_zones_from_hrr(max_hr: f64, rhr_baseline: f64) -> Option<HrZoneSetInfo> {
+    hrr_zones::zones_from_hrr(max_hr, rhr_baseline, hrr_zones::WorkoutZoneModel::HRR_V1).map(zone_set_to_ffi)
+}
+
+/// Seconds spent in each HR zone over an HR series, using the canonical HRR-based (`hrr-v1`) zones.
+/// `None` when the underlying zone set can't be built (non-physiological reserve).
+#[uniffi::export]
+pub fn hr_time_in_zone_hrr(hr: Vec<HrTick>, max_hr: f64, rhr_baseline: f64) -> Option<TimeInZoneInfo> {
+    let zs = hrr_zones::zones_from_hrr(max_hr, rhr_baseline, hrr_zones::WorkoutZoneModel::HRR_V1)?;
+    let s = to_hr(hr);
+    let t = hr_zones::time_in_zone(&s, &zs);
+    Some(TimeInZoneInfo { seconds: t.seconds.to_vec(), below_zone1: t.below_zone1 })
+}
+
 /// A computed Fitness Age with the inputs to present it. `vo2max` is filled only with a waist.
 /// `advance_years` is POSITIVE when older than chronological, matching `rhythm_age`'s convention.
 #[derive(uniffi::Record)]
