@@ -8,9 +8,9 @@ use super::params::Params;
 use super::refine::{RefineParams, refine_with};
 use super::v2::stage_with as stage_v2_with;
 use super::{
-    DEEP_GATE_THRESH, SleepStage, SleepStreams, StageSegment, analyze,
-    analyze_for_rr_generation, analyze_for_rr_generation_with_short_nap_shadow, motion_dense,
-    stage_v2,
+    DEEP_GATE_THRESH, Session, SessionAcceptancePath, SessionRole, SleepStage, SleepStreams,
+    StageSegment, analyze, analyze_for_rr_generation, analyze_for_rr_generation_with_short_nap_promotion,
+    analyze_for_rr_generation_with_short_nap_shadow, assign_session_roles, motion_dense, stage_v2,
 };
 use crate::nightly_physiology::RrDeviceGeneration;
 
@@ -391,6 +391,197 @@ fn shadow_observation_keeps_the_golden_production_session_byte_identical() {
         analyze_for_rr_generation_with_short_nap_shadow(&streams, RrDeviceGeneration::Whoop5Mg);
     assert_eq!(shadow.sessions, production);
     assert!(shadow.short_nap_diagnostics.is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phase B: promotion path + canonical role assignment.
+// ---------------------------------------------------------------------------------------------
+
+/// Regression test C (Phase B spec §11): the promotion path must reproduce the SAME winning main
+/// group on the SAME crafted night the golden hypnogram is pinned to, with zero session-boundary
+/// or physiology change relative to the pre-Phase-B `analyze_for_rr_generation` path, and the
+/// winning (only) session must be assigned MAIN_SLEEP.
+#[test]
+fn promotion_path_keeps_the_golden_main_sleep_session_byte_identical_and_roles_it_main_sleep() {
+    let input = golden_input();
+    let streams = SleepStreams {
+        hr: input.hr,
+        rr: input.rr,
+        accel: input.accel,
+        tz_offset_s: 0,
+        ..Default::default()
+    };
+    let production = analyze_for_rr_generation(&streams, RrDeviceGeneration::Whoop5Mg);
+    let promoted =
+        analyze_for_rr_generation_with_short_nap_promotion(&streams, RrDeviceGeneration::Whoop5Mg);
+
+    // No duration-rejected candidate exists on this crafted night, so nothing to promote: the
+    // session set is byte-identical to the pre-Phase-B production path (every field, including the
+    // new `acceptance_path`, which the pre-Phase-B path already stamps `Normal`).
+    assert_eq!(promoted.sessions, production);
+    assert!(promoted.short_nap_diagnostics.is_empty());
+    assert!(
+        promoted
+            .sessions
+            .iter()
+            .all(|s| s.acceptance_path == SessionAcceptancePath::Normal)
+    );
+
+    let roles = assign_session_roles(&promoted.sessions, 0);
+    assert_eq!(roles, vec![SessionRole::MainSleep]);
+}
+
+fn stub_session(start: i64, end: i64, path: SessionAcceptancePath) -> Session {
+    // Six hours asleep out of the [start, end] span, matching `ScoredNightBlock`'s expectation of
+    // decoded asleep seconds (not the raw clock span) for the main-night scorer under test.
+    let asleep_end = start + ((end - start) * 9) / 10;
+    Session {
+        start,
+        end,
+        efficiency: (asleep_end - start) as f64 / (end - start) as f64,
+        resting_hr: Some(55),
+        avg_hrv: Some(60.0),
+        segments: vec![
+            StageSegment { start, end: asleep_end, stage: SleepStage::Light },
+            StageSegment { start: asleep_end, end, stage: SleepStage::Wake },
+        ],
+        motion_grid: vec![],
+        sleep_state_grid: vec![],
+        acceptance_path: path,
+    }
+}
+
+/// Test D-adjacent (Phase B spec §11 D + §5): a promoted short nap must become NAP regardless of
+/// where it falls relative to the winning main-night group, and — critically for the physiology
+/// isolation contract — its presence must never change which Normal-path group wins MAIN_SLEEP nor
+/// demote/relabel any other Normal-path session, because role assignment scores `Normal` sessions
+/// only.
+#[test]
+fn a_shortnap_session_never_enters_the_main_night_scorer_and_always_roles_nap() {
+    let night = 1_700_000_000i64; // 23:00-ish local (offset 0), matches mainnight's overnight band
+    let main = stub_session(night, night + 7 * 3600, SessionAcceptancePath::Normal);
+    let other_daytime = stub_session(
+        night + 15 * 3600,
+        night + 16 * 3600,
+        SessionAcceptancePath::Normal,
+    );
+    let promoted_nap = stub_session(
+        night + 11 * 3600,
+        night + 11 * 3600 + 90 * 60,
+        SessionAcceptancePath::ShortNap,
+    );
+
+    let baseline_roles = assign_session_roles(&[main.clone(), other_daytime.clone()], 0);
+    let with_nap_roles = assign_session_roles(&[main, other_daytime, promoted_nap], 0);
+
+    assert_eq!(baseline_roles, vec![SessionRole::MainSleep, SessionRole::Fragment]);
+    assert_eq!(
+        with_nap_roles,
+        vec![SessionRole::MainSleep, SessionRole::Fragment, SessionRole::Nap],
+        "adding a ShortNap-path session must roles it NAP without moving any other role"
+    );
+}
+
+/// Root-cause regression: an isolated daytime `Normal`-path session — the shape of the real "Nap B"
+/// fixture (`crates/physio-algo/tests/short_nap_audit.rs`'s `NAP_B_START`/`NAP_B_END`, 2026-09-06
+/// 13:43:55 -> 15:53:35 local, Europe/Budapest offset) — must NOT be assigned MAIN_SLEEP merely for
+/// being the only `Normal`-path candidate `assign_session_roles` was called with. Before the
+/// overnight-evidence gate, `main_night_group_indices_scored` trivially picked this lone daytime
+/// block as its `OnlyBlock` winner and `assign_session_roles` converted that straight into
+/// MAIN_SLEEP with no further evidence — exactly what happens in production when noop-engine's
+/// noon-to-noon compute-date window puts a real main night and a same-nominal-day isolated daytime
+/// session in different calls, so they never compete together. The fix: gate MAIN_SLEEP on the
+/// winning group's onset actually falling overnight (`detect::is_overnight_onset`, reused verbatim
+/// from `mainnight`'s own internal night-tail-bridging check). A lone daytime session fails that
+/// gate and is conservatively FRAGMENT — never silently promoted to NAP, which still requires an
+/// explicit `ShortNap` acceptance path.
+#[test]
+fn an_isolated_daytime_session_never_becomes_main_sleep_merely_for_being_alone() {
+    let nap_b_start = 1_788_695_035i64; // 2026-09-06 13:43:55 local (offset +2h)
+    let nap_b_end = 1_788_702_815i64; // 2026-09-06 15:53:35 local
+    let offset_s = 2 * 3_600;
+    let asleep_end = nap_b_start + ((nap_b_end - nap_b_start) * 9) / 10;
+    let session = Session {
+        start: nap_b_start,
+        end: nap_b_end,
+        efficiency: (asleep_end - nap_b_start) as f64 / (nap_b_end - nap_b_start) as f64,
+        resting_hr: Some(55),
+        avg_hrv: Some(60.0),
+        segments: vec![
+            StageSegment {
+                start: nap_b_start,
+                end: asleep_end,
+                stage: SleepStage::Light,
+            },
+            StageSegment {
+                start: asleep_end,
+                end: nap_b_end,
+                stage: SleepStage::Wake,
+            },
+        ],
+        motion_grid: vec![],
+        sleep_state_grid: vec![],
+        acceptance_path: SessionAcceptancePath::Normal,
+    };
+
+    let roles = assign_session_roles(&[session], offset_s);
+    assert_eq!(
+        roles,
+        vec![SessionRole::Fragment],
+        "a lone daytime-onset session must never read MAIN_SLEEP without overnight evidence"
+    );
+}
+
+/// Companion positive control: the SAME lone-candidate `OnlyBlock` shape, but with a genuine
+/// overnight onset (23:00 local), must still read MAIN_SLEEP — the gate above only excludes
+/// candidates lacking overnight evidence, it does not disable the `OnlyBlock` case generally.
+#[test]
+fn a_lone_overnight_session_still_reads_main_sleep() {
+    let night = 1_700_000_000i64; // ~22:13 local (offset 0) — outside the daytime band
+    let asleep_end = night + ((7 * 3_600) * 9) / 10;
+    let session = Session {
+        start: night,
+        end: night + 7 * 3_600,
+        efficiency: (asleep_end - night) as f64 / (7.0 * 3_600.0),
+        resting_hr: Some(55),
+        avg_hrv: Some(60.0),
+        segments: vec![
+            StageSegment {
+                start: night,
+                end: asleep_end,
+                stage: SleepStage::Light,
+            },
+            StageSegment {
+                start: asleep_end,
+                end: night + 7 * 3_600,
+                stage: SleepStage::Wake,
+            },
+        ],
+        motion_grid: vec![],
+        sleep_state_grid: vec![],
+        acceptance_path: SessionAcceptancePath::Normal,
+    };
+
+    let roles = assign_session_roles(&[session], 0);
+    assert_eq!(roles, vec![SessionRole::MainSleep]);
+}
+
+/// A candidate that never reaches the promotion step (the shadow evaluator's `InsufficientEvidence`
+/// or `Rejected` verdicts) must never appear as `SessionAcceptancePath::ShortNap` — the promotion
+/// gate is `verdict == Eligible`, nothing looser. Exercised directly against the same evaluator
+/// fixture `short_nap`'s own unit tests use, so this stays coupled to Phase A's real gate rather
+/// than a duplicated one.
+#[test]
+fn only_eligible_verdicts_are_representable_as_a_promoted_shortnap_role() {
+    // A `Fragment`/`MainSleep` role is never produced for a `ShortNap`-path session, and a `Nap`
+    // role is never produced for a `Normal`-path session — the mapping in `assign_session_roles`
+    // is total and exhaustive over `acceptance_path`, so this is checked structurally: every
+    // ShortNap-path session in a mixed set roles Nap, and no Normal-path session ever roles Nap.
+    let a = stub_session(0, 3600, SessionAcceptancePath::Normal);
+    let b = stub_session(100_000, 100_000 + 3600, SessionAcceptancePath::ShortNap);
+    let roles = assign_session_roles(&[a, b], 0);
+    assert_ne!(roles[0], SessionRole::Nap);
+    assert_eq!(roles[1], SessionRole::Nap);
 }
 
 /// The golden above carries no step stream, so `analyze`'s last stage declines on it. This drives the

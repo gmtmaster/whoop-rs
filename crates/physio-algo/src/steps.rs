@@ -35,6 +35,65 @@ pub fn steps_in_window(samples: &[StepSample]) -> Option<u32> {
     if total > 0 { Some(total) } else { None }
 }
 
+// ── Gen5 v2: gait-class-gated tick sum (frozen for the prospective comparison week) ────────────
+//
+// See the third-pass forensic audit (outputs/steps-audit-pass3-2026-09-07) and the implementation
+// plan (outputs/steps-gen5-v2-implementation-plan-2026-09-07) in noop-backend for the full evidence
+// and the explicit list of exclusions (no scalar, no stepTicksPerStep divisor, no burst filter, no
+// WHOOP-fitted factor, no ML). This is the smallest evidence-supported behavioral change: the same
+// wrap-aware/gap-rejecting kernel above, additionally requiring the record a delta lands on to
+// report positive gait evidence.
+
+/// Frozen algorithm identity for [`steps_in_window_gen5_v2`]/[`tick_delta_gen5_v2`]. Persisted as
+/// backend provenance (noop-backend's `steps_algorithm_version` column) so a stored daily value can
+/// be traced back to the exact logic that produced it. Bump this string, not the behavior in place,
+/// if the gating logic ever changes.
+pub const ALGORITHM_VERSION_GEN5_V2: &str = "steps-gen5-v2";
+
+/// Whether `activity_class` reports positive gait evidence: WALK (1) or RUN (2). `None` (the byte
+/// was absent, or `gen5::v18`'s decode gate saw an unmapped/sentinel code and stored nothing) and
+/// `Some(0)` (STILL) are both treated as "no gait evidence" here - not because either is proven
+/// wrong, but because this gate only ever asserts a POSITIVE claim ("this looks like gait"), never
+/// a negative one. A class we couldn't read carries exactly as much gait evidence as a record
+/// confidently marked still: none. This matters because STILL itself needs the same caveat: the
+/// third-pass audit found its own accepted-delta distribution is 100% >= 3 ticks/sec (mean ~6.12) -
+/// larger than WALK's 1.94 AND RUN's 3.16 - so `activity_class` is not a clean gait/no-gait
+/// discriminator even where a value IS present, and an absent value is given no benefit of the doubt.
+fn is_gait_class(activity_class: Option<u8>) -> bool {
+    matches!(activity_class, Some(1) | Some(2))
+}
+
+/// [`tick_delta`], additionally gated on the ARRIVING sample's (`next`) gait class. `next` is the
+/// convention the third-pass audit used when it tallied "class0/class1/class2 ticks" against the
+/// paired WHOOP daily totals (a delta is attributed to the record it lands on) - this reproduces
+/// those numbers exactly. `None` when either `tick_delta` itself would reject the pair (zero/
+/// backward/sync-gap) or `next.activity_class` isn't WALK/RUN.
+pub fn tick_delta_gen5_v2(prev: &StepSample, next: &StepSample) -> Option<u16> {
+    let delta = tick_delta(prev, next)?;
+    is_gait_class(next.activity_class).then_some(delta)
+}
+
+/// `steps-gen5-v2` ([`ALGORITHM_VERSION_GEN5_V2`]): [`steps_in_window`]'s sort/sum/None-handling,
+/// with every pairwise delta additionally required to pass [`tick_delta_gen5_v2`]'s gait-class gate.
+/// Same raw counter, same ordering, same wrap/reset/`MAX_STEP_DELTA` handling as `steps_in_window` -
+/// the ONLY behavioral difference is the gait-class requirement. No scalar, no `stepTicksPerStep`
+/// divisor, no burst filter, no WHOOP-fitted factor.
+pub fn steps_in_window_gen5_v2(samples: &[StepSample]) -> Option<u32> {
+    if samples.len() < 2 {
+        return None;
+    }
+    let mut sorted: Vec<&StepSample> = samples.iter().collect();
+    sorted.sort_by_key(|s| s.ts);
+
+    let mut total: u32 = 0;
+    for pair in sorted.windows(2) {
+        if let Some(delta) = tick_delta_gen5_v2(pair[0], pair[1]) {
+            total += delta as u32;
+        }
+    }
+    if total > 0 { Some(total) } else { None }
+}
+
 // ── One steps model, both families ────────────────────────────────────────────────────────────────
 //
 // A 5.0/MG counts motion TICKS and a 4.0 has no counter at all, only movement volume. Both map to
@@ -253,6 +312,10 @@ mod tests {
             counter,
             activity_class: None,
         }
+    }
+
+    fn step_class(ts: i64, counter: u16, activity_class: Option<u8>) -> StepSample {
+        StepSample { ts, counter, activity_class }
     }
 
     #[test]
@@ -531,5 +594,84 @@ mod tests {
         assert_eq!(weighted_median(&xs, &[1.0, 2.0]), 2.0, "mismatched lengths");
         assert_eq!(weighted_median(&xs, &[0.0, 0.0, 0.0]), 2.0, "zero total");
         assert_eq!(weighted_median(&[], &[]), 0.0);
+    }
+
+    // ── steps-gen5-v2: gait-class gate ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn gen5_v2_counts_only_walk_and_run_deltas() {
+        let s = [
+            step_class(0, 0, Some(0)),
+            step_class(1, 10, Some(0)), // delta 10, lands on STILL -> rejected
+            step_class(2, 12, Some(1)), // delta 2, lands on WALK -> accepted
+            step_class(3, 15, Some(2)), // delta 3, lands on RUN -> accepted
+            step_class(4, 16, None),    // delta 1, lands on missing class -> rejected
+            step_class(5, 20, Some(1)), // delta 4, lands on WALK -> accepted
+        ];
+        assert_eq!(steps_in_window_gen5_v2(&s), Some(2 + 3 + 4));
+        // v1 (steps_in_window) is completely unaffected by this gate: every positive delta counts.
+        assert_eq!(steps_in_window(&s), Some(10 + 2 + 3 + 1 + 4));
+    }
+
+    /// The decision this pins: an absent/invalid `activity_class` (the decoder's own "unmapped
+    /// code or sentinel" outcome - see `gen5::v18`) is rejected exactly like a confidently-read
+    /// STILL, not treated as a wildcard pass-through. Neither carries positive gait evidence.
+    #[test]
+    fn gen5_v2_missing_activity_class_is_rejected_like_still() {
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 0, None), &step_class(1, 5, None)),
+            None,
+            "missing class: no gait evidence"
+        );
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 0, Some(0)), &step_class(1, 5, Some(0))),
+            None,
+            "STILL: no gait evidence"
+        );
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 0, Some(1)), &step_class(1, 5, Some(1))),
+            Some(5),
+            "WALK: gait evidence"
+        );
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 0, Some(2)), &step_class(1, 5, Some(2))),
+            Some(5),
+            "RUN: gait evidence"
+        );
+    }
+
+    /// The gait-class gate is layered ON TOP of tick_delta's existing wrap/gap rules, never in
+    /// place of them: a genuine wrap during gait still counts, and a sync-gap/reboot boundary is
+    /// still dropped even when both endpoints report gait.
+    #[test]
+    fn gen5_v2_still_respects_wrap_and_gap_rules() {
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 65500, Some(1)), &step_class(1, 20, Some(1))),
+            Some(56),
+            "genuine wrap during WALK is counted"
+        );
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 100, Some(1)), &step_class(1, 5000, Some(1))),
+            None,
+            "sync-gap/reboot boundary dropped even when both ends report gait"
+        );
+        assert_eq!(
+            tick_delta_gen5_v2(&step_class(0, 100, Some(1)), &step_class(1, 100, Some(1))),
+            None,
+            "zero delta stays rejected regardless of class"
+        );
+    }
+
+    #[test]
+    fn gen5_v2_fewer_than_two_samples_or_no_gait_ticks_is_null() {
+        assert_eq!(steps_in_window_gen5_v2(&[]), None);
+        assert_eq!(steps_in_window_gen5_v2(&[step_class(0, 100, Some(1))]), None);
+        // All motion is STILL-labeled: no gait ticks at all, so the window is null, not zero.
+        let all_still = [
+            step_class(0, 0, Some(0)),
+            step_class(1, 20, Some(0)),
+            step_class(2, 40, Some(0)),
+        ];
+        assert_eq!(steps_in_window_gen5_v2(&all_still), None);
     }
 }
