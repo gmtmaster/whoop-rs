@@ -35,6 +35,12 @@ pub const STAGE_ORDER: [SleepStage; 4] = [
     SleepStage::Wake,
 ];
 
+/// Code-level identity of this module's shipped emission/decoding recipe, independent of
+/// `shadow_metrics::ALGORITHM_VERSION_V4` (which stamps the nightly-physiology/RHR bundle, not
+/// staging). Bump only when `Params::SHIPPED`'s staging-relevant fields change; `sleep-staging-v2`
+/// was the recipe documented in `docs/algorithms.md` prior to this constant's introduction.
+pub const STAGING_ALGORITHM_VERSION: &str = "sleep-staging-v3";
+
 /// Deep-eligibility HR-flatness percentile gate of the shipped recipe.
 pub const DEEP_GATE_THRESH: f64 = Params::SHIPPED.deep_gate_thresh;
 
@@ -1316,6 +1322,53 @@ mod tests {
         assert!(
             z.apply(None) > z.apply(Some(0.0)),
             "absence must not out-still a measured zero"
+        );
+    }
+
+    #[test]
+    fn staging_algorithm_version_is_the_shipped_sleep_staging_v3_identity() {
+        // Pins the code-level staging identity so a future edit here is a deliberate, visible bump,
+        // not a silent drift. Distinct from `shadow_metrics::ALGORITHM_VERSION_V4`, which stamps the
+        // nightly-physiology/RHR bundle and must NOT move when only staging changes.
+        assert_eq!(STAGING_ALGORITHM_VERSION, "sleep-staging-v3");
+    }
+
+    #[test]
+    fn shipped_deep_hrv_is_the_approved_minus_one_point_zero() {
+        // Pins the one approved staging-coefficient change (was -0.8) so it cannot silently regress
+        // or drift further without a visible test failure.
+        assert_eq!(Params::SHIPPED.deep_hrv, -1.0);
+    }
+
+    #[test]
+    fn only_deep_hrv_moved_from_its_prior_shipped_value() {
+        // Every other SHIPPED staging coefficient must be byte-for-byte the value this task found
+        // and was explicitly told to leave alone. Catches an accidental edit to any neighbor while
+        // touching deep_hrv.
+        let p = Params::SHIPPED;
+        assert_eq!(p.deep_hr, 0.5);
+        assert_eq!(p.deep_motion, -0.1);
+        assert_eq!(p.rem_hrv, 0.8);
+        assert_eq!(p.rem_motion, -0.4);
+        assert_eq!(p.rem_hr, 0.4);
+        assert_eq!(p.awake_motion, 1.0);
+        assert_eq!(p.awake_hrv, 0.5);
+        assert_eq!(p.awake_hr, 0.6);
+        assert_eq!(p.awake_deadzone, 0.30);
+        assert_eq!(p.deep_gate_thresh, 0.40);
+        assert_eq!(p.deep_gate_slope, 5.0);
+        assert_eq!(p.resp_weight, 0.6);
+        assert_eq!(p.base_rate, [0.15, 0.22, 0.50, 0.34]);
+        assert_eq!(p.cycle_deep_scale, 1.2);
+        assert_eq!(p.cycle_deep_decay, 0.55);
+        assert_eq!(
+            p.transition,
+            [
+                [0.76, 0.012, 0.216, 0.012],
+                [0.00333, 0.92, 0.06667, 0.01],
+                [0.08, 0.08, 0.80, 0.04],
+                [0.0, 0.0, 0.10, 0.90],
+            ]
         );
     }
 }

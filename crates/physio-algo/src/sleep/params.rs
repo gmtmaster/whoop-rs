@@ -56,7 +56,7 @@ impl Params {
     /// The tuned recipe the stager ships. Every value here is measured, not chosen: changing one moves
     /// the benchmark, so treat it as data and re-run the fixture sheet after any edit.
     pub const SHIPPED: Params = Params {
-        deep_hrv: -0.8,
+        deep_hrv: -1.0,
         deep_hr: 0.5,
         deep_motion: -0.1,
         rem_hrv: 0.8,
