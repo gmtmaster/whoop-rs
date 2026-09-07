@@ -11,6 +11,9 @@ use std::collections::HashMap;
 
 use super::common::median;
 use super::input::{AccelSample, HrSample};
+use super::short_nap::{
+    DurationRejectedCandidate, ShortNapOriginalRejection, candidate_median_hr,
+};
 use super::{SleepStage, StageSegment};
 use crate::resting_hr;
 
@@ -391,7 +394,7 @@ pub(super) fn posture_variance_g2(samples: &[AccelSample]) -> Option<f64> {
 
 /// True when the run is deeply motion-quiescent: `>= QUIESCENT_STABLE_FRAC` of the minutes with enough
 /// gravity to judge are posture-stable, over `>= QUIESCENT_MIN_STABLE_MINUTES` judged minutes.
-fn run_is_deeply_quiescent(p: Period, grav: &[AccelSample]) -> bool {
+pub(super) fn run_is_deeply_quiescent(p: Period, grav: &[AccelSample]) -> bool {
     if grav.is_empty() || p.end <= p.start {
         return false;
     }
@@ -606,6 +609,12 @@ pub struct DetectedSpan {
     pub resting_hr: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct DetectionObservation {
+    pub accepted: Vec<DetectedSpan>,
+    pub duration_rejected: Vec<DurationRejectedCandidate>,
+}
+
 /// [`detect_sessions_with`] under [`DetectParams::SHIPPED`] — the path the app runs.
 pub fn detect_sessions(
     hr: &[HrSample],
@@ -637,10 +646,99 @@ pub fn detect_sessions_with(
     sleep_hr_baseline: Option<f64>,
     params: &DetectParams,
 ) -> Vec<DetectedSpan> {
+    detect_sessions_observed(
+        hr, accel, tz_offset_s, wrist_off, band_sleep_state, sleep_hr_baseline, params, false,
+    )
+    .accepted
+}
+
+pub(super) fn detect_sessions_with_duration_rejections(
+    hr: &[HrSample],
+    accel: &[AccelSample],
+    tz_offset_s: i64,
+    wrist_off: &[(i64, i64)],
+    band_sleep_state: &[(i64, i32)],
+    sleep_hr_baseline: Option<f64>,
+) -> DetectionObservation {
+    detect_sessions_observed(
+        hr, accel, tz_offset_s, wrist_off, band_sleep_state, sleep_hr_baseline,
+        &DetectParams::SHIPPED, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn duration_rejected_candidate(
+    p: Period,
+    original_rejection_reason: ShortNapOriginalRejection,
+    hr: &[HrSample],
+    grav: &[AccelSample],
+    baseline: Option<f64>,
+    sleep_hr_baseline: Option<f64>,
+    tz_offset_s: i64,
+    wrist_off: &[(i64, i64)],
+    band_sleep_state: &[(i64, i32)],
+    morning_wake_end: Option<i64>,
+    rhr: &[resting_hr::HrSample],
+) -> Option<DurationRejectedCandidate> {
+    let hr_gate_passed = confirm_sleep_with_hr(p, hr, baseline, grav, sleep_hr_baseline);
+    if !hr_gate_passed {
+        return None;
+    }
+    let off_wrist_fraction = off_wrist_fraction(p, hr, wrist_off);
+    if off_wrist_fraction >= MAX_OFF_WRIST_SLEEP_FRACTION {
+        return None;
+    }
+    let resting_floor = resting_hr::session_resting_hr_floor(p.start, p.end, rhr);
+    let is_daytime = is_daytime_center(p, tz_offset_s);
+    let daytime_floor_passed = if is_daytime {
+        matches!((baseline, resting_floor), (Some(base), Some(floor))
+            if floor as f64 <= base * DAYTIME_RESTING_HR_MULT)
+    } else {
+        true
+    };
+    if !daytime_floor_passed {
+        return None;
+    }
+    let morning_reonset_applies = is_daytime && morning_wake_end.is_some_and(|end| {
+        p.start >= end && (p.start - end) <= MORNING_STILLNESS_WINDOW_MIN * 60
+    });
+    let morning_reonset_passed = !morning_reonset_applies
+        || band_state_confirms_asleep(p, band_sleep_state)
+        || matches!((baseline, resting_floor), (Some(base), Some(floor))
+            if floor as f64 <= base * MORNING_REONSET_RESTING_HR_MULT);
+    if !morning_reonset_passed {
+        return None;
+    }
+    Some(DurationRejectedCandidate {
+        period: p,
+        original_rejection_reason,
+        tz_offset_s,
+        is_daytime,
+        candidate_median_hr: candidate_median_hr(p, hr),
+        resting_floor,
+        hr_gate_passed,
+        daytime_floor_passed,
+        morning_reonset_applies,
+        morning_reonset_passed,
+        off_wrist_fraction,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn detect_sessions_observed(
+    hr: &[HrSample],
+    accel: &[AccelSample],
+    tz_offset_s: i64,
+    wrist_off: &[(i64, i64)],
+    band_sleep_state: &[(i64, i32)],
+    sleep_hr_baseline: Option<f64>,
+    params: &DetectParams,
+    observe_duration_rejections: bool,
+) -> DetectionObservation {
     let mut grav = accel.to_vec();
     grav.sort_by_key(|g| g.ts);
     if grav.len() < 2 {
-        return Vec::new();
+        return DetectionObservation { accepted: Vec::new(), duration_rejected: Vec::new() };
     }
     let mut hr_s = hr.to_vec();
     hr_s.sort_by_key(|h| h.ts);
@@ -670,11 +768,24 @@ pub fn detect_sessions_with(
     let min_sleep_s = params.min_sleep_min * 60;
     let continuation_gap_s = NIGHT_CONTINUATION_GAP_MIN * 60;
     let mut sessions: Vec<DetectedSpan> = Vec::new();
+    let mut duration_rejected = Vec::new();
     let mut chain_prev_end: Option<i64> = None;
     let mut chain_from_overnight = false;
 
     for p in runs.iter().filter(|p| p.is_sleep) {
-        if (p.end - p.start) <= min_sleep_s || (p.end - p.start) > MAX_MAIN_SLEEP_SPAN_S {
+        if (p.end - p.start) > MAX_MAIN_SLEEP_SPAN_S {
+            continue;
+        }
+        if (p.end - p.start) <= min_sleep_s {
+            if observe_duration_rejections {
+                if let Some(candidate) = duration_rejected_candidate(
+                    *p, ShortNapOriginalRejection::BaseMinimumDuration, &hr_s, &grav, baseline,
+                    sleep_hr_baseline, tz_offset_s, wrist_off, band_sleep_state,
+                    chain_prev_end.filter(|_| chain_from_overnight), &rhr,
+                ) {
+                    duration_rejected.push(candidate);
+                }
+            }
             continue;
         }
         if !confirm_sleep_with_hr(*p, &hr_s, baseline, &grav, sleep_hr_baseline) {
@@ -708,6 +819,15 @@ pub fn detect_sessions_with(
             true
         };
         if is_daytime && !passes_morning && !is_night_tail {
+            if observe_duration_rejections && (p.end - p.start) < DAYTIME_MIN_SLEEP_MIN * 60 {
+                if let Some(candidate) = duration_rejected_candidate(
+                    *p, ShortNapOriginalRejection::DaytimeMinimumDuration, &hr_s, &grav, baseline,
+                    sleep_hr_baseline, tz_offset_s, wrist_off, band_sleep_state, morning_wake_end,
+                    &rhr,
+                ) {
+                    duration_rejected.push(candidate);
+                }
+            }
             continue;
         }
         sessions.push(DetectedSpan {
@@ -721,7 +841,7 @@ pub fn detect_sessions_with(
         chain_prev_end = Some(p.end);
     }
     sessions.sort_by_key(|s| s.start);
-    sessions
+    DetectionObservation { accepted: sessions, duration_rejected }
 }
 
 /// Per-epoch motion magnitudes over `[start, end]` on the 30 s epoch grid: each entry is the epoch's summed
@@ -1054,6 +1174,13 @@ mod tests {
         detect_sessions(hr, grav, tz, wrist_off, &[], None)
     }
 
+    fn observe(
+        hr: &[HrSample], grav: &[AccelSample], tz: i64, wrist_off: &[(i64, i64)],
+        band: &[(i64, i32)],
+    ) -> DetectionObservation {
+        detect_sessions_with_duration_rejections(hr, grav, tz, wrist_off, band, None)
+    }
+
     #[test]
     fn daytime_short_window_rejected() {
         let (ds, dd) = (at_hour(10), 3 * 3600);
@@ -1063,6 +1190,100 @@ mod tests {
         let mut hr = hr_stream(ds, dd, 72);
         hr.extend(hr_stream(ns, nd, 50));
         assert!(detect(&hr, &grav, 0, &[]).is_empty());
+    }
+
+    #[test]
+    fn daytime_duration_rejection_is_observed_without_changing_accepted_sessions() {
+        let (ds, dd) = (at_hour(10), 3 * 3600);
+        let (ns, nd) = (ds + dd, 70 * 60);
+        let mut grav = active_gravity(ds, dd);
+        grav.extend(still_gravity(ns, nd));
+        let mut hr = hr_stream(ds, dd, 72);
+        hr.extend(hr_stream(ns, nd, 50));
+        let production = detect(&hr, &grav, 0, &[]);
+        let observed = observe(&hr, &grav, 0, &[], &[]);
+        assert_eq!(observed.accepted, production);
+        assert_eq!(observed.duration_rejected.len(), 1);
+        assert_eq!(observed.duration_rejected[0].original_rejection_reason,
+            ShortNapOriginalRejection::DaytimeMinimumDuration);
+    }
+
+    #[test]
+    fn base_duration_rejection_reaches_observation_only_after_existing_gates_pass() {
+        let (lead, lead_dur) = (at_hour(10), 3 * 3600);
+        let (start, dur) = (lead + lead_dur, 50 * 60);
+        let mut grav = active_gravity(lead, lead_dur);
+        grav.extend(still_gravity(start, dur));
+        let mut hr = hr_stream(lead, lead_dur, 72);
+        hr.extend(hr_stream(start, dur, 50));
+        let observed = observe(&hr, &grav, 0, &[], &[]);
+        assert!(observed.accepted.is_empty());
+        assert_eq!(observed.duration_rejected.len(), 1);
+        assert_eq!(observed.duration_rejected[0].original_rejection_reason,
+            ShortNapOriginalRejection::BaseMinimumDuration);
+    }
+
+    #[test]
+    fn hr_and_off_wrist_rejections_never_reach_short_nap_observation() {
+        let (lead, lead_dur) = (at_hour(10), 3 * 3600);
+        let (start, dur) = (lead + lead_dur, 50 * 60);
+        let mut grav = active_gravity(lead, lead_dur);
+        grav.extend(still_gravity(start, dur));
+        let mut hot_hr = hr_stream(lead, lead_dur, 72);
+        hot_hr.extend(hr_stream(start, dur, 100));
+        assert!(observe(&hot_hr, &grav, 0, &[], &[]).duration_rejected.is_empty());
+        let mut cool_hr = hr_stream(lead, lead_dur, 72);
+        cool_hr.extend(hr_stream(start, dur, 50));
+        assert!(observe(&cool_hr, &grav, 0, &[(start, start + dur)], &[])
+            .duration_rejected.is_empty());
+    }
+
+    #[test]
+    fn morning_rule_rejection_never_reaches_short_nap_observation() {
+        let night = at_hour(2);
+        let night_dur = 8 * 3600;
+        let wake_dur = 60 * 60;
+        let nap_start = night + night_dur + wake_dur;
+        let nap_dur = 50 * 60;
+        let mut grav = still_gravity(night, night_dur);
+        grav.extend(active_gravity(night + night_dur, wake_dur));
+        grav.extend(still_gravity(nap_start, nap_dur));
+        let mut hr = hr_stream(night, night_dur, 60);
+        hr.extend(hr_stream(night + night_dur, wake_dur, 100));
+        hr.extend(hr_stream(nap_start, nap_dur, 56));
+        let observed = observe(&hr, &grav, 0, &[], &[]);
+        assert_eq!(observed.accepted.len(), 1);
+        assert!(observed.duration_rejected.is_empty());
+    }
+
+    #[test]
+    fn shadow_candidates_never_reanchor_the_normal_continuation_chain() {
+        let night = at_hour(1);
+        let night_dur = 7 * 3600;
+        let first_wake = 60 * 60;
+        let short_start = night + night_dur + first_wake;
+        let short_dur = 50 * 60;
+        let second_wake = 70 * 60;
+        let daytime_start = short_start + short_dur + second_wake;
+        let daytime_dur = 70 * 60;
+        let mut grav = still_gravity(night, night_dur);
+        grav.extend(active_gravity(night + night_dur, first_wake));
+        grav.extend(still_gravity(short_start, short_dur));
+        grav.extend(active_gravity(short_start + short_dur, second_wake));
+        grav.extend(still_gravity(daytime_start, daytime_dur));
+        let mut hr = hr_stream(night, night_dur, 50);
+        hr.extend(hr_stream(night + night_dur, first_wake, 80));
+        hr.extend(hr_stream(short_start, short_dur, 50));
+        hr.extend(hr_stream(short_start + short_dur, second_wake, 80));
+        hr.extend(hr_stream(daytime_start, daytime_dur, 50));
+        let production = detect(&hr, &grav, 0, &[]);
+        let observed = observe(&hr, &grav, 0, &[], &[]);
+        assert_eq!(observed.accepted, production);
+        assert_eq!(observed.accepted.len(), 1);
+        assert!(observed.accepted[0].end < short_start);
+        assert_eq!(observed.duration_rejected.len(), 1);
+        assert_eq!(observed.duration_rejected[0].original_rejection_reason,
+            ShortNapOriginalRejection::BaseMinimumDuration);
     }
 
     #[test]

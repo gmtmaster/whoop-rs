@@ -234,7 +234,12 @@ Build/run: `cargo run -p whoopctl -- scan`.
 **Derived metrics (`physio-algo`).** A pure analytics layer over decoded records — no BLE, no IO, no
 algorithms in the codec. It is far wider than the few named here — the whole sleep pipeline, recovery,
 strain, the ages — and `algorithms.md` is the per-formula record; what follows is only the part this
-section's CLI story needs. `HrvReadiness` reads a log-domain baseline against a personal-normal ±0.5 SD band
+section's CLI story needs. Sleep's production detector and session output remain authoritative and
+unchanged; `sleep/short_nap.rs` is an isolated Phase-A observer that receives only post-merge candidates
+rejected solely by the existing base/daytime duration gates. It records non-authoritative corroborating
+evidence and a shadow verdict, never stages or returns those candidates as sessions. `noop-engine` can
+emit the structured records on stderr with `NOOP_SHORT_NAP_SHADOW=1`; normal stdout and all downstream
+physiology continue to consume only accepted production sessions. `HrvReadiness` reads a log-domain baseline against a personal-normal ±0.5 SD band
 from a nightly RMSSD series and returns a tier, `None` while calibrating. SpO2 has two paths: the 4.0 v24
 paired red/IR via ratio-of-ratios (which a pulsatility gate then WITHHOLDS on real 4.0 data — see
 `algorithms.md`), and the **5.0/MG computed scalar** the strap writes at v18 inner 74

@@ -8,8 +8,11 @@ use super::params::Params;
 use super::refine::{RefineParams, refine_with};
 use super::v2::stage_with as stage_v2_with;
 use super::{
-    DEEP_GATE_THRESH, SleepStage, SleepStreams, StageSegment, analyze, motion_dense, stage_v2,
+    DEEP_GATE_THRESH, SleepStage, SleepStreams, StageSegment, analyze,
+    analyze_for_rr_generation, analyze_for_rr_generation_with_short_nap_shadow, motion_dense,
+    stage_v2,
 };
+use crate::nightly_physiology::RrDeviceGeneration;
 
 const REF_MIDNIGHT: i64 = 1_749_513_600;
 
@@ -371,6 +374,23 @@ fn analyze_still_night_stages_and_tiles_the_span() {
     for w in segs.windows(2) {
         assert_eq!(w[0].end, w[1].start);
     }
+}
+
+#[test]
+fn shadow_observation_keeps_the_golden_production_session_byte_identical() {
+    let input = golden_input();
+    let streams = SleepStreams {
+        hr: input.hr,
+        rr: input.rr,
+        accel: input.accel,
+        tz_offset_s: 0,
+        ..Default::default()
+    };
+    let production = analyze_for_rr_generation(&streams, RrDeviceGeneration::Whoop5Mg);
+    let shadow =
+        analyze_for_rr_generation_with_short_nap_shadow(&streams, RrDeviceGeneration::Whoop5Mg);
+    assert_eq!(shadow.sessions, production);
+    assert!(shadow.short_nap_diagnostics.is_empty());
 }
 
 /// The golden above carries no step stream, so `analyze`'s last stage declines on it. This drives the

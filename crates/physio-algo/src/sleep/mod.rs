@@ -22,6 +22,7 @@ mod input;
 mod mainnight;
 pub mod params;
 mod refine;
+mod short_nap;
 mod v2;
 
 pub use detect::{
@@ -40,6 +41,10 @@ pub use params::Params;
 pub use refine::{
     MIN_DENSE_FRACTION, RefineParams, is_motion_dense as motion_dense, motion_density,
     refine as refine_wake, refine_with as refine_wake_with,
+};
+pub use short_nap::{
+    ShortNapCorroborators, ShortNapOriginalRejection, ShortNapShadowDiagnostic,
+    ShortNapShadowVerdict,
 };
 pub use v2::{
     DEEP_GATE_THRESH, EpochDiagnostic, Prepared, STAGE_ORDER, STAGING_ALGORITHM_VERSION,
@@ -76,6 +81,13 @@ pub struct Session {
     pub sleep_state_grid: Vec<i32>,
 }
 
+/// Production sessions plus isolated, non-authoritative observations of duration-rejected candidates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SleepAnalysisWithShadow {
+    pub sessions: Vec<Session>,
+    pub short_nap_diagnostics: Vec<ShortNapShadowDiagnostic>,
+}
+
 /// Detect in-bed spans from a window's streams and stage each with the V2 recipe + motion-aware wake
 /// refinement, returning one [`Session`] per accepted span with its resting HR and windowed average HRV.
 pub fn analyze(streams: &SleepStreams) -> Vec<Session> {
@@ -94,6 +106,35 @@ pub fn analyze_for_rr_generation(
         &streams.band_sleep_state,
         None,
     );
+    stage_sessions(streams, rr_generation, spans)
+}
+
+/// Runs the normal pipeline unchanged and separately observes candidates rejected only by duration policy.
+pub fn analyze_for_rr_generation_with_short_nap_shadow(
+    streams: &SleepStreams,
+    rr_generation: crate::nightly_physiology::RrDeviceGeneration,
+) -> SleepAnalysisWithShadow {
+    let observed = detect::detect_sessions_with_duration_rejections(
+        &streams.hr, &streams.accel, streams.tz_offset_s, &streams.wrist_off,
+        &streams.band_sleep_state, None,
+    );
+    let short_nap_diagnostics = observed.duration_rejected.into_iter().map(|candidate| {
+        short_nap::evaluate(
+            candidate, &streams.hr, &streams.rr, &streams.accel, &streams.steps,
+            &streams.band_sleep_state,
+        )
+    }).collect();
+    SleepAnalysisWithShadow {
+        sessions: stage_sessions(streams, rr_generation, observed.accepted),
+        short_nap_diagnostics,
+    }
+}
+
+fn stage_sessions(
+    streams: &SleepStreams,
+    rr_generation: crate::nightly_physiology::RrDeviceGeneration,
+    spans: Vec<DetectedSpan>,
+) -> Vec<Session> {
     let mut out = Vec::with_capacity(spans.len());
     for span in spans {
         let input = SleepInput {
