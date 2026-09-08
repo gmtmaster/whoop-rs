@@ -773,8 +773,13 @@ fn shadow_resp(rr: &[(i64, u16)], start: i64, end: i64, p: RespParams) -> f64 {
                 }
                 if intervals.len() >= 2 {
                     let med = median(&intervals);
+                    // Mirrors the shipped per-window validity screen: a window's own rate must clear
+                    // the plausible band before it enters the nightly pool, not just the aggregate.
                     if med > 0.0 {
-                        per_window.push(60.0 / med);
+                        let bpm = 60.0 / med;
+                        if (p.plausible_min_bpm..=p.plausible_max_bpm).contains(&bpm) {
+                            per_window.push(bpm);
+                        }
                     }
                 }
             }
@@ -784,12 +789,7 @@ fn shadow_resp(rr: &[(i64, u16)], start: i64, end: i64, p: RespParams) -> f64 {
     if per_window.is_empty() {
         return f64::NAN;
     }
-    let m = median(&per_window);
-    if (p.plausible_min_bpm..=p.plausible_max_bpm).contains(&m) {
-        m
-    } else {
-        f64::NAN
-    }
+    median(&per_window)
 }
 
 /// Synthetic RSA tachogram. Mirrors the `synth` fixture builder in respiratory_rate.rs's own tests.

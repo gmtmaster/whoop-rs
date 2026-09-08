@@ -1594,6 +1594,29 @@ mod tests {
         assert_eq!(result.selected_window, Some((600, 900)));
     }
 
+    /// No Deep/SWS segment anywhere in the primary session: refuses cleanly rather than measuring off
+    /// Light/REM/Awake, with the reason recorded so a caller can tell "no data" from "data too poor".
+    #[test]
+    fn final_sws_hrv_with_no_deep_episodes_refuses_cleanly() {
+        let result = final_sws_last_five_hrv(&[], &[]);
+        assert_eq!(result.rmssd_ms, None);
+        assert_eq!(result.measurement_mode, None);
+        assert_eq!(result.rejection_reason, Some(HrvUnavailableReason::NoDeepEpisode));
+    }
+
+    /// The final Deep episode itself is otherwise reliable, but its R-R coverage in the actual window is
+    /// too thin (here, no reports at all) to clear [`MIN_BEATS`] clean beats: refuses rather than
+    /// manufacturing an RMSSD from an unreliable handful of intervals.
+    #[test]
+    fn final_sws_hrv_refuses_when_the_window_has_too_few_clean_rr_beats() {
+        let result = final_sws_last_five_hrv(&[quality(0, 600)], &[]);
+        assert_eq!(result.rmssd_ms, None);
+        assert_eq!(
+            result.rejection_reason,
+            Some(HrvUnavailableReason::InsufficientCleanIntervals)
+        );
+    }
+
     #[test]
     fn final_sws_hrv_rejects_wrist_off() {
         let reports: Vec<QualityRrReport> = (300..540)

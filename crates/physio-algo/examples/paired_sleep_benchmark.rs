@@ -29,7 +29,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use physio_algo::nightly_physiology::{nightly_physiology_for_generation, RrDeviceGeneration};
-use physio_algo::respiratory_rate::resp_rate_from_rr;
+use physio_algo::respiratory_rate::nightly_resp_rate;
 use physio_algo::sleep::params::Params;
 use physio_algo::sleep::{
     diagnostics_v2, emissions_v2, prepare_v2, refine_wake, segments_v2, stage_v2, AccelSample, HrSample,
@@ -159,8 +159,14 @@ fn main() {
 
     let rr_flat: Vec<(i64, u16)> =
         rr.iter().flat_map(|run| run.intervals.iter().map(move |&ms| (run.ts, ms))).collect();
-    let resp = resp_rate_from_rr(&rr_flat, start, end);
-    println!("resp_rate_from_rr = {resp:?}");
+    let resp = nightly_resp_rate(&rr_flat, start, end);
+    println!(
+        "nightly_resp_rate: n_windows={} median_bpm={:?}",
+        resp.windows.len(), resp.median_bpm
+    );
+    for w in &resp.windows {
+        println!("  window [{}, {}) = {:.2} bpm", w.start, w.end, w.bpm);
+    }
 
     let physiology = nightly_physiology_for_generation(
         start, end, &hr, &accel, &rr, &[], &refined, RrDeviceGeneration::Whoop5Mg,

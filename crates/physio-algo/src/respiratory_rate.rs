@@ -1,6 +1,8 @@
 //! Approximate sleeping respiratory rate (breaths/min) from the R-R interval stream via respiratory
 //! sinus arrhythmia: reconstruct a beat-interval tachogram, resample to 4 Hz, detrend, then per 5-min
-//! window peak-pick the breathing modulation and take the median rate. Pure; `None` = no usable estimate.
+//! window peak-pick the breathing modulation. Each window's rate is screened against the plausible band
+//! before it counts, and the nightly value is the median of the surviving windows — the robust nightly
+//! aggregate over per-window estimates, never a single selected window. Pure; `None` = no usable estimate.
 //! The only respiratory source for both generations: the 4.0 v24 register decoded as `resp_raw` carries
 //! a status byte, not a breathing signal, so nothing here reads it (measured; see `docs/algorithms.md`).
 
@@ -21,11 +23,43 @@ const RSA_MAX_BREATH_INTERVAL_S: f64 = 10.0;
 pub const RESP_PLAUSIBLE_MIN_BPM: f64 = 8.0;
 pub const RESP_PLAUSIBLE_MAX_BPM: f64 = 25.0;
 
+/// One accepted per-window nightly RR estimate: the window's `[start, end]` (unix seconds, anchored to
+/// the first accepted beat in the span) and the breaths/min it resolved to. Only windows that already
+/// cleared the peak-count and plausible-band gates appear here — the pool [`nightly_resp_rate`] takes
+/// its median over.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RespRateWindow {
+    pub start: i64,
+    pub end: i64,
+    pub bpm: f64,
+}
+
+/// The full nightly respiratory-rate diagnostic: every valid per-window estimate plus their median, the
+/// nightly value. `median_bpm` is `None` (with `windows` empty) when nothing valid survives — no
+/// fabricated number, matching every other physio-algo estimator's empty contract.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RespRateNightly {
+    pub windows: Vec<RespRateWindow>,
+    pub median_bpm: Option<f64>,
+}
+
 /// Sleeping respiratory rate over the in-bed `[start, end]` window (unix seconds), from `(ts, rr_ms)`
 /// beats. An on-device wellness estimate, never a clinical measurement; `None` on too-little data.
+/// The nightly median of [`nightly_resp_rate`]'s valid per-window estimates.
 pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64> {
+    nightly_resp_rate(rr, start, end).median_bpm
+}
+
+/// Per-5-minute-window respiratory-rate estimates over the in-bed `[start, end]` span (unix seconds),
+/// from `(ts, rr_ms)` beats already scoped to ONE session (a caller must never pool beats across a
+/// primary sleep session and a nap: call once per session). Each window is screened against
+/// [`RESP_PLAUSIBLE_MIN_BPM`]/[`RESP_PLAUSIBLE_MAX_BPM`] before it is kept, so the nightly median can
+/// never be pulled off-band by a single noisy window. `windows` is empty and `median_bpm` is `None`
+/// when too little data survives the RR-interval range gate, the RSA detrend has no signal, or no
+/// window's peak-picked breathing rate clears the plausible band.
+pub fn nightly_resp_rate(rr: &[(i64, u16)], start: i64, end: i64) -> RespRateNightly {
     if end <= start {
-        return None;
+        return RespRateNightly::default();
     }
 
     let mut in_bed: Vec<(i64, f64)> = rr
@@ -34,14 +68,17 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
         .map(|(ts, ms)| (*ts, *ms as f64))
         .collect();
     in_bed.sort_by_key(|(ts, _)| *ts);
-    let filtered: Vec<f64> = in_bed
+    let filtered_pairs: Vec<(i64, f64)> = in_bed
         .into_iter()
-        .map(|(_, ms)| ms)
-        .filter(|ms| *ms >= RR_MIN_MS && *ms <= RR_MAX_MS)
+        .filter(|(_, ms)| *ms >= RR_MIN_MS && *ms <= RR_MAX_MS)
         .collect();
-    if filtered.len() < 30 {
-        return None;
+    if filtered_pairs.len() < 30 {
+        return RespRateNightly::default();
     }
+    // Anchor for turning a grid sample's elapsed-seconds-from-zero back into a wall-clock window
+    // timestamp: the first accepted beat's own arrival is the natural t=0 for the cumulative sums below.
+    let anchor_ts = filtered_pairs[0].0;
+    let filtered: Vec<f64> = filtered_pairs.iter().map(|&(_, ms)| ms).collect();
 
     let mut beat_times = vec![0.0; filtered.len()];
     let mut acc = 0.0;
@@ -51,13 +88,13 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
     }
     let total_span_s = beat_times[beat_times.len() - 1];
     if total_span_s < RSA_WINDOW_S / 2.0 {
-        return None;
+        return RespRateNightly::default();
     }
 
     let dt = 1.0 / RSA_RESAMPLE_HZ;
     let n_grid = (total_span_s / dt) as usize + 1;
     if n_grid < 8 {
-        return None;
+        return RespRateNightly::default();
     }
     let mut grid = vec![0.0; n_grid];
     let mut seg = 0usize;
@@ -80,12 +117,12 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
     let baseline = moving_average_centred(&grid, 2 * half_w + 1);
     let detrended: Vec<f64> = (0..n_grid).map(|i| grid[i] - baseline[i]).collect();
     if population_sd(&detrended) <= 1e-9 {
-        return None;
+        return RespRateNightly::default();
     }
 
     let min_dist = ((RSA_MIN_PEAK_DISTANCE_S * RSA_RESAMPLE_HZ).round() as usize).max(2);
     let window_samples = ((RSA_WINDOW_S * RSA_RESAMPLE_HZ).round() as usize).max(min_dist * 3);
-    let mut per_window = Vec::new();
+    let mut windows: Vec<RespRateWindow> = Vec::new();
     let mut w = 0usize;
     while w < n_grid {
         let w_end = (w + window_samples).min(n_grid);
@@ -101,21 +138,32 @@ pub fn resp_rate_from_rr(rr: &[(i64, u16)], start: i64, end: i64) -> Option<f64>
                 }
                 if intervals.len() >= 2 {
                     let med = median(&intervals);
+                    // Validity screen BEFORE the window enters the nightly pool: a single window whose
+                    // peak-picked rate falls outside the plausible band must never pull the nightly
+                    // median toward it, so it is dropped here rather than only checked on the aggregate.
                     if med > 0.0 {
-                        per_window.push(60.0 / med);
+                        let bpm = 60.0 / med;
+                        if (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM).contains(&bpm) {
+                            windows.push(RespRateWindow {
+                                start: anchor_ts + (w as f64 * dt) as i64,
+                                end: anchor_ts + (w_end as f64 * dt) as i64,
+                                bpm,
+                            });
+                        }
                     }
                 }
             }
         }
         w += window_samples;
     }
-    if per_window.is_empty() {
-        return None;
+    if windows.is_empty() {
+        return RespRateNightly::default();
     }
-    let m = median(&per_window);
-    (RESP_PLAUSIBLE_MIN_BPM..=RESP_PLAUSIBLE_MAX_BPM)
-        .contains(&m)
-        .then_some(m)
+    let bpms: Vec<f64> = windows.iter().map(|w| w.bpm).collect();
+    RespRateNightly {
+        windows,
+        median_bpm: Some(median(&bpms)),
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +310,98 @@ mod tests {
     fn empty_or_inverted_window_is_none() {
         let (rows, start, end) = synth(0.25, 1000.0, 40.0, 420.0);
         assert!(resp_rate_from_rr(&rows, end, start).is_none());
+    }
+
+    /// As [`synth`], but the caller picks `start` so several planted-rate segments can be concatenated
+    /// back to back into one continuous tachogram, each landing in its own 5-minute RSA window.
+    fn synth_from(
+        start: i64,
+        breath_hz: f64,
+        base_rr_ms: f64,
+        amp_ms: f64,
+        span_s: f64,
+    ) -> (Vec<(i64, u16)>, i64) {
+        let mut rows = Vec::new();
+        let mut t_sec = 0.0_f64;
+        while t_sec < span_s {
+            let rr_ms =
+                base_rr_ms + amp_ms * (2.0 * std::f64::consts::PI * breath_hz * t_sec).sin();
+            t_sec += rr_ms / 1000.0;
+            rows.push((start + t_sec as i64, rr_ms as u16));
+        }
+        (rows, start + t_sec as i64)
+    }
+
+    /// Three planted rates, one per 5-minute window: the nightly value is the MEDIAN across windows
+    /// (the middle one), not the mean, the min, or a single selected window.
+    #[test]
+    fn nightly_median_over_an_odd_window_count() {
+        let base = 1_700_000_000_i64;
+        let (mut rows, t1) = synth_from(base, 10.0 / 60.0, 1000.0, 40.0, 300.0);
+        let (rows2, t2) = synth_from(t1, 14.0 / 60.0, 1000.0, 40.0, 300.0);
+        rows.extend(rows2);
+        let (rows3, t3) = synth_from(t2, 20.0 / 60.0, 1000.0, 40.0, 300.0);
+        rows.extend(rows3);
+
+        let result = nightly_resp_rate(&rows, base, t3);
+        assert_eq!(result.windows.len(), 3, "{:?}", result.windows);
+        let m = result.median_bpm.expect("finite nightly estimate");
+        // median(10, 14, 20) = 14, the middle planted rate, not mean(14.67) or min(10).
+        assert!((m - 14.0).abs() < 3.0, "expected ~14, got {m}");
+    }
+
+    /// Two planted rates -> the nightly value is the AVERAGE of the two middle (here, the only two)
+    /// window estimates, per the standard even-count median convention.
+    #[test]
+    fn nightly_median_over_an_even_window_count() {
+        let base = 1_700_000_000_i64;
+        let (mut rows, t1) = synth_from(base, 10.0 / 60.0, 1000.0, 40.0, 300.0);
+        let (rows2, t2) = synth_from(t1, 18.0 / 60.0, 1000.0, 40.0, 300.0);
+        rows.extend(rows2);
+
+        let result = nightly_resp_rate(&rows, base, t2);
+        assert_eq!(result.windows.len(), 2, "{:?}", result.windows);
+        let m = result.median_bpm.expect("finite nightly estimate");
+        // median(10, 18) = 14.0 = (10 + 18) / 2.
+        assert!((m - 14.0).abs() < 3.0, "expected ~14, got {m}");
+    }
+
+    /// A window whose peak-picked rate falls outside the plausible band must be dropped from the pool
+    /// BEFORE the median is taken, not just checked on the final aggregate: two windows at 7 and 15 bpm
+    /// averaging to ~11 would (wrongly) pass an aggregate-only gate, silently letting the implausible
+    /// window corrupt the nightly value. Only the 15 bpm window may survive.
+    #[test]
+    fn implausible_window_is_excluded_before_the_nightly_median() {
+        assert!(7.0 < RESP_PLAUSIBLE_MIN_BPM, "fixture must sit below the band");
+        let base = 1_700_000_000_i64;
+        let (mut rows, t1) = synth_from(base, 7.0 / 60.0, 1000.0, 40.0, 300.0);
+        let (rows2, t2) = synth_from(t1, 15.0 / 60.0, 1000.0, 40.0, 300.0);
+        rows.extend(rows2);
+
+        let result = nightly_resp_rate(&rows, base, t2);
+        assert_eq!(result.windows.len(), 1, "{:?}", result.windows);
+        let m = result.median_bpm.expect("the surviving 15 bpm window");
+        assert!((m - 15.0).abs() < 3.0, "expected ~15, got {m}");
+    }
+
+    /// A nap sitting outside `[start, end]` must never enter the primary session's nightly pool: the
+    /// caller scopes by passing the primary session's own span, and the range filter enforces it.
+    #[test]
+    fn beats_outside_the_session_span_are_never_pooled() {
+        let base = 1_700_000_000_i64;
+        let (primary_rows, primary_end) = synth_from(base, 14.0 / 60.0, 1000.0, 40.0, 600.0);
+        // A "nap" recorded hours later, at a very different planted rate.
+        let nap_start = primary_end + 4 * 3600;
+        let (nap_rows, _) = synth_from(nap_start, 22.0 / 60.0, 1000.0, 40.0, 600.0);
+
+        let mut all_beats = primary_rows.clone();
+        all_beats.extend(nap_rows);
+
+        let primary_only = nightly_resp_rate(&primary_rows, base, primary_end);
+        let scoped_from_pooled = nightly_resp_rate(&all_beats, base, primary_end);
+        assert_eq!(
+            primary_only.median_bpm, scoped_from_pooled.median_bpm,
+            "the nap's beats (outside [start, end]) must not change the primary session's result"
+        );
     }
 }
