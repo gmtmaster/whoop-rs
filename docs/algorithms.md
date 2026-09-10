@@ -240,8 +240,9 @@ channel; the name is the only thing respiratory about it.
 `strain.rs`.
 ```
 HRR = HRmax - RHR;  %HRR = clamp((HR - RHR) / HRR x 100, 0, 100)          (Karvonen 1957)
-TRIMP per sample: zone_weight x its own inter-sample gap (dropout capped 20 min)
-   Edwards (default) 5-zone weights at 50/60/70/80/90 %HRR, or Banister exponential
+TRIMP per sample: weight x its own inter-sample gap (dropout capped 20 min)
+   Day Strain: 0 through 25% HRR; smoothstep from 0 to 1 over 25–50%; then Edwards weights
+   Activity Edwards: unchanged 5-zone weights at 50/60/70/80/90 %HRR; or Banister exponential
 Effort = 100 x ln(TRIMP + 1) / ln(7201)                                   (Edwards 1993 / Banister 1991)
 ```
 Denominator 7201 maps a 24 h top-zone day (5 x 1440 = 7200) to exactly 100.

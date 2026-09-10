@@ -14,6 +14,7 @@ pub const HRMAX_PERCENTILE: f64 = 99.5;
 pub const BANISTER_SCALE: f64 = 0.64;
 pub const BANISTER_B_MEN: f64 = 1.92;
 pub const BANISTER_B_WOMEN: f64 = 1.67;
+pub const DAY_STRAIN_ALGORITHM_VERSION: &str = "day-strain-smooth25-v2";
 
 /// Duration credited to a lone sample: no neighbour on either side to derive an interval from, so
 /// one minute is assumed.
@@ -51,6 +52,7 @@ pub use crate::hr_sample::HrSample;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
     Edwards,
+    EdwardsDay,
     Banister,
 }
 
@@ -136,6 +138,19 @@ pub fn zone_weight(bpm: f64, resting_hr: f64, hr_reserve: f64) -> i64 {
     0
 }
 
+/// Day Strain weight: smooth low-intensity load from 25–50% HRR, then the unchanged Edwards zones.
+pub fn day_strain_weight(bpm: f64, resting_hr: f64, hr_reserve: f64) -> f64 {
+    let x = pct_hrr(bpm, resting_hr, hr_reserve) / 100.0;
+    if x <= 0.25 {
+        0.0
+    } else if x < 0.50 {
+        let u = (x - 0.25) / 0.25;
+        3.0 * u * u - 2.0 * u * u * u
+    } else {
+        zone_weight(bpm, resting_hr, hr_reserve) as f64
+    }
+}
+
 /// Per-sample duration (minutes) from the first two timestamps; 1 s fallback.
 pub fn sample_duration_minutes(hr: &[HrSample]) -> f64 {
     if hr.len() < 2 {
@@ -180,6 +195,29 @@ pub fn edwards_trimp_accounted(
     resting_hr: f64,
     hr_reserve: f64,
 ) -> (f64, GapAccounting) {
+    weighted_trimp_accounted(hr, resting_hr, hr_reserve, |bpm, rest, reserve| {
+        zone_weight(bpm, rest, reserve) as f64
+    })
+}
+
+/// Day Strain TRIMP with smooth low-intensity load and unchanged Edwards load from 50% HRR upward.
+pub fn day_edwards_trimp_accounted(
+    hr: &[HrSample],
+    resting_hr: f64,
+    hr_reserve: f64,
+) -> (f64, GapAccounting) {
+    weighted_trimp_accounted(hr, resting_hr, hr_reserve, day_strain_weight)
+}
+
+fn weighted_trimp_accounted<F>(
+    hr: &[HrSample],
+    resting_hr: f64,
+    hr_reserve: f64,
+    weight: F,
+) -> (f64, GapAccounting)
+where
+    F: Fn(f64, f64, f64) -> f64,
+{
     let n = hr.len();
     let mut acct = GapAccounting::default();
     if n == 0 {
@@ -188,7 +226,7 @@ pub fn edwards_trimp_accounted(
     let gap = |a: usize, b: usize| (hr[a].ts - hr[b].ts).unsigned_abs() as f64;
     let mut total = 0.0;
     for (i, sample) in hr.iter().enumerate() {
-        let w = zone_weight(sample.bpm as f64, resting_hr, hr_reserve) as f64;
+        let w = weight(sample.bpm as f64, resting_hr, hr_reserve);
         let seconds = if n == 1 {
             acct.add(LONE_SAMPLE_SECONDS, GapPosition::Trailing);
             LONE_SAMPLE_SECONDS
@@ -295,6 +333,7 @@ pub fn strain(
             banister_trimp(hr, resting_hr, hr_reserve, sample_dur, b)
         }
         Method::Edwards => edwards_trimp_interval(hr, resting_hr, hr_reserve),
+        Method::EdwardsDay => day_edwards_trimp_accounted(hr, resting_hr, hr_reserve).0,
     };
     Some(trimp_to_strain(trimp, denominator))
 }
@@ -393,6 +432,86 @@ mod tests {
     }
 
     #[test]
+    fn smooth_25_day_weights_cover_boundaries_and_representative_values() {
+        let expected = [
+            (0.20, 0.0),
+            (0.25, 0.0),
+            (0.30, 0.104),
+            (0.35, 0.352),
+            (0.40, 0.648),
+            (0.45, 0.896),
+            (0.499, 0.999_952_128),
+            (0.50, 1.0),
+            (0.55, 1.0),
+        ];
+        for (x, want) in expected {
+            let bpm = 60.0 + 100.0 * x;
+            let got = day_strain_weight(bpm, 60.0, 100.0);
+            assert!((got - want).abs() < 1e-9, "{x:.3} HRR: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn smooth_25_is_monotonic_and_continuous_at_its_boundaries() {
+        let points: Vec<f64> = (250..=500)
+            .map(|permille| day_strain_weight(60.0 + permille as f64 / 10.0, 60.0, 100.0))
+            .collect();
+        assert!(points.windows(2).all(|pair| pair[1] >= pair[0]));
+
+        let below_25 = day_strain_weight(84.999_999, 60.0, 100.0);
+        let at_25 = day_strain_weight(85.0, 60.0, 100.0);
+        let above_25 = day_strain_weight(85.000_001, 60.0, 100.0);
+        assert_eq!(below_25, 0.0);
+        assert_eq!(at_25, 0.0);
+        assert!(above_25 >= 0.0 && above_25 < 1e-12);
+
+        let below_50 = day_strain_weight(109.999_999, 60.0, 100.0);
+        let at_50 = day_strain_weight(110.0, 60.0, 100.0);
+        assert!((below_50 - 1.0).abs() < 1e-12);
+        assert_eq!(at_50, 1.0);
+    }
+
+    #[test]
+    fn smooth_25_preserves_every_edwards_zone_from_50_percent_hrr() {
+        for x in [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.0] {
+            let bpm = 60.0 + 100.0 * x;
+            assert_eq!(
+                day_strain_weight(bpm, 60.0, 100.0),
+                zone_weight(bpm, 60.0, 100.0) as f64,
+                "{x:.2} HRR"
+            );
+        }
+    }
+
+    #[test]
+    fn low_intensity_full_day_accumulates_only_for_day_strain() {
+        let series = hr_constant(100, 3_600); // 40% HRR for one hour.
+        let activity = strain(
+            &series,
+            Some(160.0),
+            60.0,
+            Method::Edwards,
+            "male",
+            STRAIN_DENOMINATOR,
+        );
+        let day = strain(
+            &series,
+            Some(160.0),
+            60.0,
+            Method::EdwardsDay,
+            "male",
+            STRAIN_DENOMINATOR,
+        );
+        assert_eq!(
+            activity,
+            Some(0.0),
+            "activity scoring must retain its 50% gate"
+        );
+        assert_eq!(day, Some(trimp_to_strain(60.0 * 0.648, STRAIN_DENOMINATOR)));
+        assert!(day.unwrap() > 0.0);
+    }
+
+    #[test]
     fn interval_method_handles_cadence_transition() {
         // First gap 30s, remaining 599 samples at 1s — old method inflated, new method correct.
         let mut hr = Vec::new();
@@ -475,7 +594,7 @@ mod tests {
     fn single_interval_sample_does_not_crash() {
         let hr = vec![HrSample { ts: 0, bpm: 120 }];
         assert!(eff(&hr, 160.0, 60.0).is_none()); // <600 samples
-        // but the function itself shouldn't crash on 1 sample
+        // The interval function itself still handles one sample.
         let (trimp, acct) = edwards_trimp_accounted(&hr, 60.0, 100.0);
         assert!(trimp > 0.0);
         // A lone sample's minute has no measured interval behind it at all.
