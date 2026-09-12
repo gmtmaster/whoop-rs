@@ -4,6 +4,7 @@ use crate::hrv::{MIN_BEATS, clean_rr_gap_aware_breaking, report_seam_breaks};
 use crate::sleep::{AccelSample, HrSample, RrRun, SleepStage, StageSegment};
 
 pub const ALGORITHM_VERSION: &str = "physiology-dynamic-rhr-final-sws-hrv-v3";
+pub const HRV_SELECTOR_STUDY_VERSION: &str = "hrv-selector-study-v1";
 
 const EPOCH_SECONDS: i64 = 30;
 const MIN_EPISODE_COVERAGE: f64 = 0.80;
@@ -190,6 +191,8 @@ pub struct NightlyPhysiologyResult {
     /// the fixed-60/40 variant, kept for research/debug only and never used as authoritative.
     pub rhr_v4: RhrV4Result,
     pub hrv: FinalSwsHrvResult,
+    /// Study-only lowest-stable-HR selection; never consumed by authoritative metrics.
+    pub hrv_lowest_stable_hr_shadow: HrvShadowSelection,
     /// Audit-only quality facts for every Deep episode considered by final-SWS HRV.
     pub deep_episodes: Vec<DeepEpisodeQuality>,
 }
@@ -270,6 +273,9 @@ pub fn nightly_physiology_for_generation(
             &quality_hr,
             accel,
             wrist_off,
+        ),
+        hrv_lowest_stable_hr_shadow: lowest_stable_hr_window(
+            &episodes, &reports, &quality_hr, accel, wrist_off,
         ),
         deep_episodes: episodes,
     }
@@ -709,13 +715,29 @@ pub struct HrvSelectionAttempt {
     pub rmssd_ms: Option<f64>,
     pub selected_episode: Option<(u32, u32)>,
     pub selected_episode_quality: Option<DeepEpisodeQuality>,
+    pub selected_window_quality: Option<DeepEpisodeQuality>,
     pub selected_window: Option<(u32, u32)>,
+    pub hr_median: Option<f64>,
+    pub hr_mean: Option<f64>,
+    pub hr_sd: Option<f64>,
+    pub hr_mad: Option<f64>,
     pub usable_report_seconds: u32,
     pub input_rr_intervals: u32,
     pub clean_rr_intervals: u32,
     pub contiguous_pairs: u32,
     pub sudden_change_pairs_rejected: u32,
     pub rejection_reason: Option<HrvUnavailableReason>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HrvShadowSelection {
+    pub study_version: &'static str,
+    pub attempt: HrvSelectionAttempt,
+    pub hr_median: Option<f64>,
+    pub hr_mean: Option<f64>,
+    pub hr_sd: Option<f64>,
+    pub hr_mad: Option<f64>,
+    pub movement_contamination_fraction: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -760,7 +782,7 @@ fn final_sws_last_five_hrv_with_streams(
     accel: &[AccelSample],
     wrist_off: &[(i64, i64)],
 ) -> FinalSwsHrvResult {
-    final_sws_last_five_hrv_inner(episodes, reports, |_, start, end| {
+    let mut result = final_sws_last_five_hrv_inner(episodes, reports, |_, start, end| {
         let mut quality = episode_quality(
             i64::from(start),
             i64::from(end),
@@ -771,7 +793,91 @@ fn final_sws_last_five_hrv_with_streams(
         );
         quality.wrist_off_fraction = 0.0;
         quality
-    })
+    });
+    populate_window_provenance(&mut result.primary_attempt, hr, accel, reports, wrist_off);
+    if let Some(attempt) = &mut result.fallback_attempt {
+        populate_window_provenance(attempt, hr, accel, reports, wrist_off);
+    }
+    result
+}
+
+fn populate_window_provenance(
+    attempt: &mut HrvSelectionAttempt, hr: &[QualityHrSample], accel: &[AccelSample],
+    reports: &[QualityRrReport], wrist_off: &[(i64, i64)],
+) {
+    let Some((start, end)) = attempt.selected_window else { return };
+    attempt.selected_window_quality = Some(episode_quality(
+        i64::from(start), i64::from(end), hr, accel, reports, wrist_off,
+    ));
+    let values: Vec<f64> = hr.iter()
+        .filter(|sample| sample.unix >= i64::from(start) && sample.unix < i64::from(end))
+        .map(|sample| f64::from(sample.bpm)).collect();
+    if values.is_empty() { return; }
+    let median = median_f64(&values);
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let deviations: Vec<f64> = values.iter().map(|value| (value - median).abs()).collect();
+    attempt.hr_median = Some(median);
+    attempt.hr_mean = Some(mean);
+    attempt.hr_sd = Some((values.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+        / values.len() as f64).sqrt());
+    attempt.hr_mad = Some(median_f64(&deviations));
+}
+
+fn lowest_stable_hr_window(
+    episodes: &[DeepEpisodeQuality], reports: &[QualityRrReport], hr: &[QualityHrSample],
+    accel: &[AccelSample], wrist_off: &[(i64, i64)],
+) -> HrvShadowSelection {
+    let mut best: Option<(HrvSelectionAttempt, f64, f64, f64, f64, u32)> = None;
+    for episode in episodes {
+        let mut start = episode.start;
+        while start.saturating_add(300) <= episode.end {
+            let end = start + 300;
+            let quality = episode_quality(i64::from(start), i64::from(end), hr, accel, reports, wrist_off);
+            let rr = rr_window_quality(start, end, reports);
+            if reliable_window(&quality, &rr) {
+                let values: Vec<f64> = hr.iter()
+                    .filter(|sample| sample.unix >= i64::from(start) && sample.unix < i64::from(end))
+                    .map(|sample| f64::from(sample.bpm)).collect();
+                if !values.is_empty() {
+                    let median = median_f64(&values);
+                    let mean = values.iter().sum::<f64>() / values.len() as f64;
+                    let sd = (values.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+                        / values.len() as f64).sqrt();
+                    let deviations: Vec<f64> = values.iter().map(|value| (value - median).abs()).collect();
+                    let mad = median_f64(&deviations);
+                    let attempt = HrvSelectionAttempt {
+                        rmssd_ms: rr.rmssd_ms, selected_episode: Some((episode.start, episode.end)),
+                        selected_episode_quality: Some(*episode), selected_window_quality: Some(quality),
+                        selected_window: Some((start, end)), hr_median: Some(median), hr_mean: Some(mean),
+                        hr_sd: Some(sd), hr_mad: Some(mad), usable_report_seconds: rr.report_seconds,
+                        input_rr_intervals: rr.input_intervals, clean_rr_intervals: rr.clean_intervals,
+                        contiguous_pairs: rr.contiguous_pairs,
+                        sudden_change_pairs_rejected: rr.sudden_change_pairs_rejected, rejection_reason: None,
+                    };
+                    let replace = best.as_ref().is_none_or(|(_, bm, _, bsd, bmad, bs)| {
+                        (median, mad, sd, std::cmp::Reverse(start))
+                            < (*bm, *bmad, *bsd, std::cmp::Reverse(*bs))
+                    });
+                    if replace { best = Some((attempt, median, mean, sd, mad, start)); }
+                }
+            }
+            start = start.saturating_add(30);
+        }
+    }
+    match best {
+        Some((attempt, median, mean, sd, mad, _)) => HrvShadowSelection {
+            study_version: HRV_SELECTOR_STUDY_VERSION,
+            movement_contamination_fraction: attempt.selected_window_quality
+                .map(|quality| (quality.hr_coverage - quality.clean_hr_coverage).max(0.0)),
+            attempt, hr_median: Some(median), hr_mean: Some(mean), hr_sd: Some(sd), hr_mad: Some(mad),
+        },
+        None => HrvShadowSelection {
+            study_version: HRV_SELECTOR_STUDY_VERSION,
+            attempt: unavailable_attempt(HrvUnavailableReason::NoQualityValidFiveMinuteWindow),
+            hr_median: None, hr_mean: None, hr_sd: None, hr_mad: None,
+            movement_contamination_fraction: None,
+        },
+    }
 }
 
 fn final_sws_last_five_hrv_inner<F>(
@@ -891,7 +997,12 @@ where
                 rmssd_ms: rr.rmssd_ms,
                 selected_episode: Some((episode.start, episode.end)),
                 selected_episode_quality: Some(*episode),
+                selected_window_quality: Some(quality),
                 selected_window: Some((window_start, window_end)),
+                hr_median: None,
+                hr_mean: None,
+                hr_sd: None,
+                hr_mad: None,
                 usable_report_seconds: rr.report_seconds,
                 input_rr_intervals: rr.input_intervals,
                 clean_rr_intervals: rr.clean_intervals,
@@ -949,7 +1060,12 @@ fn unavailable_attempt(reason: HrvUnavailableReason) -> HrvSelectionAttempt {
         rmssd_ms: None,
         selected_episode: None,
         selected_episode_quality: None,
+        selected_window_quality: None,
         selected_window: None,
+        hr_median: None,
+        hr_mean: None,
+        hr_sd: None,
+        hr_mad: None,
         usable_report_seconds: 0,
         input_rr_intervals: 0,
         clean_rr_intervals: 0,
@@ -969,7 +1085,12 @@ fn hrv_refusal(
         rmssd_ms: None,
         selected_episode: Some((e.start, e.end)),
         selected_episode_quality: Some(*e),
+        selected_window_quality: None,
         selected_window: Some(window),
+        hr_median: None,
+        hr_mean: None,
+        hr_sd: None,
+        hr_mad: None,
         usable_report_seconds: rr.report_seconds,
         input_rr_intervals: rr.input_intervals,
         clean_rr_intervals: rr.clean_intervals,
@@ -1914,6 +2035,43 @@ mod tests {
         );
         assert_eq!(result.selected_episode, Some((1_000, 1_390)));
         assert!(result.rmssd_ms.unwrap() > 20.0);
+    }
+
+    #[test]
+    fn shadow_c_selects_lowest_hr_while_production_a_remains_final_deep() {
+        let episodes = [quality(0, 600), quality(900, 1_500)];
+        let hr: Vec<QualityHrSample> = (0..1_500)
+            .filter(|unix| *unix < 600 || *unix >= 900)
+            .map(|unix| QualityHrSample {
+                unix, bpm: if unix < 600 { 65 } else { 70 }, quality_valid: true,
+            }).collect();
+        let accel: Vec<AccelSample> = (0..1_500)
+            .map(|ts| AccelSample { ts, x: 0.0, y: 0.0, z: 1.0 }).collect();
+        let mut rr = reports(0, 600, 30);
+        rr.extend(reports(900, 1_500, 10));
+        let production_a = final_sws_last_five_hrv_with_streams(&episodes, &rr, &hr, &accel, &[]);
+        let shadow_c = lowest_stable_hr_window(&episodes, &rr, &hr, &accel, &[]);
+
+        assert_eq!(production_a.selected_episode, Some((900, 1_500)));
+        assert_eq!(production_a.selected_window, Some((1_200, 1_500)));
+        assert_eq!(shadow_c.attempt.selected_episode, Some((0, 600)));
+        assert_eq!(shadow_c.attempt.selected_window, Some((300, 600)));
+        assert_eq!(shadow_c.hr_median, Some(65.0));
+        assert!(shadow_c.attempt.rmssd_ms.unwrap() > production_a.rmssd_ms.unwrap());
+        assert_eq!(shadow_c.study_version, HRV_SELECTOR_STUDY_VERSION);
+    }
+
+    #[test]
+    fn shadow_c_breaks_equal_hr_ties_in_favor_of_the_later_window() {
+        let episodes = [quality(0, 600)];
+        let hr: Vec<QualityHrSample> = (0..600)
+            .map(|unix| QualityHrSample { unix, bpm: 60, quality_valid: true }).collect();
+        let accel: Vec<AccelSample> = (0..600)
+            .map(|ts| AccelSample { ts, x: 0.0, y: 0.0, z: 1.0 }).collect();
+        let shadow_c = lowest_stable_hr_window(
+            &episodes, &reports(0, 600, 10), &hr, &accel, &[],
+        );
+        assert_eq!(shadow_c.attempt.selected_window, Some((300, 600)));
     }
 
     #[test]
