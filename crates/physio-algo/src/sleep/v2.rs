@@ -39,10 +39,66 @@ pub const STAGE_ORDER: [SleepStage; 4] = [
 /// `shadow_metrics::ALGORITHM_VERSION_V4` (which stamps the nightly-physiology/RHR bundle, not
 /// staging). Bump only when `Params::SHIPPED`'s staging-relevant fields change; `sleep-staging-v2`
 /// was the recipe documented in `docs/algorithms.md` prior to this constant's introduction.
-pub const STAGING_ALGORITHM_VERSION: &str = "sleep-staging-v3";
+/// `sleep-staging-v3` was the pre-H-ABC final V8 Deep emission. Bumped to `sleep-staging-v4-habc`
+/// now that the frozen Architecture H-ABC / ">=2-of-3" candidate replaces the Deep emission slot
+/// (see `h_abc_deep_value`) -- the smallest in-crate identity change that lets a newly computed
+/// sleep session be told apart from one staged by the prior recipe. This constant alone does not
+/// reach `sleep_sessions.algorithm_version`; that column is currently stamped by a process outside
+/// this crate (noop-backend's `ReplayArtifactSet`/derived-artifact import path) that does not read
+/// this constant today -- closing that gap is a separate, out-of-crate change.
+pub const STAGING_ALGORITHM_VERSION: &str = "sleep-staging-v4-habc";
 
 /// Deep-eligibility HR-flatness percentile gate of the shipped recipe.
 pub const DEEP_GATE_THRESH: f64 = Params::SHIPPED.deep_gate_thresh;
+
+// === Architecture H-ABC / frozen ">=2-of-3" Deep candidate -- FROZEN research constants ===============
+// Recovered verbatim from the validated offline candidate: `noop-backend` repo,
+// `research/frozen_holdout_validation_2026-09-22/scripts/frozen_constants.py` (channel formulas + the
+// fusion rule) and `.../scripts/build_epoch_table.py` (motion_mod + trailing-window semantics), with the
+// decision record at `research/final_deep_production_candidate_2026-09-23/README.md`. Every constant
+// below is a reference-population median/IQR or a bisection-solved scale factor fixed BEFORE this
+// architecture was scored against any outcome -- do not tune any of them without a new validation cycle.
+
+/// Channel B (HR-stability) trailing-window feature sizes, in epochs (30 s each): 10 min / 2 min.
+const HABC_HR600_EPOCHS: usize = 20;
+const HABC_HR120_EPOCHS: usize = 4;
+const HABC_MOVE600_EPOCHS: usize = 20;
+
+/// Channel B reference medians/IQRs (TRUE_LIGHT-anchored) and its scale factor.
+const HABC_V9_HR600_MED: f64 = 2.3339;
+const HABC_V9_HR600_IQR: f64 = 3.0434;
+const HABC_V9_HR120_MED: f64 = 0.9087;
+const HABC_V9_HR120_IQR: f64 = 0.7861;
+const HABC_V9_MOVE600_MED: f64 = 0.0086;
+const HABC_V9_MOVE600_IQR: f64 = 0.0293;
+const HABC_V9_K_SCALE: f64 = 1.7795;
+
+/// Channel C (RR/HRV) trailing-window widths, in whole seconds, and gap-aware RMSSD's max beat gap.
+const HABC_RR_SDNN_MAD_WINDOW_SEC: i64 = 600;
+const HABC_RR_RMSSD_WINDOW_SEC: i64 = 300;
+const HABC_RR_MAX_GAP_SEC: i64 = 5;
+
+/// Channel C reference medians/IQRs (TRUE_LIGHT-anchored) and its scale factor.
+const HABC_RR_SDNN10_MED: f64 = 122.848;
+const HABC_RR_SDNN10_IQR: f64 = 32.578;
+const HABC_RR_MAD10_MED: f64 = 61.0;
+const HABC_RR_MAD10_IQR: f64 = 17.25;
+const HABC_RR_RMSSD5_MED: f64 = 108.456;
+const HABC_RR_RMSSD5_IQR: f64 = 39.713;
+const HABC_K_RR: f64 = 0.689;
+
+/// Fusion: Deep is only replaced by the fused value when at least this many of {A, B, C} individually
+/// clear their own reference zero (`em_light`). 2 is what makes this the ">=2-of-3" candidate rather than
+/// the looser "H-ABC" (`min_agree=1`) variant that was NOT selected for production.
+const HABC_MIN_AGREE: usize = 2;
+
+/// Channel E (motion veto/bonus) constants -- unchanged from the frozen offline candidate.
+const HABC_IMMOB_MED_MIN: f64 = 4.5;
+const HABC_IMMOB_IQR_MIN: f64 = 6.0;
+const HABC_MOTION_BONUS_CAP: f64 = 0.15;
+const HABC_MOTION_VETO: f64 = -3.0;
+const HABC_NEARZERO_MOVE_FRAC: f64 = 0.01;
+const HABC_MOVE_VETO_THRESH: f64 = 0.15;
 
 /// One 30 s epoch's recipe features. `None` means "no measurement" (scored neutral).
 struct Epoch {
@@ -55,6 +111,21 @@ struct Epoch {
     resp_reg: Option<f64>,
     clock: f64,
     jerk_scale: f64,
+    /// Frozen H-ABC channel B inputs: trailing (causal, index-windowed) population std of per-epoch mean
+    /// HR over the preceding 20 / 4 epochs, and trailing mean `move_frac` over the preceding 20 epochs.
+    hr_trail_std_600s: Option<f64>,
+    hr_trail_std_120s: Option<f64>,
+    move_trail_mean_600s: Option<f64>,
+    /// Frozen H-ABC channel C inputs: trailing (causal, time-windowed) RR/HRV statistics ending at this
+    /// epoch's END (`start + 30`), computed from the UNCLAMPED flattened RR beats (deliberately not the
+    /// [300,2000]ms-clamped beats `resp_regularity` uses -- the frozen research channel never clamped).
+    sdnn_10min: Option<f64>,
+    rr_mad_10min: Option<f64>,
+    rmssd_5min: Option<f64>,
+    /// Frozen H-ABC channel E input: minutes of the current unbroken run of near-zero `move_frac`
+    /// (`<= HABC_NEARZERO_MOVE_FRAC`) ending at and including this epoch, rounded to 0.1 min exactly as
+    /// the frozen offline candidate does.
+    low_motion_run_min: Option<f64>,
 }
 
 /// Stage a detected in-bed span with the shipped V2 recipe; segments tile `[start, end]`.
@@ -148,9 +219,36 @@ pub struct EpochDiagnostic {
     pub rem_guard: f64,
     /// True when this epoch's peak jerk cleared the motion gate, adding `motion_gate_boost` to awake.
     pub motion_gate_boost_applied: bool,
-    /// The late-deep-interaction bonus folded into `em_deep` when RSA + motion + HRV all agree (0 else).
+    /// The late-deep-interaction bonus folded into `em_deep_v8` when RSA + motion + HRV all agree (0
+    /// else). Named `_v8` here (not `late_deep_bonus` alone) only to sit next to the channel it belongs
+    /// to; nothing about its own computation changed.
     pub late_deep_bonus: f64,
+    /// Frozen H-ABC channel B/C trailing inputs, mirrored 1:1 from `Epoch` — see its doc comments.
+    pub hr_trail_std_600s: Option<f64>,
+    pub hr_trail_std_120s: Option<f64>,
+    pub move_trail_mean_600s: Option<f64>,
+    pub sdnn_10min: Option<f64>,
+    pub rr_mad_10min: Option<f64>,
+    pub rmssd_5min: Option<f64>,
+    pub low_motion_run_min: Option<f64>,
+    /// A: the complete, unmodified legacy V8 Deep emission (every existing term through
+    /// `late_deep_bonus`) -- what `em_deep` used to be, and would still be under `min_agree` architectures
+    /// this candidate does not use.
+    pub em_deep_v8: f64,
+    /// B: frozen HR_STABILITY_DEEP channel value.
+    pub em_deep_v9: f64,
+    /// C: frozen RR_HRV_DEEP channel value.
+    pub em_deep_rr: f64,
+    /// E: the frozen motion veto/bonus actually applied inside the fusion (0 unless the fusion's
+    /// `>=2-of-3` gate fired; the raw veto/bonus value is reported regardless of whether it was used, so
+    /// a caller can see it either way).
+    pub habc_motion_mod: f64,
+    /// The frozen ">=2-of-3" fusion's decision: how many of {A, B, C} individually cleared `em_light`.
+    pub habc_agree_count: usize,
     /// Final per-stage log-emissions handed to the decoder — identical to `emissions_prepared`'s row.
+    /// `em_deep` is now the FUSED H-ABC value (`em_deep_v8` when fewer than `HABC_MIN_AGREE` channels
+    /// agree, otherwise `max(qualifying channels) + habc_motion_mod`) -- see `em_deep_v8` above for A's
+    /// own unmodified value.
     pub em_deep: f64,
     pub em_rem: f64,
     pub em_light: f64,
@@ -250,6 +348,16 @@ fn diagnostics(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<EpochDiagnost
             em[DEEP] += late_deep_bonus;
         }
 
+        // === Architecture H-ABC / frozen ">=2-of-3" Deep candidate ===================================
+        // A is em[DEEP] as computed above, complete and untouched by anything below. See the frozen
+        // constants block near the top of this file for provenance; do not tune anything here.
+        let habc_a = em[DEEP];
+        let habc_b = em_deep_v9_of(f, blp[DEEP]);
+        let habc_c = em_deep_rr_of(f, blp[DEEP]);
+        let habc_mm = habc_motion_mod(f.move_frac, f.low_motion_run_min);
+        let habc_agree_count = habc_agreeing(habc_a, habc_b, habc_c, em[LIGHT]);
+        em[DEEP] = h_abc_deep_value(habc_a, habc_b, habc_c, em[LIGHT], habc_mm);
+
         out.push(EpochDiagnostic {
             start: f.start,
             hr: f.hr,
@@ -271,6 +379,18 @@ fn diagnostics(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<EpochDiagnost
             rem_guard: guard,
             motion_gate_boost_applied,
             late_deep_bonus,
+            hr_trail_std_600s: f.hr_trail_std_600s,
+            hr_trail_std_120s: f.hr_trail_std_120s,
+            move_trail_mean_600s: f.move_trail_mean_600s,
+            sdnn_10min: f.sdnn_10min,
+            rr_mad_10min: f.rr_mad_10min,
+            rmssd_5min: f.rmssd_5min,
+            low_motion_run_min: f.low_motion_run_min,
+            em_deep_v8: habc_a,
+            em_deep_v9: habc_b,
+            em_deep_rr: habc_c,
+            habc_motion_mod: habc_mm,
+            habc_agree_count,
             em_deep: em[DEEP],
             em_rem: em[REM],
             em_light: em[LIGHT],
@@ -528,7 +648,8 @@ fn features(
     let move_thr = jerk_scale * p.jerk_move_mult;
 
     // PASS 2 — move fraction against the night-relative threshold.
-    raws.into_iter()
+    let mut epochs: Vec<Epoch> = raws
+        .into_iter()
         .map(|r| {
             // No gravity in the epoch = no motion evidence; absent, not "perfectly still".
             let observed = !r.jerks.is_empty();
@@ -543,9 +664,52 @@ fn features(
                 resp_reg: r.resp_reg,
                 clock: r.clock,
                 jerk_scale,
+                hr_trail_std_600s: None,
+                hr_trail_std_120s: None,
+                move_trail_mean_600s: None,
+                sdnn_10min: None,
+                rr_mad_10min: None,
+                rmssd_5min: None,
+                low_motion_run_min: None,
             }
         })
-        .collect()
+        .collect();
+
+    // PASS 3 — frozen Architecture H-ABC trailing features (causal; see the frozen-constants block near
+    // the top of this file). Index-windowed over this already-gap-dropped epoch sequence for B, and
+    // time-windowed over the raw unclamped `rr` slice (ending at each epoch's own end, `start + 30`) for
+    // C. `low_motion_run_min` is a forward-running streak, chronological in this same epoch-index order.
+    let hr_seq: Vec<Option<f64>> = epochs.iter().map(|ep| ep.hr).collect();
+    let move_seq: Vec<Option<f64>> = epochs.iter().map(|ep| ep.move_frac).collect();
+    let mut low_run_epochs: i64 = 0;
+    for (i, ep) in epochs.iter_mut().enumerate() {
+        ep.hr_trail_std_600s = trailing_pstdev(&hr_seq, i, HABC_HR600_EPOCHS);
+        ep.hr_trail_std_120s = trailing_pstdev(&hr_seq, i, HABC_HR120_EPOCHS);
+        ep.move_trail_mean_600s = trailing_mean(&move_seq, i, HABC_MOVE600_EPOCHS);
+
+        let near_zero = ep.move_frac.is_some_and(|m| m <= HABC_NEARZERO_MOVE_FRAC);
+        low_run_epochs = if near_zero { low_run_epochs + 1 } else { 0 };
+        ep.low_motion_run_min = Some(((low_run_epochs as f64 * 0.5) * 10.0).round() / 10.0);
+
+        let e_end = ep.start + 30;
+        let w10 = rr_window_stats(
+            rr,
+            e_end - HABC_RR_SDNN_MAD_WINDOW_SEC,
+            e_end,
+            HABC_RR_MAX_GAP_SEC,
+        );
+        let w5 = rr_window_stats(
+            rr,
+            e_end - HABC_RR_RMSSD_WINDOW_SEC,
+            e_end,
+            HABC_RR_MAX_GAP_SEC,
+        );
+        ep.sdnn_10min = w10.sdnn;
+        ep.rr_mad_10min = w10.rr_mad;
+        ep.rmssd_5min = w5.rmssd;
+    }
+
+    epochs
 }
 
 /// RSA respiration regularity: tachogram → 4 Hz resample → detrend → band-limited DFT peak/sum over the
@@ -871,9 +1035,198 @@ fn emissions(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<[f64; 4]> {
                 p.deep_hr,
             );
         }
+
+        // === Architecture H-ABC / frozen ">=2-of-3" Deep candidate ===================================
+        // A is em[DEEP] as computed above, complete and untouched by anything below. Duplicated
+        // term-for-term against `diagnostics()`'s identical block (see `diagnostics_matches_emissions`).
+        let habc_a = em[DEEP];
+        let habc_b = em_deep_v9_of(f, blp[DEEP]);
+        let habc_c = em_deep_rr_of(f, blp[DEEP]);
+        let habc_mm = habc_motion_mod(f.move_frac, f.low_motion_run_min);
+        em[DEEP] = h_abc_deep_value(habc_a, habc_b, habc_c, em[LIGHT], habc_mm);
+
         seq.push(em);
     }
     seq
+}
+
+/// Channel B (`em_deep_v9`) from an epoch's already-computed trailing HR/motion features.
+fn em_deep_v9_of(f: &Epoch, blp_deep: f64) -> f64 {
+    em_deep_v9(f.hr_trail_std_600s, f.hr_trail_std_120s, f.move_trail_mean_600s, blp_deep)
+}
+
+/// Channel C (`em_deep_rr`) from an epoch's already-computed trailing RR/HRV features.
+fn em_deep_rr_of(f: &Epoch, blp_deep: f64) -> f64 {
+    em_deep_rr(f.sdnn_10min, f.rr_mad_10min, f.rmssd_5min, blp_deep)
+}
+
+/// Population standard deviation over the trailing window of up to `n_ep` epochs ending at and including
+/// index `i` (fewer at the start of the sequence). Missing (`None`) values inside the window are skipped,
+/// not zero-filled. `None` when fewer than 2 present values fall in the window. The window is by EPOCH
+/// INDEX in this already-gap-dropped sequence (an epoch with neither HR nor gravity was already dropped
+/// upstream in `features()`), not by wall-clock time -- mirrors
+/// `research/frozen_holdout_validation_2026-09-22/scripts/build_epoch_table.py::trailing_pstdev` exactly.
+fn trailing_pstdev(vals: &[Option<f64>], i: usize, n_ep: usize) -> Option<f64> {
+    let lo = i.saturating_sub(n_ep.saturating_sub(1));
+    let w: Vec<f64> = vals[lo..=i].iter().filter_map(|v| *v).collect();
+    if w.len() < 2 {
+        return None;
+    }
+    Some(crate::stats::population_sd(&w))
+}
+
+/// Trailing mean over the same window semantics as [`trailing_pstdev`]; `None` only when the window has
+/// no present values at all. Mirrors `build_epoch_table.py::trailing_mean` exactly.
+fn trailing_mean(vals: &[Option<f64>], i: usize, n_ep: usize) -> Option<f64> {
+    let lo = i.saturating_sub(n_ep.saturating_sub(1));
+    let w: Vec<f64> = vals[lo..=i].iter().filter_map(|v| *v).collect();
+    if w.is_empty() {
+        None
+    } else {
+        Some(w.iter().sum::<f64>() / w.len() as f64)
+    }
+}
+
+/// One RR/HRV window's SDNN / RR-MAD / gap-aware RMSSD over the beats in `[lo, hi)` (wall-clock seconds),
+/// read from the already-flattened, second-sorted, UNCLAMPED `rr` slice `features()` builds via
+/// `flatten_rr`. Mirrors `build_epoch_table.py::rr_window_stats` exactly: population SDNN and
+/// median-absolute-deviation require >=2 beats (else `None` for both), RMSSD sums only over consecutive
+/// beat pairs -- in `rr`'s own already-second-sorted, intra-second-emission-preserved order -- whose gap
+/// is <= `max_gap_sec`, and requires >=1 such pair (else `None`).
+struct RrWindowStats {
+    sdnn: Option<f64>,
+    rr_mad: Option<f64>,
+    rmssd: Option<f64>,
+}
+
+fn rr_window_stats(rr: &[(i64, f64)], lo: i64, hi: i64, max_gap_sec: i64) -> RrWindowStats {
+    let a = rr.partition_point(|&(ts, _)| ts < lo);
+    let b = rr.partition_point(|&(ts, _)| ts < hi);
+    let beats = &rr[a..b];
+    if beats.is_empty() {
+        return RrWindowStats {
+            sdnn: None,
+            rr_mad: None,
+            rmssd: None,
+        };
+    }
+    let vals: Vec<f64> = beats.iter().map(|&(_, v)| v).collect();
+    let (sdnn, rr_mad) = if vals.len() >= 2 {
+        let med = median(&vals);
+        let sd = crate::stats::population_sd(&vals);
+        let devs: Vec<f64> = vals.iter().map(|v| (v - med).abs()).collect();
+        (Some(sd), Some(median(&devs)))
+    } else {
+        (None, None)
+    };
+    let mut sq_sum = 0.0;
+    let mut nd = 0usize;
+    for w in beats.windows(2) {
+        let gap = w[1].0 - w[0].0;
+        if gap <= max_gap_sec {
+            let d = w[1].1 - w[0].1;
+            sq_sum += d * d;
+            nd += 1;
+        }
+    }
+    let rmssd = if nd >= 1 {
+        Some((sq_sum / nd as f64).sqrt())
+    } else {
+        None
+    };
+    RrWindowStats { sdnn, rr_mad, rmssd }
+}
+
+/// Channel B: frozen HR_STABILITY_DEEP. `blp_deep` is `p.base_log_prior()[DEEP]` -- identically
+/// `ln(0.15)` under `Params::SHIPPED`, matching the frozen research's own `BLP_DEEP = ln(0.15)` exactly
+/// (proven equal by construction, not merely similar, so it is reused rather than re-declared).
+fn em_deep_v9(
+    hr_trail_std_600s: Option<f64>,
+    hr_trail_std_120s: Option<f64>,
+    move_trail_mean_600s: Option<f64>,
+    blp_deep: f64,
+) -> f64 {
+    let mut combined = 0.0;
+    if let Some(v) = hr_trail_std_600s {
+        combined -= (v - HABC_V9_HR600_MED) / HABC_V9_HR600_IQR;
+    }
+    if let Some(v) = hr_trail_std_120s {
+        combined -= (v - HABC_V9_HR120_MED) / HABC_V9_HR120_IQR;
+    }
+    if let Some(v) = move_trail_mean_600s {
+        combined -= (v - HABC_V9_MOVE600_MED) / HABC_V9_MOVE600_IQR;
+    }
+    blp_deep + HABC_V9_K_SCALE * combined
+}
+
+/// Channel C: frozen RR_HRV_DEEP. See [`em_deep_v9`] on `blp_deep`.
+fn em_deep_rr(
+    sdnn_10min: Option<f64>,
+    rr_mad_10min: Option<f64>,
+    rmssd_5min: Option<f64>,
+    blp_deep: f64,
+) -> f64 {
+    let mut combined = 0.0;
+    if let Some(v) = sdnn_10min {
+        combined -= (v - HABC_RR_SDNN10_MED) / HABC_RR_SDNN10_IQR;
+    }
+    if let Some(v) = rr_mad_10min {
+        combined -= (v - HABC_RR_MAD10_MED) / HABC_RR_MAD10_IQR;
+    }
+    if let Some(v) = rmssd_5min {
+        combined -= (v - HABC_RR_RMSSD5_MED) / HABC_RR_RMSSD5_IQR;
+    }
+    blp_deep + HABC_K_RR * combined
+}
+
+/// How many of {A, B, C} individually, strictly, exceed `em_light` -- the frozen fusion's own agreement
+/// count, exposed separately so a diagnostic caller doesn't have to reimplement the comparison.
+fn habc_agreeing(em_deep_v8: f64, em_deep_v9: f64, em_deep_rr: f64, em_light: f64) -> usize {
+    [em_deep_v8, em_deep_v9, em_deep_rr]
+        .iter()
+        .filter(|&&v| v > em_light)
+        .count()
+}
+
+/// The frozen ">=2-of-3" fusion. Candidates are the values among {A, B, C} that individually, strictly,
+/// exceed `em_light` (each channel's own reference-zero eligibility test); when at least
+/// `HABC_MIN_AGREE` (2) qualify, the fused Deep emission is their max plus the motion modifier;
+/// otherwise it falls back to A (`em_deep_v8`) UNCHANGED -- never `-inf`, never `em_light` itself.
+/// Mirrors `frozen_constants.py::h_abc_deep_value(..., min_agree=2)` exactly.
+fn h_abc_deep_value(em_deep_v8: f64, em_deep_v9: f64, em_deep_rr: f64, em_light: f64, motion_mod: f64) -> f64 {
+    let mut candidates: Vec<f64> = Vec::with_capacity(3);
+    if em_deep_v8 > em_light {
+        candidates.push(em_deep_v8);
+    }
+    if em_deep_v9 > em_light {
+        candidates.push(em_deep_v9);
+    }
+    if em_deep_rr > em_light {
+        candidates.push(em_deep_rr);
+    }
+    if candidates.len() >= HABC_MIN_AGREE {
+        candidates.iter().copied().fold(f64::NEG_INFINITY, f64::max) + motion_mod
+    } else {
+        em_deep_v8
+    }
+}
+
+/// Channel E: the frozen motion veto/bonus. A hard veto when the CURRENT epoch's `move_frac` clears the
+/// veto threshold; else a capped bonus once the CAUSAL running low-motion streak (in minutes) exceeds the
+/// TRUE_LIGHT-anchored reference median. Mirrors `build_epoch_table.py::motion_mod` exactly.
+fn habc_motion_mod(move_frac: Option<f64>, low_motion_run_min: Option<f64>) -> f64 {
+    if let Some(m) = move_frac {
+        if m >= HABC_MOVE_VETO_THRESH {
+            return HABC_MOTION_VETO;
+        }
+    }
+    if let Some(run_min) = low_motion_run_min {
+        let z = (run_min - HABC_IMMOB_MED_MIN) / HABC_IMMOB_IQR_MIN;
+        if z > 0.0 {
+            return HABC_MOTION_BONUS_CAP.min(0.05 * z);
+        }
+    }
+    0.0
 }
 
 #[cfg(test)]
@@ -1326,11 +1679,12 @@ mod tests {
     }
 
     #[test]
-    fn staging_algorithm_version_is_the_shipped_sleep_staging_v3_identity() {
+    fn staging_algorithm_version_is_the_shipped_sleep_staging_v4_habc_identity() {
         // Pins the code-level staging identity so a future edit here is a deliberate, visible bump,
         // not a silent drift. Distinct from `shadow_metrics::ALGORITHM_VERSION_V4`, which stamps the
-        // nightly-physiology/RHR bundle and must NOT move when only staging changes.
-        assert_eq!(STAGING_ALGORITHM_VERSION, "sleep-staging-v3");
+        // nightly-physiology/RHR bundle and must NOT move when only staging changes. Bumped from
+        // `sleep-staging-v3` to `sleep-staging-v4-habc` when the frozen H-ABC Deep candidate shipped.
+        assert_eq!(STAGING_ALGORITHM_VERSION, "sleep-staging-v4-habc");
     }
 
     #[test]
@@ -1370,5 +1724,195 @@ mod tests {
                 [0.0, 0.0, 0.10, 0.90],
             ]
         );
+    }
+
+    // ── Architecture H-ABC / frozen ">=2-of-3" Deep candidate ─────────────────────────────────────
+
+    #[test]
+    fn trailing_pstdev_windows_by_index_and_skips_missing() {
+        let vals = vec![Some(1.0), Some(2.0), None, Some(4.0), Some(6.0)];
+        // window of 3 ending at i=4 (indices 2,3,4): None skipped -> [4,6], pstdev = 1.0
+        assert!((trailing_pstdev(&vals, 4, 3).unwrap() - 1.0).abs() < 1e-12);
+        // window of 2 ending at i=1: [1,2], pstdev = 0.5
+        assert!((trailing_pstdev(&vals, 1, 2).unwrap() - 0.5).abs() < 1e-12);
+        // window of 3 ending at i=2 (indices 0,1,2): [1,2,None] -> [1,2], pstdev = 0.5
+        assert!((trailing_pstdev(&vals, 2, 3).unwrap() - 0.5).abs() < 1e-12);
+        // fewer than 2 present values in the window -> None
+        assert_eq!(None, trailing_pstdev(&vals, 0, 1));
+    }
+
+    #[test]
+    fn trailing_mean_windows_by_index_and_skips_missing() {
+        let vals = vec![Some(0.0), None, Some(0.2), Some(0.4)];
+        // window of 3 ending at i=3 (indices 1,2,3): None skipped -> [0.2,0.4], mean = 0.3
+        assert!((trailing_mean(&vals, 3, 3).unwrap() - 0.3).abs() < 1e-12);
+        // a single present value is enough for a mean (unlike pstdev's >=2 requirement)
+        assert!((trailing_mean(&vals, 0, 5).unwrap() - 0.0).abs() < 1e-12);
+        // entirely-missing window -> None
+        assert_eq!(None, trailing_mean(&[None, None], 1, 2));
+    }
+
+    #[test]
+    fn rr_window_stats_sdnn_and_mad_require_two_beats() {
+        let one_beat = vec![(100i64, 800.0)];
+        let s = rr_window_stats(&one_beat, 0, 200, 5);
+        assert_eq!(None, s.sdnn);
+        assert_eq!(None, s.rr_mad);
+
+        // three beats: 700, 800, 900 -- mean=800, population sdnn = sqrt(20000/3); median=800,
+        // abs-devs=[100,0,100], median-abs-dev = 100.
+        let three = vec![(100i64, 700.0), (101, 800.0), (102, 900.0)];
+        let s2 = rr_window_stats(&three, 0, 200, 5);
+        assert!((s2.sdnn.unwrap() - (20_000.0f64 / 3.0).sqrt()).abs() < 1e-9);
+        assert!((s2.rr_mad.unwrap() - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rr_window_stats_rmssd_is_gap_aware() {
+        // beats at t=0,1,2 (successive gaps of 1s, <=5s, included), then a jump to t=20 (gap 18s, its
+        // diff from the t=2 beat is excluded).
+        let rr = vec![(0i64, 800.0), (1, 850.0), (2, 800.0), (20, 1000.0)];
+        let s = rr_window_stats(&rr, 0, 30, 5);
+        // included diffs: 850-800=50, 800-850=-50 -> squares 2500,2500 -> mean 2500 -> rmssd = 50
+        assert!((s.rmssd.unwrap() - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rr_window_stats_window_is_half_open() {
+        let rr = vec![(100i64, 700.0), (200, 800.0)];
+        // hi=200 excludes the beat AT ts=200 -> only one beat in [100,200) -> not enough for sdnn/mad
+        let s = rr_window_stats(&rr, 100, 200, 5);
+        assert_eq!(None, s.sdnn, "only one beat in the half-open window");
+        // widen to [100,201) and both beats are included
+        let s2 = rr_window_stats(&rr, 100, 201, 5);
+        assert!(s2.sdnn.is_some(), "both beats now in window");
+    }
+
+    #[test]
+    fn em_deep_v9_arithmetic_is_hand_computable() {
+        let blp_deep = 0.15f64.ln();
+        // all three features exactly at their reference medians -> combined = 0 -> em = blp_deep
+        let at_median = em_deep_v9(
+            Some(HABC_V9_HR600_MED),
+            Some(HABC_V9_HR120_MED),
+            Some(HABC_V9_MOVE600_MED),
+            blp_deep,
+        );
+        assert!((at_median - blp_deep).abs() < 1e-12);
+
+        // one feature present, one IQR BELOW its median (flatter HR = more Deep-typical) ->
+        // combined = -((med - iqr) - med) / iqr = 1.0 -> em = blp_deep + K_SCALE * 1.0
+        let one_iqr_below = em_deep_v9(Some(HABC_V9_HR600_MED - HABC_V9_HR600_IQR), None, None, blp_deep);
+        assert!((one_iqr_below - (blp_deep + HABC_V9_K_SCALE)).abs() < 1e-9);
+
+        // missing features contribute nothing -> all-None reduces to blp_deep exactly
+        assert!((em_deep_v9(None, None, None, blp_deep) - blp_deep).abs() < 1e-12);
+    }
+
+    #[test]
+    fn em_deep_rr_arithmetic_is_hand_computable() {
+        let blp_deep = 0.15f64.ln();
+        let at_median = em_deep_rr(
+            Some(HABC_RR_SDNN10_MED),
+            Some(HABC_RR_MAD10_MED),
+            Some(HABC_RR_RMSSD5_MED),
+            blp_deep,
+        );
+        assert!((at_median - blp_deep).abs() < 1e-12);
+
+        let one_iqr_below =
+            em_deep_rr(Some(HABC_RR_SDNN10_MED - HABC_RR_SDNN10_IQR), None, None, blp_deep);
+        assert!((one_iqr_below - (blp_deep + HABC_K_RR)).abs() < 1e-9);
+
+        assert!((em_deep_rr(None, None, None, blp_deep) - blp_deep).abs() < 1e-12);
+    }
+
+    #[test]
+    fn h_abc_fusion_falls_back_to_a_when_zero_channels_qualify() {
+        // A, B, C all <= em_light -> 0 candidates -> falls back to A verbatim, not -inf, not em_light.
+        assert_eq!(-2.0, h_abc_deep_value(-2.0, -3.0, -5.0, -1.0, 0.7));
+    }
+
+    #[test]
+    fn h_abc_fusion_falls_back_to_a_when_exactly_one_channel_qualifies() {
+        // only B qualifies (5.0 > light=0.0); A and C do not -> 1 candidate, still falls back to A.
+        assert_eq!(-2.0, h_abc_deep_value(-2.0, 5.0, -1.0, 0.0, 0.7));
+    }
+
+    #[test]
+    fn h_abc_fusion_fires_when_exactly_two_channels_qualify() {
+        // A and C qualify (both > light=0.0), B does not -> max(A,C) + motion_mod.
+        let got = h_abc_deep_value(3.0, -1.0, 4.0, 0.0, 0.7);
+        assert!((got - (4.0 + 0.7)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn h_abc_fusion_fires_when_all_three_channels_qualify() {
+        let got = h_abc_deep_value(3.0, 9.0, 4.0, 0.0, -3.0); // motion veto applied too
+        assert!((got - (9.0 - 3.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn h_abc_fusion_eligibility_is_a_strict_greater_than() {
+        // A and B sit exactly AT em_light (do not qualify under strict >); only C qualifies -> 1
+        // candidate -> falls back to A. Under a wrongly-lenient `>=` this would instead return
+        // max(A,C)+motion_mod = 5.0, so the assertion below distinguishes the two.
+        let got = h_abc_deep_value(0.0, 0.0, 5.0, 0.0, 0.0);
+        assert_eq!(0.0, got);
+    }
+
+    #[test]
+    fn h_abc_missing_b_or_c_is_just_blp_deep_and_can_still_fail_to_qualify() {
+        // A channel with no trailing features at all reduces to blp_deep -- it can still fail to beat
+        // em_light like any other candidate, it is never specially excluded from the vote.
+        let blp_deep = 0.15f64.ln();
+        let b = em_deep_v9(None, None, None, blp_deep);
+        let c = em_deep_rr(None, None, None, blp_deep);
+        assert!((b - blp_deep).abs() < 1e-12);
+        assert!((c - blp_deep).abs() < 1e-12);
+    }
+
+    #[test]
+    fn habc_motion_mod_vetoes_on_current_epoch_movement() {
+        assert_eq!(HABC_MOTION_VETO, habc_motion_mod(Some(0.15), Some(100.0)));
+        assert_eq!(HABC_MOTION_VETO, habc_motion_mod(Some(0.9), None));
+    }
+
+    #[test]
+    fn habc_motion_mod_bonus_only_past_the_reference_median_and_capped() {
+        // at/below the reference median -> no bonus
+        assert_eq!(0.0, habc_motion_mod(Some(0.0), Some(HABC_IMMOB_MED_MIN)));
+        // just above -> a small positive bonus
+        let z = (5.0 - HABC_IMMOB_MED_MIN) / HABC_IMMOB_IQR_MIN;
+        let got = habc_motion_mod(Some(0.0), Some(5.0));
+        assert!((got - (0.05 * z).min(HABC_MOTION_BONUS_CAP)).abs() < 1e-12);
+        // far above -> capped
+        assert_eq!(HABC_MOTION_BONUS_CAP, habc_motion_mod(Some(0.0), Some(1000.0)));
+    }
+
+    #[test]
+    fn habc_motion_mod_is_zero_when_no_motion_evidence_at_all() {
+        assert_eq!(0.0, habc_motion_mod(None, None));
+    }
+
+    #[test]
+    fn habc_diagnostic_fields_are_internally_consistent_with_the_fused_emission() {
+        // The forensic export must be recomputable from its own A/B/C/E/light columns exactly, so a
+        // caller (or a parity harness) never has to trust `em_deep` without being able to check it.
+        let prep = crafted_night();
+        let p = Params::SHIPPED;
+        let diag = diagnostics_prepared(&prep, &p);
+        for d in &diag {
+            let recomputed =
+                h_abc_deep_value(d.em_deep_v8, d.em_deep_v9, d.em_deep_rr, d.em_light, d.habc_motion_mod);
+            assert!(
+                (recomputed - d.em_deep).abs() < 1e-12,
+                "fused em_deep must equal h_abc_deep_value(A,B,C,light,E)"
+            );
+            assert_eq!(
+                habc_agreeing(d.em_deep_v8, d.em_deep_v9, d.em_deep_rr, d.em_light),
+                d.habc_agree_count
+            );
+        }
     }
 }

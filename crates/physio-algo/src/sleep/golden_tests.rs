@@ -2,17 +2,47 @@
 //! — six segments on a crafted integer-only night — not the recipe that produced it; which coefficients
 //! the table can actually see is measured beside it, and six of the twenty-six are blind to it. Any drift
 //! in the twenty it does see fails immediately. Integer-literal input keeps the two languages bit-identical.
+//!
+//! Architecture H-ABC / frozen ">=2-of-3" Deep candidate (added 2026-09-23, `stage_v2`/`stage_v2_with`'s
+//! FINAL decoded output on this same crafted night legitimately, intentionally changed -- Deep is no
+//! longer A/V8 alone; it is the frozen `>=2-of-3` fusion of A/B/C). Per this change's own instructions,
+//! that output was NOT silently re-pinned in place: [`frozen_golden_hypnogram_v8_legacy`] below still
+//! pins the exact OLD six-segment table, but reconstructed from `diagnostics_v2`'s new `em_deep_v8` field
+//! (A alone, captured before the H-ABC fusion replaces `em_deep`) decoded through the same public
+//! `decode_v2`/`segments_v2` -- so legacy V8's own behavior stays pinned and provably untouched, without
+//! duplicating the staging recipe. [`frozen_golden_hypnogram_v2_habc`] is the new, additional golden that
+//! pins the actual current `stage_v2` output (48 segments -- the mid-night phase's slow, cyclical HR ramp
+//! now repeatedly crosses the B/C reference thresholds, so `>=2-of-3` toggles Deep/Light every 90-150s
+//! there where V8 alone stayed flat; the early and late boundaries also shift by a few epochs since 2-of-3
+//! agreement can sustain Deep slightly past where A alone would have released it). See
+//! `research/final_deep_production_candidate_2026-09-23/README.md` (noop-backend repo) for the full
+//! decision record.
 
 use super::input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 use super::params::Params;
 use super::refine::{RefineParams, refine_with};
-use super::v2::stage_with as stage_v2_with;
 use super::{
     DEEP_GATE_THRESH, Session, SessionAcceptancePath, SessionRole, SleepStage, SleepStreams,
     StageSegment, analyze, analyze_for_rr_generation, analyze_for_rr_generation_with_short_nap_promotion,
-    analyze_for_rr_generation_with_short_nap_shadow, assign_session_roles, motion_dense, stage_v2,
+    analyze_for_rr_generation_with_short_nap_shadow, assign_session_roles, decode_v2, diagnostics_v2,
+    motion_dense, prepare_v2, segments_v2, stage_v2,
 };
 use crate::nightly_physiology::RrDeviceGeneration;
+
+/// Decode the crafted golden night on channel A (`em_deep_v8`) ALONE, ignoring the H-ABC fusion --
+/// reusing the real `emissions()`/`diagnostics()` machinery (so this is not a second staging
+/// implementation, just a different emission column fed to the same public `decode_v2`), for tests that
+/// need to see V8's own, unmodified behavior isolated from the new fusion layer.
+fn legacy_v8_only_segments(input: &SleepInput, p: &Params) -> Vec<StageSegment> {
+    let prep = prepare_v2(input, p);
+    let diag = diagnostics_v2(&prep, p);
+    let em_v8: Vec<[f64; 4]> = diag
+        .iter()
+        .map(|d| [d.em_deep_v8, d.em_rem, d.em_light, d.em_awake])
+        .collect();
+    let labels = decode_v2(&em_v8, &p.transition);
+    segments_v2(&prep, &labels)
+}
 
 const REF_MIDNIGHT: i64 = 1_749_513_600;
 
@@ -73,19 +103,99 @@ fn golden_input() -> SleepInput {
     }
 }
 
-/// The shipped V2 output on the crafted night, segment for segment. The three constant stagers below are
-/// checked against the same table, so the golden is known to reject one that always answers a single stage.
+/// LEGACY: channel A (`em_deep_v8`) alone, isolated from the H-ABC fusion via [`legacy_v8_only_segments`]
+/// -- the exact table `frozen_golden_hypnogram_v2` pinned before the frozen ">=2-of-3" candidate replaced
+/// `stage_v2`'s actual Deep emission (see [`frozen_golden_hypnogram_v2_habc`] for the new, current
+/// output). Kept so a future change to V8's own emission construction is still caught here, independent
+/// of whatever the fusion layer on top of it is doing.
 #[test]
-fn frozen_golden_hypnogram_v2() {
+fn frozen_golden_hypnogram_v8_legacy() {
     let input = golden_input();
     let start = input.start;
-    let segs = stage_v2(&input);
+    let segs = legacy_v8_only_segments(&input, &Params::SHIPPED);
     let golden = [
         (0i64, 5070i64, SleepStage::Deep),
         (5070, 5280, SleepStage::Light),
         (5280, 5550, SleepStage::Rem),
         (5550, 10740, SleepStage::Light),
         (10740, 16290, SleepStage::Rem),
+        (16290, 21600, SleepStage::Wake),
+    ];
+    assert_eq!(golden.len(), segs.len(), "segment count");
+    for (k, g) in golden.iter().enumerate() {
+        assert_eq!(start + g.0, segs[k].start, "seg {k} start");
+        assert_eq!(start + g.1, segs[k].end, "seg {k} end");
+        assert_eq!(g.2, segs[k].stage, "seg {k} stage");
+    }
+    let expected: Vec<StageSegment> = golden
+        .iter()
+        .map(|g| StageSegment {
+            start: start + g.0,
+            end: start + g.1,
+            stage: g.2,
+        })
+        .collect();
+    assert_eq!(expected, segs);
+}
+
+/// NEW (2026-09-23): the shipped V2 output on the crafted night under the frozen ">=2-of-3" Deep
+/// candidate, segment for segment -- what `stage_v2` actually returns now. The three constant stagers
+/// below are checked against the same table, so the golden is known to reject one that always answers a
+/// single stage. See this file's module doc for why the table differs from the pre-H-ABC one
+/// ([`frozen_golden_hypnogram_v8_legacy`]).
+#[test]
+fn frozen_golden_hypnogram_v2_habc() {
+    let input = golden_input();
+    let start = input.start;
+    let segs = stage_v2(&input);
+    let golden = [
+        (0i64, 5310i64, SleepStage::Deep),
+        (5310, 5550, SleepStage::Rem),
+        (5550, 5970, SleepStage::Light),
+        (5970, 11040, SleepStage::Deep),
+        (11040, 11130, SleepStage::Light),
+        (11130, 11280, SleepStage::Deep),
+        (11280, 11370, SleepStage::Light),
+        (11370, 11520, SleepStage::Deep),
+        (11520, 11610, SleepStage::Light),
+        (11610, 11760, SleepStage::Deep),
+        (11760, 11850, SleepStage::Light),
+        (11850, 12000, SleepStage::Deep),
+        (12000, 12090, SleepStage::Light),
+        (12090, 12240, SleepStage::Deep),
+        (12240, 12330, SleepStage::Light),
+        (12330, 12480, SleepStage::Deep),
+        (12480, 12570, SleepStage::Light),
+        (12570, 12720, SleepStage::Deep),
+        (12720, 12810, SleepStage::Light),
+        (12810, 12960, SleepStage::Deep),
+        (12960, 13050, SleepStage::Light),
+        (13050, 13200, SleepStage::Deep),
+        (13200, 13290, SleepStage::Light),
+        (13290, 13440, SleepStage::Deep),
+        (13440, 13530, SleepStage::Light),
+        (13530, 13680, SleepStage::Deep),
+        (13680, 13770, SleepStage::Light),
+        (13770, 13920, SleepStage::Deep),
+        (13920, 14010, SleepStage::Light),
+        (14010, 14160, SleepStage::Deep),
+        (14160, 14250, SleepStage::Light),
+        (14250, 14400, SleepStage::Deep),
+        (14400, 14490, SleepStage::Light),
+        (14490, 14640, SleepStage::Deep),
+        (14640, 14730, SleepStage::Light),
+        (14730, 14880, SleepStage::Deep),
+        (14880, 14970, SleepStage::Light),
+        (14970, 15120, SleepStage::Deep),
+        (15120, 15210, SleepStage::Light),
+        (15210, 15360, SleepStage::Deep),
+        (15360, 15450, SleepStage::Light),
+        (15450, 15600, SleepStage::Deep),
+        (15600, 15690, SleepStage::Light),
+        (15690, 15840, SleepStage::Deep),
+        (15840, 15930, SleepStage::Light),
+        (15930, 16080, SleepStage::Deep),
+        (16080, 16290, SleepStage::Rem),
         (16290, 21600, SleepStage::Wake),
     ];
     assert_eq!(golden.len(), segs.len(), "segment count");
@@ -118,13 +228,23 @@ fn frozen_golden_hypnogram_v2() {
     }
 }
 
-/// Which V2 coefficients the frozen table can see. Twenty of the twenty-six change it; the six below do
-/// not, even at extreme values, so editing one of those is invisible to the golden and needs the fixture
-/// sheet instead. A blind row that starts moving the table is a change to report, not to silence.
+/// Which V2 (channel A / `Params`) coefficients the frozen table can see. Twenty of the twenty-six change
+/// it; the six below do not, even at extreme values, so editing one of those is invisible to the golden
+/// and needs the fixture sheet instead. A blind row that starts moving the table is a change to report,
+/// not to silence.
+///
+/// Measured against [`legacy_v8_only_segments`] (channel A alone), NOT `stage_v2`/`stage_v2_with`
+/// directly: every one of these 26 fields is a `Params` field, and `Params` only ever feeds channel A
+/// (V8's own emission construction) -- the frozen H-ABC fusion's B/C constants are separate, independently
+/// frozen module constants, never `Params` fields, so this test was never meant to probe them. Since the
+/// fusion can now let B or C sustain Deep on an epoch where zeroing a `Params` coefficient silences A
+/// alone (2-of-3 agreement no longer strictly requires A), measuring the FUSED `stage_v2` output here
+/// would make some previously-"seen" rows look "blind" for a reason that has nothing to do with the
+/// coefficient itself -- exactly the kind of silent-drift this table exists to catch, not produce.
 #[test]
 fn the_frozen_golden_defends_twenty_of_the_twenty_six_v2_coefficients() {
     let input = golden_input();
-    let base = stage_v2(&input);
+    let base = legacy_v8_only_segments(&input, &Params::SHIPPED);
     let p = Params::SHIPPED;
     let seen: Vec<(&str, Params)> = vec![
         ("deep_hrv", Params { deep_hrv: 0.0, ..p }),
@@ -290,20 +410,20 @@ fn the_frozen_golden_defends_twenty_of_the_twenty_six_v2_coefficients() {
     ];
     assert_eq!(
         base,
-        stage_v2_with(&input, &p),
+        legacy_v8_only_segments(&input, &p),
         "the baseline row must be the shipped recipe itself"
     );
     for (name, q) in &seen {
         assert_ne!(
             base,
-            stage_v2_with(&input, q),
+            legacy_v8_only_segments(&input, q),
             "{name} must change the golden table"
         );
     }
     for (name, q) in &blind {
         assert_eq!(
             base,
-            stage_v2_with(&input, q),
+            legacy_v8_only_segments(&input, q),
             "{name} now moves the golden — move it to the seen list"
         );
     }

@@ -195,6 +195,25 @@ fn main() {
     fs::write(&out_path, out).unwrap();
     println!("wrote {out_path}");
 
+    // Instrumentation only (added for parity verification): persist the two segment lists that were
+    // already being computed above (`segments`, `refined`) but previously only summarized via println!.
+    // No staging/refine logic is touched -- this only serializes the existing Vec<StageSegment> values.
+    let mut seg_out = String::from("start_utc,end_utc,stage\n");
+    for s in &segments {
+        seg_out.push_str(&format!("{},{},{}\n", s.start, s.end, s.stage.as_str()));
+    }
+    let seg_path = format!("{out_dir}/stage_v2_unrefined.csv");
+    fs::write(&seg_path, seg_out).unwrap();
+    println!("wrote {seg_path}");
+
+    let mut refined_out = String::from("start_utc,end_utc,stage\n");
+    for s in &refined {
+        refined_out.push_str(&format!("{},{},{}\n", s.start, s.end, s.stage.as_str()));
+    }
+    let refined_path = format!("{out_dir}/stage_v2_refined.csv");
+    fs::write(&refined_path, refined_out).unwrap();
+    println!("wrote {refined_path}");
+
     let _ = HashMap::<(), ()>::new(); // silence unused-import lints on some toolchains
     let _ = segments_v2; // exported for a caller that wants to decode its own path; unused in this replay
 }
