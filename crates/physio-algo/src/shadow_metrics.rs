@@ -267,7 +267,7 @@ pub fn nightly_physiology_for_generation(
         algorithm_version: ALGORITHM_VERSION_V4,
         rhr: dynamic_rhr(sleep_start, sleep_end, &quality_hr, stages),
         rhr_v4: dynamic_rhr_v4(sleep_start, sleep_end, hr, accel, wrist_off, stages),
-        hrv: final_sws_lowest_hr_episode_median_hrv(
+        hrv: final_sws_low_hr_band_episode_median_hrv(
             &episodes,
             &reports,
             &quality_hr,
@@ -1028,35 +1028,50 @@ where
     hrv_refusal(episode, window, rr, reason)
 }
 
-/// Strategy E: among the qualifying (>= 600s, `reliable_episode`) Deep episodes this night, choose
-/// the one with the lowest robust HR (median bpm of quality-gated `hr` samples across the episode's
-/// span - the same convention already used for window-level `hr_median` provenance in
+/// F2 - soft low-HR band episode selection (frozen research definition and name:
+/// `HRV_SOFT_LOW_HR_CHALLENGER_F_2026-09-25.md`, Step 2, "F2 - LOW-HR BAND POOL"). Among the
+/// qualifying (>= 600s, `reliable_episode`) Deep episodes this night, find the minimum robust HR
+/// (`episode_robust_hr` - median bpm of quality-gated `hr` samples across an episode's span, the
+/// same convention already used for window-level `hr_median` provenance in
 /// `populate_window_provenance`/`lowest_stable_hr_window`; no new HR gate is invented here), then
-/// take the MEDIAN of `HrvReadiness::windowed_buckets`' gap-aware RMSSD over every valid ( >= 2 clean
-/// beats) 5-minute window inside that chosen episode (the same already-shipped windowing primitive
-/// used elsewhere, e.g. `windowed_avg_hrv_deep`). Ties on robust HR are broken toward the
-/// later-starting qualifying episode, matching this module's existing tie-break convention in
-/// `lowest_stable_hr_window` (`Reverse(start)`).
+/// INCLUDE every qualifying episode whose robust HR is within `LOW_HR_BAND_BPM` (1 bpm - the exact,
+/// frozen, not-swept research value; do not change without a new validation cycle) of that minimum.
+/// Pool every valid ( >= 2 clean beats) `HrvReadiness::windowed_buckets` window from every included
+/// episode (the same already-shipped windowing primitive used elsewhere, e.g.
+/// `windowed_avg_hrv_deep`) and take the MEDIAN RMSSD across the pooled set.
 ///
-/// This is now the authoritative nightly HRV selector, reached via `nightly_physiology_for_generation`
-/// (see the `hrv:` field below). Frozen research validation: `hrv-selector-validation-experiment-
-/// 2026-09-25.md` (n=5 external, MAE 2.74ms/bias -0.66ms) and `HRV_E_FULL_SEPTEMBER_AND_CURRENT_RR_
-/// VALIDATION_2026-09-25.md`.
+/// This replaces the prior single-episode "Strategy E" selector
+/// (`final_sws_low_hr_band_episode_median_hrv`, frozen research validation: `hrv-selector-validation-
+/// experiment-2026-09-25.md`, n=5 external, MAE 2.74ms/bias -0.66ms). That prior selector always
+/// picked exactly one episode via a `Reverse(start)` tie-break, which
+/// `HRV_STRATEGY_E_PROSPECTIVE_5_NIGHT_FORENSICS_2026-09-25.md` found produces a 13-16ms output
+/// discontinuity on exact HR ties or 1-2bpm near-ties, on every one of 5 prospective nights tested.
+/// `HRV_SOFT_LOW_HR_CHALLENGER_F_2026-09-25.md` froze four band/weighting alternatives before
+/// looking at WHOOP error and found this one (F2) has the best external MAE/RMSE of the four on
+/// both the prospective cohort and the combined exact-replay cohort, fully removes the
+/// discontinuity on every case observed, and is the smallest possible diff from the prior selector
+/// (identical behavior on any night without a near-tie) - see that report's "Decision" section for
+/// the full comparison and the explicit, quantified small-bias tradeoff it accepts.
 ///
-/// Fallback: when no Deep episode qualifies, or the chosen episode has no valid 5-minute window (no
-/// bucket with >= 2 clean beats and a computable RMSSD), this returns the existing, unmodified
+/// Fallback: identical in policy to the prior selector - when no Deep episode qualifies, or NONE of
+/// the included band episodes has a valid 5-minute window anywhere (no bucket with >= 2 clean beats
+/// and a computable RMSSD in the whole band), this returns the existing, unmodified
 /// `final_sws_last_five_hrv_with_streams` result - the prior production primary/600s-then-
-/// fallback/360s selector chain, unchanged and still fully intact below. That selector already
-/// exists specifically to produce a safe result (including its own `HrvUnavailableReason`-tagged
-/// "no value" case) for exactly these two situations, so it is reused as-is rather than inventing a
-/// second, new fallback policy.
-fn final_sws_lowest_hr_episode_median_hrv(
+/// fallback/360s selector chain, unchanged and still fully intact below. An included episode that
+/// individually has zero valid windows does NOT trigger this fallback on its own, as long as at
+/// least one OTHER included episode contributes a valid window to the pooled set.
+fn final_sws_low_hr_band_episode_median_hrv(
     episodes: &[DeepEpisodeQuality],
     reports: &[QualityRrReport],
     hr: &[QualityHrSample],
     accel: &[AccelSample],
     wrist_off: &[(i64, i64)],
 ) -> FinalSwsHrvResult {
+    /// Frozen research value (`HRV_SOFT_LOW_HR_CHALLENGER_F_2026-09-25.md`, Step 2, F2). Not swept,
+    /// not fit - chosen because it is the same integer-bpm resolution `episode_robust_hr` already
+    /// computes at, so a 1bpm gap is within that measure's own effective noise floor.
+    const LOW_HR_BAND_BPM: f64 = 1.0;
+
     let mut ranked: Vec<(f64, &DeepEpisodeQuality)> = episodes
         .iter()
         .filter(|e| reliable_episode(e, PRIMARY_MIN_DEEP_SECONDS))
@@ -1064,19 +1079,29 @@ fn final_sws_lowest_hr_episode_median_hrv(
         .collect();
     ranked.sort_by(|(hr_a, ea), (hr_b, eb)| hr_a.total_cmp(hr_b).then_with(|| eb.start.cmp(&ea.start)));
 
-    let Some(&(_, chosen)) = ranked.first() else {
+    let Some(&(min_hr, anchor)) = ranked.first() else {
         return final_sws_last_five_hrv_with_streams(episodes, reports, hr, accel, wrist_off);
     };
+
+    // The anchor (single lowest-robust-HR episode) is always included - it defines the band and is
+    // always within 0 <= LOW_HR_BAND_BPM of itself - plus every other qualifying episode within the
+    // frozen band of the minimum. `Vec` (not just the anchor) so a tie or near-tie pools more than
+    // one episode's windows, per the frozen F2 definition.
+    let included: Vec<&DeepEpisodeQuality> = ranked
+        .iter()
+        .filter(|(robust_hr, _)| *robust_hr <= min_hr + LOW_HR_BAND_BPM)
+        .map(|(_, e)| *e)
+        .collect();
 
     let beats: Vec<(u32, u16)> = reports
         .iter()
         .flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v)))
         .collect();
-    let mut valid_rmssd: Vec<f64> =
-        HrvReadiness::windowed_buckets(chosen.start, chosen.end, &beats)
-            .into_iter()
-            .filter_map(|b| b.rmssd)
-            .collect();
+    let mut valid_rmssd: Vec<f64> = included
+        .iter()
+        .flat_map(|e| HrvReadiness::windowed_buckets(e.start, e.end, &beats))
+        .filter_map(|b| b.rmssd)
+        .collect();
     if valid_rmssd.is_empty() {
         return final_sws_last_five_hrv_with_streams(episodes, reports, hr, accel, wrist_off);
     }
@@ -1084,29 +1109,43 @@ fn final_sws_lowest_hr_episode_median_hrv(
     let rmssd_ms = median_f64(&valid_rmssd);
 
     let selected_window_quality = episode_quality(
-        i64::from(chosen.start),
-        i64::from(chosen.end),
+        i64::from(anchor.start),
+        i64::from(anchor.end),
         hr,
         accel,
         reports,
         wrist_off,
     );
-    let rr = rr_window_quality(chosen.start, chosen.end, reports);
+    // RR-coverage provenance aggregated across every included band episode, not only the anchor -
+    // the pooled RMSSD now genuinely draws on all of them when the band includes more than one.
+    let mut usable_report_seconds = 0u32;
+    let mut input_rr_intervals = 0u32;
+    let mut clean_rr_intervals = 0u32;
+    let mut contiguous_pairs = 0u32;
+    let mut sudden_change_pairs_rejected = 0u32;
+    for e in &included {
+        let rr = rr_window_quality(e.start, e.end, reports);
+        usable_report_seconds += rr.report_seconds;
+        input_rr_intervals += rr.input_intervals;
+        clean_rr_intervals += rr.clean_intervals;
+        contiguous_pairs += rr.contiguous_pairs;
+        sudden_change_pairs_rejected += rr.sudden_change_pairs_rejected;
+    }
     let attempt = HrvSelectionAttempt {
         rmssd_ms: Some(rmssd_ms),
-        selected_episode: Some((chosen.start, chosen.end)),
-        selected_episode_quality: Some(*chosen),
+        selected_episode: Some((anchor.start, anchor.end)),
+        selected_episode_quality: Some(*anchor),
         selected_window_quality: Some(selected_window_quality),
-        selected_window: Some((chosen.start, chosen.end)),
-        hr_median: episode_robust_hr(chosen, hr),
+        selected_window: Some((anchor.start, anchor.end)),
+        hr_median: episode_robust_hr(anchor, hr),
         hr_mean: None,
         hr_sd: None,
         hr_mad: None,
-        usable_report_seconds: rr.report_seconds,
-        input_rr_intervals: rr.input_intervals,
-        clean_rr_intervals: rr.clean_intervals,
-        contiguous_pairs: rr.contiguous_pairs,
-        sudden_change_pairs_rejected: rr.sudden_change_pairs_rejected,
+        usable_report_seconds,
+        input_rr_intervals,
+        clean_rr_intervals,
+        contiguous_pairs,
+        sudden_change_pairs_rejected,
         rejection_reason: None,
     };
     FinalSwsHrvResult {
@@ -2301,7 +2340,8 @@ mod tests {
     }
 
     // ==========================================================================================
-    // Strategy E: `final_sws_lowest_hr_episode_median_hrv`
+    // F2 (soft low-HR band episode selection, superseding "Strategy E"):
+    // `final_sws_low_hr_band_episode_median_hrv`
     // ==========================================================================================
 
     /// One second of quality-valid HR per tick across `[start, end)`, all at `bpm`.
@@ -2325,7 +2365,7 @@ mod tests {
         hr.extend(hr_flat(1_000, 1_900, 45)); // lower HR episode -> should be chosen
         let mut rr = rr_flat(0, 900, 10);
         rr.extend(rr_flat(1_000, 1_900, 10));
-        let result = final_sws_lowest_hr_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
         assert_eq!(result.selected_episode, Some((1_000, 1_900)));
         assert!(result.rmssd_ms.is_some());
     }
@@ -2339,7 +2379,7 @@ mod tests {
         hr.extend(hr_flat(1_000, 1_300, 40)); // much lower HR, but disqualified by duration
         let mut rr = rr_flat(0, 900, 10);
         rr.extend(rr_flat(1_000, 1_300, 10));
-        let result = final_sws_lowest_hr_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
         assert_eq!(result.selected_episode, Some((0, 900)));
     }
 
@@ -2353,7 +2393,7 @@ mod tests {
         let mut rr = rr_flat(0, 300, 4);
         rr.extend(rr_flat(300, 600, 40));
         rr.extend(rr_flat(600, 900, 12));
-        let result = final_sws_lowest_hr_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
         let expected_windows = HrvReadiness::windowed_buckets(
             0, 900,
             &rr.iter().flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v))).collect::<Vec<_>>(),
@@ -2379,7 +2419,7 @@ mod tests {
         rr.extend(rr_flat(600, 900, 400));
         rr.extend(rr_flat(900, 1_200, 11));
         rr.extend(rr_flat(1_200, 1_500, 9));
-        let result = final_sws_lowest_hr_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
         // The extreme window's own RMSSD would be far larger than the other four; the median must
         // stay close to the typical (non-extreme) windows, not be pulled toward the outlier.
         assert!(result.rmssd_ms.unwrap() < 60.0, "median {:?} was pulled toward the outlier window", result.rmssd_ms);
@@ -2396,7 +2436,7 @@ mod tests {
         let mut rr = vec![rr_report(150, &[800])];
         rr.extend(rr_flat(300, 600, 15));
         rr.extend(rr_flat(600, 900, 15));
-        let result = final_sws_lowest_hr_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
         let beats: Vec<(u32, u16)> = rr.iter().flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v))).collect();
         let buckets = HrvReadiness::windowed_buckets(0, 900, &beats);
         assert_eq!(buckets.iter().filter(|b| b.start == 0).next().unwrap().rmssd, None);
@@ -2406,23 +2446,146 @@ mod tests {
         assert!((result.rmssd_ms.unwrap() - median_f64(&vals)).abs() < 1e-9);
     }
 
-    /// Two qualifying episodes with identical robust HR: the tie is broken deterministically toward
-    /// the later-starting episode (documented behavior, matching this module's existing
-    /// `lowest_stable_hr_window` tie-break convention), not by input order or nondeterministically.
+    /// F2's core behavioral change from prior "Strategy E": two qualifying episodes with IDENTICAL
+    /// robust HR are no longer resolved by picking one and discarding the other's evidence - BOTH
+    /// tied episodes' valid windows are pooled, and the nightly RMSSD is the median of that pooled
+    /// set. This directly covers the frozen F2 spec's required case 2 ("exact minimum-HR tie ->
+    /// windows from all tied qualifying episodes pooled").
     #[test]
-    fn strategy_e_breaks_a_robust_hr_tie_deterministically_toward_the_later_episode() {
+    fn f2_pools_windows_from_all_episodes_tied_at_the_minimum_robust_hr() {
         let episodes = [quality(0, 900), quality(1_000, 1_900)];
         let mut hr = hr_flat(0, 900, 50);
-        hr.extend(hr_flat(1_000, 1_900, 50)); // identical robust HR on both episodes
+        hr.extend(hr_flat(1_000, 1_900, 50)); // identical robust HR on both episodes -> exact tie
+        // Distinct RR alternation amplitude per episode so each contributes different-valued
+        // windows; if only one episode's windows were used the median would equal that episode's
+        // own median exactly, which this test explicitly rules out below.
         let mut rr = rr_flat(0, 900, 10);
-        rr.extend(rr_flat(1_000, 1_900, 10));
-        let result = final_sws_lowest_hr_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
-        assert_eq!(result.selected_episode, Some((1_000, 1_900)));
+        rr.extend(rr_flat(1_000, 1_900, 40));
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
+
+        let beats: Vec<(u32, u16)> =
+            rr.iter().flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v))).collect();
+        let mut first_only: Vec<f64> =
+            HrvReadiness::windowed_buckets(0, 900, &beats).into_iter().filter_map(|b| b.rmssd).collect();
+        let mut second_only: Vec<f64> =
+            HrvReadiness::windowed_buckets(1_000, 1_900, &beats).into_iter().filter_map(|b| b.rmssd).collect();
+        let mut pooled: Vec<f64> = first_only.iter().chain(second_only.iter()).copied().collect();
+        pooled.sort_by(f64::total_cmp);
+        first_only.sort_by(f64::total_cmp);
+        second_only.sort_by(f64::total_cmp);
+        let expected_pooled_median = median_f64(&pooled);
+
+        assert!((result.rmssd_ms.unwrap() - expected_pooled_median).abs() < 1e-9);
+        // Guard against a regression back to single-episode selection: the pooled median must not
+        // equal either episode's own median in isolation (the two episodes' RR amplitudes were
+        // chosen specifically so these three values differ).
+        assert!((result.rmssd_ms.unwrap() - median_f64(&first_only)).abs() > 1e-6);
+        assert!((result.rmssd_ms.unwrap() - median_f64(&second_only)).abs() > 1e-6);
 
         // Order-independence: reversing input episode order must not change the outcome.
         let episodes_rev = [quality(1_000, 1_900), quality(0, 900)];
-        let result_rev = final_sws_lowest_hr_episode_median_hrv(&episodes_rev, &rr, &hr, &[], &[]);
-        assert_eq!(result_rev.selected_episode, result.selected_episode);
+        let result_rev = final_sws_low_hr_band_episode_median_hrv(&episodes_rev, &rr, &hr, &[], &[]);
+        assert_eq!(result_rev.rmssd_ms, result.rmssd_ms);
+    }
+
+    /// The `anchor`/`selected_episode` identity (the single lowest-robust-HR qualifying episode,
+    /// used only for provenance fields such as `selected_episode`/`hr_median`) still resolves a tie
+    /// deterministically toward the later-starting episode, matching this module's existing
+    /// `lowest_stable_hr_window` tie-break convention - even though, per the test above, BOTH tied
+    /// episodes' windows now feed the pooled RMSSD regardless of which one is "the anchor".
+    #[test]
+    fn f2_anchor_provenance_still_breaks_a_tie_toward_the_later_episode() {
+        let episodes = [quality(0, 900), quality(1_000, 1_900)];
+        let mut hr = hr_flat(0, 900, 50);
+        hr.extend(hr_flat(1_000, 1_900, 50));
+        let mut rr = rr_flat(0, 900, 10);
+        rr.extend(rr_flat(1_000, 1_900, 10));
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
+        assert_eq!(result.selected_episode, Some((1_000, 1_900)));
+    }
+
+    /// F2's own band boundary, isolated from the tie case above: a second qualifying episode
+    /// exactly 1 bpm above the minimum is INCLUDED (frozen spec: `robust_hr <= min_hr + 1`); one
+    /// exactly 2 bpm above is EXCLUDED. Same fixture shape for both so only the HR gap differs.
+    #[test]
+    fn f2_includes_exactly_plus_one_bpm_and_excludes_plus_two_bpm() {
+        let episodes = [quality(0, 900), quality(1_000, 1_900)];
+
+        // +1 bpm: included -> pooled median differs from the anchor-only median.
+        let mut hr_plus1 = hr_flat(0, 900, 50);
+        hr_plus1.extend(hr_flat(1_000, 1_900, 51));
+        let mut rr = rr_flat(0, 900, 10);
+        rr.extend(rr_flat(1_000, 1_900, 40));
+        let result_plus1 = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr_plus1, &[], &[]);
+        let beats: Vec<(u32, u16)> =
+            rr.iter().flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v))).collect();
+        let anchor_only: Vec<f64> =
+            HrvReadiness::windowed_buckets(0, 900, &beats).into_iter().filter_map(|b| b.rmssd).collect();
+        assert!((result_plus1.rmssd_ms.unwrap() - median_f64(&{
+            let mut v = anchor_only.clone();
+            v.sort_by(f64::total_cmp);
+            v
+        })).abs() > 1e-6, "a +1bpm episode must be pooled in, not excluded");
+
+        // +2 bpm: excluded -> pooled median equals the anchor-only median exactly (single-episode
+        // Strategy-E-identical behavior).
+        let mut hr_plus2 = hr_flat(0, 900, 50);
+        hr_plus2.extend(hr_flat(1_000, 1_900, 52));
+        let result_plus2 = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr_plus2, &[], &[]);
+        let mut anchor_only_sorted = anchor_only.clone();
+        anchor_only_sorted.sort_by(f64::total_cmp);
+        assert!(
+            (result_plus2.rmssd_ms.unwrap() - median_f64(&anchor_only_sorted)).abs() < 1e-9,
+            "a +2bpm episode must NOT be pooled in"
+        );
+        assert_eq!(result_plus2.selected_episode, Some((0, 900)));
+    }
+
+    /// More than two episodes inside the band: every one of them contributes its valid windows to
+    /// the pooled set, not just the closest pair.
+    #[test]
+    fn f2_pools_every_episode_inside_the_band_not_only_the_closest_pair() {
+        let episodes = [quality(0, 900), quality(1_000, 1_900), quality(2_000, 2_900)];
+        let mut hr = hr_flat(0, 900, 50); // min
+        hr.extend(hr_flat(1_000, 1_900, 50)); // tie with min -> included
+        hr.extend(hr_flat(2_000, 2_900, 51)); // +1bpm -> included
+        let mut rr = rr_flat(0, 900, 8);
+        rr.extend(rr_flat(1_000, 1_900, 20));
+        rr.extend(rr_flat(2_000, 2_900, 35));
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
+
+        let beats: Vec<(u32, u16)> =
+            rr.iter().flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v))).collect();
+        let mut pooled: Vec<f64> = [(0u32, 900u32), (1_000, 1_900), (2_000, 2_900)]
+            .iter()
+            .flat_map(|&(s, e)| HrvReadiness::windowed_buckets(s, e, &beats))
+            .filter_map(|b| b.rmssd)
+            .collect();
+        pooled.sort_by(f64::total_cmp);
+        assert!(
+            pooled.len() >= 9,
+            "fixture must actually produce windows from all three episodes (>=3 each)"
+        );
+        assert!((result.rmssd_ms.unwrap() - median_f64(&pooled)).abs() < 1e-9);
+    }
+
+    /// An included band episode with ZERO valid windows of its own (e.g. no usable RR at all) must
+    /// not prevent OTHER included episodes' valid windows from producing a result - only an entirely
+    /// empty pooled set (across the whole band) triggers the production fallback.
+    #[test]
+    fn f2_an_included_episode_with_no_valid_windows_does_not_block_other_included_episodes() {
+        let episodes = [quality(0, 900), quality(1_000, 1_900)];
+        let hr = { let mut h = hr_flat(0, 900, 50); h.extend(hr_flat(1_000, 1_900, 50)); h }; // exact tie -> both included
+        // Second (tied) episode has NO RR reports at all -> zero valid windows on its own.
+        let rr = rr_flat(0, 900, 10);
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &rr, &hr, &[], &[]);
+        let beats: Vec<(u32, u16)> =
+            rr.iter().flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v))).collect();
+        let mut first_only: Vec<f64> =
+            HrvReadiness::windowed_buckets(0, 900, &beats).into_iter().filter_map(|b| b.rmssd).collect();
+        first_only.sort_by(f64::total_cmp);
+        assert!(result.rmssd_ms.is_some(), "the first episode's valid windows must still produce a result");
+        assert!((result.rmssd_ms.unwrap() - median_f64(&first_only)).abs() < 1e-9);
     }
 
     /// No qualifying (>=600s reliable) Deep episode this night: falls back to the existing,
@@ -2430,7 +2593,7 @@ mod tests {
     /// correctly refuses with `NoDeepEpisode` here (empty input) - not a new fallback behavior.
     #[test]
     fn strategy_e_falls_back_to_production_selector_when_no_episode_qualifies() {
-        let result = final_sws_lowest_hr_episode_median_hrv(&[], &[], &[], &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&[], &[], &[], &[], &[]);
         assert_eq!(result.rmssd_ms, None);
         assert_eq!(result.rejection_reason, Some(HrvUnavailableReason::NoDeepEpisode));
 
@@ -2439,19 +2602,33 @@ mod tests {
         let short = [quality(0, 300)];
         let rr = rr_flat(0, 300, 10);
         let hr = hr_flat(0, 300, 50);
-        let result2 = final_sws_lowest_hr_episode_median_hrv(&short, &rr, &hr, &[], &[]);
+        let result2 = final_sws_low_hr_band_episode_median_hrv(&short, &rr, &hr, &[], &[]);
         let production = final_sws_last_five_hrv_with_streams(&short, &rr, &hr, &[], &[]);
         assert_eq!(result2, production);
     }
 
-    /// Strategy E's dedicated fallback path (no valid window in the sole qualifying episode) also
-    /// reproduces the unmodified production result exactly, not a divergent approximation of it.
+    /// The dedicated fallback path (no valid window in the sole qualifying episode) also reproduces
+    /// the unmodified production result exactly, not a divergent approximation of it.
     #[test]
     fn strategy_e_falls_back_to_production_selector_when_chosen_episode_has_no_valid_window() {
         let episodes = [quality(0, 600)];
         let hr = hr_flat(0, 600, 50);
         // No RR reports at all in the episode: no window can ever produce an RMSSD.
-        let result = final_sws_lowest_hr_episode_median_hrv(&episodes, &[], &hr, &[], &[]);
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &[], &hr, &[], &[]);
+        let production = final_sws_last_five_hrv_with_streams(&episodes, &[], &hr, &[], &[]);
+        assert_eq!(result, production);
+        assert_eq!(result.rmssd_ms, None);
+    }
+
+    /// F2-specific fallback case: the band includes MULTIPLE episodes, and EVERY one of them has
+    /// zero valid windows (empty pooled set across the whole band, not just one episode) - this must
+    /// still fall back to the unmodified production result, exactly as the single-episode case does.
+    #[test]
+    fn f2_falls_back_to_production_selector_when_the_whole_band_has_no_valid_window() {
+        let episodes = [quality(0, 600), quality(700, 1_300)];
+        let hr = { let mut h = hr_flat(0, 600, 50); h.extend(hr_flat(700, 1_300, 50)); h }; // tie -> both included
+        // No RR reports anywhere: neither included episode can ever produce a window RMSSD.
+        let result = final_sws_low_hr_band_episode_median_hrv(&episodes, &[], &hr, &[], &[]);
         let production = final_sws_last_five_hrv_with_streams(&episodes, &[], &hr, &[], &[]);
         assert_eq!(result, production);
         assert_eq!(result.rmssd_ms, None);
@@ -2468,7 +2645,7 @@ mod tests {
         // Compute Strategy E (unrelated call) then recompute RHR from the SAME inputs: identical.
         let episode = quality(0, 900);
         let rr = rr_flat(0, 900, 10);
-        let _ = final_sws_lowest_hr_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
+        let _ = final_sws_low_hr_band_episode_median_hrv(&[episode], &rr, &hr, &[], &[]);
         let rhr_after = dynamic_rhr(0, 900, &hr, &stages);
         assert_eq!(rhr_before, rhr_after);
     }
