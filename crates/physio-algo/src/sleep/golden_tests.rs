@@ -11,12 +11,15 @@
 //! (A alone, captured before the H-ABC fusion replaces `em_deep`) decoded through the same public
 //! `decode_v2`/`segments_v2` -- so legacy V8's own behavior stays pinned and provably untouched, without
 //! duplicating the staging recipe. [`frozen_golden_hypnogram_v2_habc`] is the new, additional golden that
-//! pins the actual current `stage_v2` output (48 segments -- the mid-night phase's slow, cyclical HR ramp
-//! now repeatedly crosses the B/C reference thresholds, so `>=2-of-3` toggles Deep/Light every 90-150s
-//! there where V8 alone stayed flat; the early and late boundaries also shift by a few epochs since 2-of-3
-//! agreement can sustain Deep slightly past where A alone would have released it). See
-//! `research/final_deep_production_candidate_2026-09-23/README.md` (noop-backend repo) for the full
-//! decision record.
+//! pins the actual current `stage_v2` output. See `research/final_deep_production_candidate_2026-09-23/
+//! README.md` (noop-backend repo) for the full decision record.
+//!
+//! B+1 (Challenger B + boundary/edge confidence backstop, added 2026-09-25, see `v2.rs`'s own B+1
+//! constants block and `docs/habc-residual-false-deep-forensics-2026-09-25.md` in the `noop-backend`
+//! repo) legitimately, intentionally changed [`frozen_golden_hypnogram_v2_habc`]'s table again: the
+//! plain `>=2-of-3` table's 48-segment mid-night Deep/Light toggling (both channels agreeing but each
+//! individually confident, or sitting right at the edge of a real block) is exactly what B+1 is designed
+//! to catch, so the table collapses to 7 clean segments -- re-pinned here, not silenced.
 
 use super::input::{AccelSample, HrSample, RrRun, SleepInput, StepSample};
 use super::params::Params;
@@ -151,51 +154,10 @@ fn frozen_golden_hypnogram_v2_habc() {
     let golden = [
         (0i64, 5310i64, SleepStage::Deep),
         (5310, 5550, SleepStage::Rem),
-        (5550, 5970, SleepStage::Light),
-        (5970, 11040, SleepStage::Deep),
-        (11040, 11130, SleepStage::Light),
-        (11130, 11280, SleepStage::Deep),
-        (11280, 11370, SleepStage::Light),
-        (11370, 11520, SleepStage::Deep),
-        (11520, 11610, SleepStage::Light),
-        (11610, 11760, SleepStage::Deep),
-        (11760, 11850, SleepStage::Light),
-        (11850, 12000, SleepStage::Deep),
-        (12000, 12090, SleepStage::Light),
-        (12090, 12240, SleepStage::Deep),
-        (12240, 12330, SleepStage::Light),
-        (12330, 12480, SleepStage::Deep),
-        (12480, 12570, SleepStage::Light),
-        (12570, 12720, SleepStage::Deep),
-        (12720, 12810, SleepStage::Light),
-        (12810, 12960, SleepStage::Deep),
-        (12960, 13050, SleepStage::Light),
-        (13050, 13200, SleepStage::Deep),
-        (13200, 13290, SleepStage::Light),
-        (13290, 13440, SleepStage::Deep),
-        (13440, 13530, SleepStage::Light),
-        (13530, 13680, SleepStage::Deep),
-        (13680, 13770, SleepStage::Light),
-        (13770, 13920, SleepStage::Deep),
-        (13920, 14010, SleepStage::Light),
-        (14010, 14160, SleepStage::Deep),
-        (14160, 14250, SleepStage::Light),
-        (14250, 14400, SleepStage::Deep),
-        (14400, 14490, SleepStage::Light),
-        (14490, 14640, SleepStage::Deep),
-        (14640, 14730, SleepStage::Light),
-        (14730, 14880, SleepStage::Deep),
-        (14880, 14970, SleepStage::Light),
-        (14970, 15120, SleepStage::Deep),
-        (15120, 15210, SleepStage::Light),
-        (15210, 15360, SleepStage::Deep),
-        (15360, 15450, SleepStage::Light),
-        (15450, 15600, SleepStage::Deep),
-        (15600, 15690, SleepStage::Light),
-        (15690, 15840, SleepStage::Deep),
-        (15840, 15930, SleepStage::Light),
-        (15930, 16080, SleepStage::Deep),
-        (16080, 16290, SleepStage::Rem),
+        (5550, 6000, SleepStage::Light),
+        (6000, 6870, SleepStage::Deep),
+        (6870, 10740, SleepStage::Light),
+        (10740, 16290, SleepStage::Rem),
         (16290, 21600, SleepStage::Wake),
     ];
     assert_eq!(golden.len(), segs.len(), "segment count");

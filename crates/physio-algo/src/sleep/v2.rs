@@ -100,6 +100,22 @@ const HABC_MOTION_VETO: f64 = -3.0;
 const HABC_NEARZERO_MOVE_FRAC: f64 = 0.01;
 const HABC_MOVE_VETO_THRESH: f64 = 0.15;
 
+// === Challenger B + boundary/edge confidence backstop ("B+1") -- FROZEN research constants ============
+// Recovered verbatim from `noop-backend` repo,
+// `docs/habc-residual-false-deep-forensics-2026-09-25.md` (Part 8's frozen pseudocode + Part 9's holdout/
+// forward validation) and its sandbox replay `crates/physio-algo/examples/print_bplus.rs`. Applies only
+// to "added" epochs (V8-only-decoded label != Deep AND preliminary H-ABC-fused-decoded label == Deep);
+// every other epoch is untouched. Do not tune any of these without a new validation cycle.
+/// Challenger B: an added epoch is reverted to A (`em_deep_v8`) when it sits more than this many minutes
+/// (by nearest V8-only-decoded Deep epoch) from any V8-trusted Deep AND its `second_strongest` is weak.
+const HABC_BPLUS_DIST_MIN_MINUTES: f64 = 30.0;
+/// Challenger B's own confidence half of the AND above.
+const HABC_BPLUS_WEAK_SECOND_STRONGEST: f64 = 0.5;
+/// The B+1 boundary backstop: for an added epoch Challenger B did NOT already catch, revert it anyway
+/// when it sits at the entry/exit edge of its own contiguous preliminary-fused-Deep run AND
+/// `second_strongest` is below this (stricter than Challenger B's own 0.5) threshold.
+const HABC_BPLUS_EDGE_SECOND_STRONGEST: f64 = 0.0;
+
 /// One 30 s epoch's recipe features. `None` means "no measurement" (scored neutral).
 struct Epoch {
     start: i64,
@@ -245,10 +261,15 @@ pub struct EpochDiagnostic {
     pub habc_motion_mod: f64,
     /// The frozen ">=2-of-3" fusion's decision: how many of {A, B, C} individually cleared `em_light`.
     pub habc_agree_count: usize,
+    /// True when the frozen "B+1" gate (Challenger B's distance/confidence test, or its boundary-edge
+    /// backstop) reverted this epoch's Deep emission back to `em_deep_v8` after the preliminary H-ABC
+    /// fusion -- forensic only, never true for an epoch that was not "added" (V8-only decode already
+    /// Deep, or the preliminary H-ABC decode was not Deep here).
+    pub habc_bplus_reverted: bool,
     /// Final per-stage log-emissions handed to the decoder — identical to `emissions_prepared`'s row.
-    /// `em_deep` is now the FUSED H-ABC value (`em_deep_v8` when fewer than `HABC_MIN_AGREE` channels
-    /// agree, otherwise `max(qualifying channels) + habc_motion_mod`) -- see `em_deep_v8` above for A's
-    /// own unmodified value.
+    /// `em_deep` is the FUSED H-ABC value (`em_deep_v8` when fewer than `HABC_MIN_AGREE` channels agree,
+    /// otherwise `max(qualifying channels) + habc_motion_mod`), further reverted to `em_deep_v8` when the
+    /// frozen "B+1" gate above fired -- see `em_deep_v8` above for A's own always-unmodified value.
     pub em_deep: f64,
     pub em_rem: f64,
     pub em_light: f64,
@@ -391,12 +412,36 @@ fn diagnostics(feats: &[Epoch], p: &Params, anchor: Anchor) -> Vec<EpochDiagnost
             em_deep_rr: habc_c,
             habc_motion_mod: habc_mm,
             habc_agree_count,
+            habc_bplus_reverted: false,
             em_deep: em[DEEP],
             em_rem: em[REM],
             em_light: em[LIGHT],
             em_awake: em[AWAKE],
         });
     }
+
+    // === Challenger B + boundary/edge confidence backstop ("B+1") ====================================
+    // Applied once over the whole night, after every epoch's preliminary H-ABC-fused emission is known --
+    // see `bplus_gate`'s own doc comment for the two-pass structure. `out[i].em_deep` above is still the
+    // PRELIMINARY (pre-B+1) fused value at this point; this overwrites it with the final, gated one, so
+    // it matches exactly what `emissions_prepared`/`final_emissions` hands the decoder.
+    let starts: Vec<i64> = feats.iter().map(|f| f.start).collect();
+    let em_v8: Vec<[f64; 4]> = out
+        .iter()
+        .map(|d| [d.em_deep_v8, d.em_rem, d.em_light, d.em_awake])
+        .collect();
+    let em_fused: Vec<[f64; 4]> = out
+        .iter()
+        .map(|d| [d.em_deep, d.em_rem, d.em_light, d.em_awake])
+        .collect();
+    let habc_b: Vec<f64> = out.iter().map(|d| d.em_deep_v9).collect();
+    let habc_c: Vec<f64> = out.iter().map(|d| d.em_deep_rr).collect();
+    let (gated, reverted) = bplus_gate(&starts, &em_v8, &em_fused, &habc_b, &habc_c, &p.transition);
+    for ((d, g), r) in out.iter_mut().zip(gated.iter()).zip(reverted.iter()) {
+        d.em_deep = g[DEEP];
+        d.habc_bplus_reverted = *r;
+    }
+
     out
 }
 
@@ -941,15 +986,217 @@ fn late_deep_interaction(
 /// The log-emissions the decoder is handed, under whichever anchor `p` selects. An onset-anchored prior
 /// needs a staging to find the onset, so it stages once with the guard off first.
 fn final_emissions(feats: &[Epoch], p: &Params) -> Vec<[f64; 4]> {
-    if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
+    let anchor = if p.cycle_rem_onset_minutes > 0.0 || p.cycle_clock_from_onset {
         let probe = viterbi(&emissions(feats, p, Anchor::Probe), &p.transition);
-        return emissions(
-            feats,
+        Anchor::Onset(sustained_onset(&probe).unwrap_or(0))
+    } else {
+        Anchor::Window
+    };
+    // === Challenger B + boundary/edge confidence backstop ("B+1") ================================
+    // The anchor (above) is resolved exactly as before -- B+1 never touches onset detection. Only the
+    // REAL pass (under the resolved anchor) is gated; see `bplus_gate`'s own doc comment.
+    let em_fused = emissions(feats, p, anchor);
+    let (em_v8, habc_b, habc_c) = emissions_v8_and_habc(feats, p, anchor);
+    let starts: Vec<i64> = feats.iter().map(|f| f.start).collect();
+    let (gated, _reverted) = bplus_gate(&starts, &em_v8, &em_fused, &habc_b, &habc_c, &p.transition);
+    gated
+}
+
+/// Per-epoch V8-only emissions (A alone, before the H-ABC fusion) alongside the H-ABC channel B/C raw
+/// values -- duplicated term-for-term from `emissions()`'s own identical pre-fusion block (the same
+/// duplication discipline `diagnostics()` already uses, pinned by `bplus_v8_matches_emissions`), so the
+/// B+1 gate can see the pre-fusion state it needs without re-deriving it a third, possibly-drifting way.
+fn emissions_v8_and_habc(feats: &[Epoch], p: &Params, anchor: Anchor) -> (Vec<[f64; 4]>, Vec<f64>, Vec<f64>) {
+    let blp = p.base_log_prior();
+    let zhr = ZScore::build(&feats.iter().map(|f| f.hr).collect::<Vec<_>>());
+    let zhv = ZScore::build(&feats.iter().map(|f| f.hr_var).collect::<Vec<_>>());
+    let zmv = ZScore::build(&feats.iter().map(|f| f.move_frac).collect::<Vec<_>>());
+    let zrg = ZScore::build(&feats.iter().map(|f| f.resp_reg).collect::<Vec<_>>());
+
+    let mut fsorted: Vec<f64> = feats.iter().filter_map(|f| f.hr_flat11).collect();
+    fsorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let fpct = |value: Option<f64>| -> f64 {
+        match value {
+            Some(v) if !fsorted.is_empty() => {
+                let mut lo = 0usize;
+                let mut hi = fsorted.len();
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if fsorted[mid] <= v {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                lo as f64 / fsorted.len() as f64
+            }
+            _ => 0.5,
+        }
+    };
+
+    let mut em_v8 = Vec::with_capacity(feats.len());
+    let mut habc_b = Vec::with_capacity(feats.len());
+    let mut habc_c = Vec::with_capacity(feats.len());
+    for (i, f) in feats.iter().enumerate() {
+        let zhrv = zhr.apply(f.hr);
+        let zhvv = zhv.apply(f.hr_var);
+        let zmvv = zmv.apply(f.move_frac);
+        let gate = p.deep_gate_slope * (fpct(f.hr_flat11) - p.deep_gate_thresh).max(0.0);
+        let awake_cardiac0 =
+            p.awake_hrv * dz(zhvv, p.awake_deadzone) + p.awake_hr * dz(zhrv, p.awake_deadzone);
+        let awake_cardiac = if motion_quiescent(f, p) {
+            awake_cardiac0.min(0.0)
+        } else {
+            awake_cardiac0
+        };
+
+        let mut em = [0.0f64; 4];
+        em[DEEP] = p.deep_hrv * zhvv + p.deep_hr * zhrv + p.deep_motion * zmvv - gate + blp[DEEP];
+        em[REM] = p.rem_hrv * zhvv + p.rem_motion * zmvv + p.rem_hr * zhrv + blp[REM];
+        em[LIGHT] = blp[LIGHT];
+        em[AWAKE] = p.awake_motion * zmvv + awake_cardiac + blp[AWAKE];
+
+        let pr = cycle_prior(
+            cycle_clock(f.clock, feats, anchor, p),
+            rem_guard(i, f.clock, anchor, p),
             p,
-            Anchor::Onset(sustained_onset(&probe).unwrap_or(0)),
         );
+        for (s, pv) in pr.iter().enumerate() {
+            em[s] += pv;
+        }
+        if f.jerk_max > f.jerk_scale * p.jerk_gate_mult {
+            em[AWAKE] += p.motion_gate_boost;
+        }
+        if let Some(rg) = f.resp_reg {
+            let z = zrg.apply(Some(rg));
+            em[DEEP] += p.resp_weight * z;
+            em[REM] -= p.resp_weight * z;
+            em[DEEP] += late_deep_interaction(
+                f.clock,
+                zhrv,
+                zhvv,
+                f.move_frac.map(|_| zmvv),
+                Some(z),
+                p.deep_hr,
+            );
+        }
+        em_v8.push(em);
+        habc_b.push(em_deep_v9_of(f, blp[DEEP]));
+        habc_c.push(em_deep_rr_of(f, blp[DEEP]));
     }
-    emissions(feats, p, Anchor::Window)
+    (em_v8, habc_b, habc_c)
+}
+
+/// Distance in minutes from epoch `i` to the nearest `Deep`-labeled epoch in `labels`, via one forward
+/// and one backward sweep over the already time-sorted epoch starts -- O(n), no pairwise search.
+/// `f64::INFINITY` when `labels` contains no `Deep` epoch at all, matching the frozen research replay's
+/// own convention (`print_bplus.rs::dist_to_v8_deep_min`) exactly, including that no-Deep-anywhere case.
+fn dist_to_nearest_deep_min(starts: &[i64], labels: &[SleepStage]) -> Vec<f64> {
+    let n = starts.len();
+    let mut dist = vec![f64::INFINITY; n];
+    let mut last_deep: Option<i64> = None;
+    for i in 0..n {
+        if labels[i] == SleepStage::Deep {
+            last_deep = Some(starts[i]);
+        }
+        if let Some(t) = last_deep {
+            dist[i] = dist[i].min((starts[i] - t).abs() as f64 / 60.0);
+        }
+    }
+    let mut next_deep: Option<i64> = None;
+    for i in (0..n).rev() {
+        if labels[i] == SleepStage::Deep {
+            next_deep = Some(starts[i]);
+        }
+        if let Some(t) = next_deep {
+            dist[i] = dist[i].min((starts[i] - t).abs() as f64 / 60.0);
+        }
+    }
+    dist
+}
+
+/// Whether epoch `i` is the first or last epoch of its own contiguous run of `Deep` in `labels` --
+/// `false` for a non-`Deep` epoch. A single-epoch island is both first and last, so it is always an
+/// edge. O(n), one pass. Always computed from the PRELIMINARY (pre-B+1) fused decode, per the frozen
+/// spec -- never re-derived from the gated result (no recursion/iteration to convergence).
+fn fused_deep_run_edges(labels: &[SleepStage]) -> Vec<bool> {
+    let n = labels.len();
+    let mut edge = vec![false; n];
+    for i in 0..n {
+        if labels[i] != SleepStage::Deep {
+            continue;
+        }
+        let entry = i == 0 || labels[i - 1] != SleepStage::Deep;
+        let exit = i + 1 >= n || labels[i + 1] != SleepStage::Deep;
+        edge[i] = entry || exit;
+    }
+    edge
+}
+
+/// The second-highest of {A, B, C} among the channels that individually, strictly, clear `em_light` --
+/// the same eligibility test `h_abc_deep_value`/`habc_agreeing` use. `NEG_INFINITY` when zero channels
+/// qualify (sequence context, not this epoch's own emission, made the decoder choose Deep here), so the
+/// gate conditions below still evaluate consistently. Mirrors `print_bplus.rs::second_strongest` exactly,
+/// including this edge case -- not invented for this port.
+fn habc_second_strongest(em_deep_v8: f64, em_deep_v9: f64, em_deep_rr: f64, em_light: f64) -> f64 {
+    let mut qual: Vec<f64> = Vec::with_capacity(3);
+    if em_deep_v8 > em_light {
+        qual.push(em_deep_v8);
+    }
+    if em_deep_v9 > em_light {
+        qual.push(em_deep_v9);
+    }
+    if em_deep_rr > em_light {
+        qual.push(em_deep_rr);
+    }
+    qual.sort_by(|a, b| b.partial_cmp(a).unwrap());
+    match qual.len() {
+        0 => f64::NEG_INFINITY,
+        1 => qual[0],
+        _ => qual[1],
+    }
+}
+
+/// Apply the frozen B+1 gate to a full night's preliminary H-ABC-fused emissions. Two-pass by
+/// construction: PASS0 (`em_v8`, a V8-only decode) gives the distance-to-V8-Deep every epoch needs;
+/// PASS1 (`em_fused`, the preliminary H-ABC decode) gives the run-edge structure. Matches the frozen
+/// research replay (`print_bplus.rs`) exactly -- edges are read once from the PASS1 decode and never
+/// re-derived from the gated result. Returns the gated per-epoch emissions (what the caller's own final
+/// decode -- PASS2 -- should score) and, per epoch, whether B+1 reverted it (forensic only).
+fn bplus_gate(
+    starts: &[i64],
+    em_v8: &[[f64; 4]],
+    em_fused: &[[f64; 4]],
+    habc_b: &[f64],
+    habc_c: &[f64],
+    transition: &[[f64; 4]; 4],
+) -> (Vec<[f64; 4]>, Vec<bool>) {
+    let n = em_v8.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let labels_v8 = viterbi(em_v8, transition);
+    let labels_fused = viterbi(em_fused, transition);
+    let dist = dist_to_nearest_deep_min(starts, &labels_v8);
+    let is_edge = fused_deep_run_edges(&labels_fused);
+
+    let mut gated = em_fused.to_vec();
+    let mut reverted = vec![false; n];
+    for i in 0..n {
+        let added = labels_fused[i] == SleepStage::Deep && labels_v8[i] != SleepStage::Deep;
+        if !added {
+            continue;
+        }
+        let second = habc_second_strongest(em_v8[i][DEEP], habc_b[i], habc_c[i], em_v8[i][LIGHT]);
+        let gate_b =
+            dist[i] > HABC_BPLUS_DIST_MIN_MINUTES && second < HABC_BPLUS_WEAK_SECOND_STRONGEST;
+        let gate_edge = !gate_b && is_edge[i] && second < HABC_BPLUS_EDGE_SECOND_STRONGEST;
+        if gate_b || gate_edge {
+            gated[i][DEEP] = em_v8[i][DEEP];
+            reverted[i] = true;
+        }
+    }
+    (gated, reverted)
 }
 
 /// Run the full recipe over a night's epochs and return one stage label per epoch. All normalisation
@@ -1899,20 +2146,142 @@ mod tests {
     fn habc_diagnostic_fields_are_internally_consistent_with_the_fused_emission() {
         // The forensic export must be recomputable from its own A/B/C/E/light columns exactly, so a
         // caller (or a parity harness) never has to trust `em_deep` without being able to check it.
+        // `em_deep` is the FINAL (post-B+1) value: it equals `h_abc_deep_value(...)` (the preliminary
+        // fused value) UNLESS B+1 reverted this epoch, in which case it equals `em_deep_v8` instead --
+        // `habc_bplus_reverted` says which, so this stays a exact (not just "close enough") check.
         let prep = crafted_night();
         let p = Params::SHIPPED;
         let diag = diagnostics_prepared(&prep, &p);
         for d in &diag {
-            let recomputed =
+            let prelim =
                 h_abc_deep_value(d.em_deep_v8, d.em_deep_v9, d.em_deep_rr, d.em_light, d.habc_motion_mod);
+            let want = if d.habc_bplus_reverted { d.em_deep_v8 } else { prelim };
             assert!(
-                (recomputed - d.em_deep).abs() < 1e-12,
-                "fused em_deep must equal h_abc_deep_value(A,B,C,light,E)"
+                (want - d.em_deep).abs() < 1e-12,
+                "fused em_deep must equal h_abc_deep_value(A,B,C,light,E), or em_deep_v8 if B+1 reverted it"
             );
             assert_eq!(
                 habc_agreeing(d.em_deep_v8, d.em_deep_v9, d.em_deep_rr, d.em_light),
                 d.habc_agree_count
             );
         }
+    }
+
+    // === Frozen "B+1" (Challenger B + boundary/edge confidence backstop) — unit tests over the small,
+    // pure `bplus_gate`/`dist_to_nearest_deep_min`/`fused_deep_run_edges`/`habc_second_strongest`
+    // primitives directly, so each frozen condition is pinned in isolation rather than only through a
+    // full night's Viterbi behavior. `light` = -0.7, non-Deep slots = -5.0 (never win) throughout.
+
+    #[test]
+    fn bplus_challenger_b_removes_a_far_weak_added_epoch() {
+        // (A) far-from-V8 + weak second evidence -> the boost IS removed.
+        let starts = [0i64, 1860]; // epoch1 sits 31.0 min from the only V8-Deep epoch.
+        let em_v8 = [[5.0, -5.0, -0.7, -5.0], [-5.0, -5.0, -0.7, -5.0]];
+        let em_fused = [em_v8[0], [0.3, -5.0, -0.7, -5.0]];
+        let habc_b = [0.0, -0.3]; // qualifies (> -0.7), qual = [-0.3] alone -> second_strongest = -0.3 < 0.5
+        let habc_c = [0.0, -5.0]; // does not qualify
+        let (gated, reverted) =
+            bplus_gate(&starts, &em_v8, &em_fused, &habc_b, &habc_c, &Params::SHIPPED.transition);
+        assert!(reverted[1], "far + weak second_strongest must be gated by Challenger B");
+        assert_eq!(em_v8[1][DEEP], gated[1][DEEP]);
+    }
+
+    #[test]
+    fn bplus_challenger_b_alone_does_not_remove_a_far_confident_added_epoch() {
+        // (B) far-from-V8 + strong evidence -> B alone must NOT remove it.
+        let starts = [0i64, 1860];
+        let em_v8 = [[5.0, -5.0, -0.7, -5.0], [-5.0, -5.0, -0.7, -5.0]];
+        let em_fused = [em_v8[0], [2.0, -5.0, -0.7, -5.0]];
+        let habc_b = [0.0, 2.0];
+        let habc_c = [0.0, 1.0]; // qual = [2.0, 1.0] -> second_strongest = 1.0, not < 0.5
+        let (gated, reverted) =
+            bplus_gate(&starts, &em_v8, &em_fused, &habc_b, &habc_c, &Params::SHIPPED.transition);
+        assert!(!reverted[1], "far + confident agreement must survive Challenger B");
+        assert_eq!(em_fused[1][DEEP], gated[1][DEEP]);
+    }
+
+    #[test]
+    fn bplus_edge_backstop_fires_only_on_weak_edges_never_interior_never_strong() {
+        // Epoch 0 = V8-Deep anchor; epoch 1 = a clear Light separator in BOTH decodes, so the anchor's
+        // own Deep run never merges with the added run below; epochs 2..=5 = a 4-epoch preliminary
+        // fused-Deep run (all V8-Light, all within 5 min of the anchor so Challenger B's own dist>30
+        // term can never fire here -- isolates the edge backstop). Epoch 2 = entry edge (weak),
+        // 3/4 = interior (weak, same evidence as 2), 5 = exit edge (strong).
+        let starts = [0i64, 60, 120, 180, 240, 300];
+        let light = -0.7;
+        let em_v8 = [
+            [5.0, -5.0, light, -5.0], // V8 Deep anchor
+            [-5.0, -5.0, 2.0, -5.0],  // separator: clearly Light in both decodes
+            [-5.0, -5.0, light, -5.0], // V8 Light (added candidates below)
+            [-5.0, -5.0, light, -5.0],
+            [-5.0, -5.0, light, -5.0],
+            [-5.0, -5.0, light, -5.0],
+        ];
+        let em_fused = [
+            em_v8[0],
+            em_v8[1],
+            [1.0, -5.0, light, -5.0],
+            [1.0, -5.0, light, -5.0],
+            [1.0, -5.0, light, -5.0],
+            [1.0, -5.0, light, -5.0],
+        ];
+        // (C)/(D) weak (second_strongest = -0.3 < 0.0) on entry (2) and interior (3, 4).
+        let habc_b = [0.0, 0.0, -0.3, -0.3, -0.3, 0.5];
+        let habc_c = [0.0, 0.0, -5.0, -5.0, -5.0, 0.4]; // epoch 5: qual=[0.5,0.4] -> second_strongest=0.4
+        let (gated, reverted) =
+            bplus_gate(&starts, &em_v8, &em_fused, &habc_b, &habc_c, &Params::SHIPPED.transition);
+
+        assert!(!reverted[0], "(F) a V8-Deep epoch is never eligible to be gated by B+1");
+        assert!(!reverted[1], "the separator was never fused-Deep, so it is never 'added'");
+        assert!(reverted[2], "(C) a weak entry-edge epoch must be reverted by the edge backstop");
+        assert!(!reverted[3], "(D) a weak INTERIOR epoch must not be reverted");
+        assert!(!reverted[4], "(D) a weak INTERIOR epoch must not be reverted");
+        assert!(!reverted[5], "(E) a strong exit-edge epoch must not be reverted");
+
+        assert_eq!(em_v8[0][DEEP], gated[0][DEEP]);
+        assert_eq!(em_v8[2][DEEP], gated[2][DEEP]);
+        assert_eq!(em_fused[3][DEEP], gated[3][DEEP]);
+        assert_eq!(em_fused[4][DEEP], gated[4][DEEP]);
+        assert_eq!(em_fused[5][DEEP], gated[5][DEEP]);
+
+        // (J) REM/Light/Awake are never touched by the gate, reverted or not.
+        for i in 0..starts.len() {
+            assert_eq!(em_fused[i][REM], gated[i][REM]);
+            assert_eq!(em_fused[i][LIGHT], gated[i][LIGHT]);
+            assert_eq!(em_fused[i][AWAKE], gated[i][AWAKE]);
+        }
+    }
+
+    #[test]
+    fn bplus_run_edges_are_computed_in_one_pass_over_the_preliminary_decode() {
+        // (G) run boundaries: two separate runs plus a gap, first/last of EACH run flagged independently.
+        let l = SleepStage::Light;
+        let d = SleepStage::Deep;
+        let labels = [l, d, d, d, l, l, d, l];
+        let edge = fused_deep_run_edges(&labels);
+        assert_eq!(
+            edge,
+            vec![false, true, false, true, false, false, true, false],
+            "first/last of each contiguous Deep run flagged, interior epochs and non-Deep epochs are not"
+        );
+    }
+
+    #[test]
+    fn bplus_a_single_epoch_deep_island_is_its_own_edge() {
+        // (H) a one-epoch island is simultaneously the first and last epoch of its own run -> edge.
+        let l = SleepStage::Light;
+        let d = SleepStage::Deep;
+        let edge = fused_deep_run_edges(&[l, d, l]);
+        assert_eq!(edge, vec![false, true, false]);
+    }
+
+    #[test]
+    fn bplus_distance_is_infinite_when_v8_never_decodes_deep_anywhere() {
+        // (I) no-V8-Deep-anywhere: matches the frozen research replay's own convention exactly (never
+        // invented for this port -- see `print_bplus.rs::dist_to_v8_deep_min`).
+        let starts = [0i64, 60, 120];
+        let labels = [SleepStage::Light, SleepStage::Rem, SleepStage::Wake];
+        let dist = dist_to_nearest_deep_min(&starts, &labels);
+        assert!(dist.iter().all(|d| d.is_infinite() && *d > 0.0));
     }
 }
