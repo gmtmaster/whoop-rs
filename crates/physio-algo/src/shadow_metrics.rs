@@ -5,6 +5,16 @@ use crate::sleep::{AccelSample, HrSample, RrRun, SleepStage, StageSegment};
 
 pub const ALGORITHM_VERSION: &str = "physiology-dynamic-rhr-final-sws-hrv-v3";
 pub const HRV_SELECTOR_STUDY_VERSION: &str = "hrv-selector-study-v1";
+/// Stamp of the nightly HRV value itself as of the C6 promotion (`hrv.algorithm_version`). The
+/// F2 shadow (`hrv_final_sws_f2_shadow`) keeps `ALGORITHM_VERSION` so the two can never be confused.
+pub const HRV_C6_ALGORITHM_VERSION: &str = "hrv-whole-night-bucket-median-c6-v1";
+/// Minimum number of valid (>= 2 clean beats, computable RMSSD) 5-minute buckets the C6 selector
+/// requires before it reports a nightly value. Below this the night is explicitly unavailable
+/// (`InsufficientValidFiveMinuteWindows`) - it never falls back to another selector, so a C6
+/// baseline is never fed a value produced by a different algorithm. Six buckets (30 min) is below
+/// every validated night (min 61 valid buckets on main sleeps, 11 on naps), so it changes none of
+/// the 14 WHOOP reference values; it only refuses near-empty sessions.
+pub const C6_MIN_VALID_BUCKETS: usize = 6;
 
 const EPOCH_SECONDS: i64 = 30;
 const MIN_EPISODE_COVERAGE: f64 = 0.80;
@@ -190,7 +200,12 @@ pub struct NightlyPhysiologyResult {
     /// `ALGORITHM_VERSION_V4`. `rhr_v4.quality_v4` is the production value; `rhr_v4.fixed_v4` is
     /// the fixed-60/40 variant, kept for research/debug only and never used as authoritative.
     pub rhr_v4: RhrV4Result,
+    /// Authoritative nightly HRV as of `ALGORITHM_VERSION_V5`: C6, the median of every valid
+    /// 5-minute bucket RMSSD across the whole sleep span (`whole_night_bucket_median_hrv`).
     pub hrv: FinalSwsHrvResult,
+    /// The previous production selector (F2, `final_sws_low_hr_band_episode_median_hrv`), computed
+    /// on identical inputs for comparison and rollback. Never consumed by authoritative metrics.
+    pub hrv_final_sws_f2_shadow: FinalSwsHrvResult,
     /// Study-only lowest-stable-HR selection; never consumed by authoritative metrics.
     pub hrv_lowest_stable_hr_shadow: HrvShadowSelection,
     /// Audit-only quality facts for every Deep episode considered by final-SWS HRV.
@@ -264,10 +279,11 @@ pub fn nightly_physiology_for_generation(
         // ultimately reaches daily_metrics/daily_canonical/sleep_sessions) now that v4 RHR is
         // authoritative. The nested `hrv` result below keeps its own, unrelated v3 stamp - see
         // `ALGORITHM_VERSION` and `final_sws_last_five_hrv_with_streams`, both unchanged.
-        algorithm_version: ALGORITHM_VERSION_V4,
+        algorithm_version: ALGORITHM_VERSION_V5,
         rhr: dynamic_rhr(sleep_start, sleep_end, &quality_hr, stages),
         rhr_v4: dynamic_rhr_v4(sleep_start, sleep_end, hr, accel, wrist_off, stages),
-        hrv: final_sws_low_hr_band_episode_median_hrv(
+        hrv: whole_night_bucket_median_hrv(sleep_start, sleep_end, &reports),
+        hrv_final_sws_f2_shadow: final_sws_low_hr_band_episode_median_hrv(
             &episodes,
             &reports,
             &quality_hr,
@@ -696,17 +712,30 @@ pub enum HrvUnavailableReason {
     InsufficientCleanIntervals,
     NoContiguousPairs,
     NoQualityValidFiveMinuteWindow,
+    /// C6: fewer than `C6_MIN_VALID_BUCKETS` valid 5-minute buckets in the whole sleep span.
+    InsufficientValidFiveMinuteWindows,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HrvMeasurementMode {
     PrimaryFinalSws,
     FallbackShortSws,
+    /// C6: median of all valid 5-minute bucket RMSSDs across the whole sleep span.
+    PrimaryWholeNight,
 }
 
 impl HrvMeasurementMode {
     pub fn baseline_eligible(self) -> bool {
-        self == Self::PrimaryFinalSws
+        matches!(self, Self::PrimaryFinalSws | Self::PrimaryWholeNight)
+    }
+
+    /// Stable wire/storage identifier (`hrv_measurement_mode`). Existing values are unchanged.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PrimaryFinalSws => "PRIMARY_FINAL_SWS",
+            Self::FallbackShortSws => "FALLBACK_SHORT_SWS",
+            Self::PrimaryWholeNight => "PRIMARY_WHOLE_NIGHT_MEDIAN",
+        }
     }
 }
 
@@ -1166,6 +1195,98 @@ fn final_sws_low_hr_band_episode_median_hrv(
     }
 }
 
+/// C6 - whole-night 5-minute bucket median (frozen validation: `hrv-research/VALIDATION_PLAN.md`
+/// candidate C6, decision report `WHOOP5_HRV_RECOVERY_DECISION_REPORT_2026-10-26.md`; vs WHOOP on
+/// 14 reference nights MAE 1.27 ms exploration / 2.07 ms held-out, all within +/-10 %).
+///
+/// Every RR report with `sleep_start <= ts < sleep_end` contributes its intervals (the same
+/// `reports` every selector here receives - no new gate). `HrvReadiness::windowed_buckets` tumbles
+/// 300 s buckets from `sleep_start` to `sleep_end` with the shipped cleaning unchanged (300-2000 ms
+/// range, Malik 20 % on +/-2 neighbours, report-seam breaks, >= 2 clean beats). The nightly value is
+/// the median (even-n: mean of the middle two) of the valid bucket RMSSDs. Fewer than
+/// `C6_MIN_VALID_BUCKETS` valid buckets -> explicitly unavailable; there is no fallback selector.
+pub fn whole_night_bucket_median_hrv(
+    sleep_start: i64,
+    sleep_end: i64,
+    reports: &[QualityRrReport],
+) -> FinalSwsHrvResult {
+    let (Ok(start), Ok(end)) = (u32::try_from(sleep_start), u32::try_from(sleep_end)) else {
+        return c6_unavailable(None, 0, 0);
+    };
+    let beats: Vec<(u32, u16)> = reports
+        .iter()
+        .filter(|r| r.unix >= start && r.unix < end)
+        .flat_map(|r| r.rr.iter().map(move |&v| (r.unix, v)))
+        .collect();
+    let buckets = if end > start { HrvReadiness::windowed_buckets(start, end, &beats) } else { Vec::new() };
+    let mut valid: Vec<f64> = buckets.iter().filter_map(|b| b.rmssd).collect();
+    let clean: u32 = buckets.iter().map(|b| b.clean_beats).sum();
+    let input = beats.len() as u32;
+    let span = (end > start).then_some((start, end));
+    if valid.len() < C6_MIN_VALID_BUCKETS {
+        return c6_unavailable(span, input, clean);
+    }
+    valid.sort_by(f64::total_cmp);
+    let rmssd_ms = median_f64(&valid);
+    let usable_report_seconds = reports.iter().filter(|r| r.unix >= start && r.unix < end).count() as u32;
+    let attempt = HrvSelectionAttempt {
+        rmssd_ms: Some(rmssd_ms),
+        selected_episode: None,
+        selected_episode_quality: None,
+        selected_window_quality: None,
+        selected_window: span,
+        hr_median: None,
+        hr_mean: None,
+        hr_sd: None,
+        hr_mad: None,
+        usable_report_seconds,
+        input_rr_intervals: input,
+        clean_rr_intervals: clean,
+        contiguous_pairs: 0,
+        sudden_change_pairs_rejected: 0,
+        rejection_reason: None,
+    };
+    FinalSwsHrvResult {
+        algorithm_version: HRV_C6_ALGORITHM_VERSION,
+        measurement_mode: Some(HrvMeasurementMode::PrimaryWholeNight),
+        primary_attempt: attempt.clone(),
+        fallback_attempt: None,
+        rmssd_ms: Some(rmssd_ms),
+        selected_episode: None,
+        selected_episode_quality: None,
+        selected_window: span,
+        usable_report_seconds,
+        input_rr_intervals: input,
+        clean_rr_intervals: clean,
+        contiguous_pairs: 0,
+        sudden_change_pairs_rejected: 0,
+        rejection_reason: None,
+    }
+}
+
+fn c6_unavailable(span: Option<(u32, u32)>, input: u32, clean: u32) -> FinalSwsHrvResult {
+    let mut attempt = unavailable_attempt(HrvUnavailableReason::InsufficientValidFiveMinuteWindows);
+    attempt.selected_window = span;
+    attempt.input_rr_intervals = input;
+    attempt.clean_rr_intervals = clean;
+    FinalSwsHrvResult {
+        algorithm_version: HRV_C6_ALGORITHM_VERSION,
+        measurement_mode: None,
+        primary_attempt: attempt,
+        fallback_attempt: None,
+        rmssd_ms: None,
+        selected_episode: None,
+        selected_episode_quality: None,
+        selected_window: span,
+        usable_report_seconds: 0,
+        input_rr_intervals: input,
+        clean_rr_intervals: clean,
+        contiguous_pairs: 0,
+        sudden_change_pairs_rejected: 0,
+        rejection_reason: Some(HrvUnavailableReason::InsufficientValidFiveMinuteWindows),
+    }
+}
+
 /// Median bpm of quality-gated `hr` samples across an episode's `[start, end)` span - the same
 /// convention `populate_window_provenance` already uses for window-level `hr_median`, applied at
 /// episode granularity. `None` when no `hr` sample falls in the span.
@@ -1378,6 +1499,12 @@ fn median_f64(values: &[f64]) -> f64 {
 /// version, and the one persisted to `daily_metrics.physiology_algorithm_version` /
 /// `daily_canonical.algorithm_version` / `sleep_sessions.algorithm_version`.
 pub const ALGORITHM_VERSION_V4: &str = "physiology-dynamic-rhr-sws-v4";
+
+/// Bundle stamp after the C6 nightly-HRV promotion. RHR (v4) is byte-identical to
+/// `ALGORITHM_VERSION_V4`; only `hrv` changed (F2 -> C6, F2 kept as `hrv_final_sws_f2_shadow`).
+/// Persisted rows stamped V4 carry F2 HRV, rows stamped V5 carry C6 HRV, so consumers (Recovery
+/// baselines in particular) can tell the two apart and must not fold them into one history.
+pub const ALGORITHM_VERSION_V5: &str = "physiology-dynamic-rhr-c6-hrv-v5";
 
 /// Provisional: minimum Deep-episode duration to be considered "reliable" for v4. Matches the
 /// 300-second floor used in the offline benchmark (analysis/rhr_v4_benchmark/rhr_v4_benchmark.py).
@@ -2923,11 +3050,15 @@ mod nightly_physiology_v4_wiring_tests {
     /// `algorithm_version`, and what feeds `daily_metrics`/`daily_canonical`/`sleep_sessions`) is
     /// the v4 identifier now that v4 is authoritative.
     #[test]
-    fn nightly_physiology_algorithm_version_is_v4() {
+    fn nightly_physiology_algorithm_version_is_v5_after_c6() {
+        // Intentionally re-pinned by the C6 promotion: the bundle stamp moved V4 -> V5 so rows that
+        // carry C6 HRV are distinguishable from rows that carry F2 HRV. RHR is unchanged (see the
+        // v4 tests above, all still passing).
         let stages = [StageSegment { start: 0, end: 600, stage: SleepStage::Deep }];
         let hr = flat_hr(0, 600, 52);
         let night = nightly_physiology(0, 600, &hr, &[], &[], &[], &stages);
-        assert_eq!(night.algorithm_version, ALGORITHM_VERSION_V4);
+        assert_eq!(night.algorithm_version, ALGORITHM_VERSION_V5);
+        assert_ne!(ALGORITHM_VERSION_V5, ALGORITHM_VERSION_V4);
     }
 
     /// HRV is explicitly "unrelated physiology" for this change: same formula, same reliability
@@ -2937,8 +3068,155 @@ mod nightly_physiology_v4_wiring_tests {
         let stages = [StageSegment { start: 0, end: 600, stage: SleepStage::Deep }];
         let hr = flat_hr(0, 600, 52);
         let night = nightly_physiology(0, 600, &hr, &[], &[], &[], &stages);
-        // No RR data supplied, so HRV must refuse the same way it always has - unrelated to RHR.
+        // No RR data supplied, so HRV must refuse - unrelated to RHR. Since C6 the authoritative
+        // `hrv` carries the C6 stamp and an explicit reason; F2 rides along unchanged as the shadow.
         assert!(night.hrv.rmssd_ms.is_none());
-        assert_eq!(night.hrv.algorithm_version, ALGORITHM_VERSION);
+        assert_eq!(night.hrv.algorithm_version, HRV_C6_ALGORITHM_VERSION);
+        assert_eq!(night.hrv.rejection_reason, Some(HrvUnavailableReason::InsufficientValidFiveMinuteWindows));
+        assert!(night.hrv_final_sws_f2_shadow.rmssd_ms.is_none());
+        assert_eq!(night.hrv_final_sws_f2_shadow.algorithm_version, ALGORITHM_VERSION);
+    }
+}
+
+
+#[cfg(test)]
+mod c6_whole_night_tests {
+    use super::*;
+
+    /// One report per second with the given RR intervals.
+    fn reports(start: u32, seconds: u32, f: impl Fn(u32) -> Vec<u16>) -> Vec<QualityRrReport> {
+        (0..seconds)
+            .map(|k| QualityRrReport { unix: start + k, rr: f(k), optical_signal_poor: None, quality_valid: true })
+            .collect()
+    }
+
+    /// Alternating 1000/1040 ms beats, one per second: every successive difference is 40 ms, so each
+    /// bucket's RMSSD is exactly 40 and so is the median.
+    fn alternating(start: u32, seconds: u32) -> Vec<QualityRrReport> {
+        reports(start, seconds, |k| vec![if k % 2 == 0 { 1000 } else { 1040 }])
+    }
+
+    #[test]
+    fn c6_is_the_median_of_windowed_buckets_over_the_whole_span() {
+        // Definition test: C6 must equal median(HrvReadiness::windowed_buckets(start, end, beats))
+        // computed independently here, bucket for bucket, on a night with varying variability.
+        let r = reports(1_000, 7_200, |k| {
+            let amp = 10 + (k / 300) as u16 * 3; // amplitude grows every bucket
+            vec![if k % 2 == 0 { 1000 } else { 1000 + amp }]
+        });
+        let beats: Vec<(u32, u16)> = r.iter().flat_map(|x| x.rr.iter().map(move |&v| (x.unix, v))).collect();
+        let mut expected: Vec<f64> = HrvReadiness::windowed_buckets(1_000, 8_200, &beats).into_iter().filter_map(|b| b.rmssd).collect();
+        expected.sort_by(f64::total_cmp);
+        let want = median_f64(&expected);
+        let got = whole_night_bucket_median_hrv(1_000, 8_200, &r);
+        assert_eq!(got.rmssd_ms, Some(want));
+        assert_eq!(got.measurement_mode, Some(HrvMeasurementMode::PrimaryWholeNight));
+        assert_eq!(got.algorithm_version, HRV_C6_ALGORITHM_VERSION);
+        assert_eq!(got.rejection_reason, None);
+    }
+
+    #[test]
+    fn c6_constant_variability_gives_exact_rmssd() {
+        let got = whole_night_bucket_median_hrv(0, 3_600, &alternating(0, 3_600));
+        assert!((got.rmssd_ms.unwrap() - 40.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn c6_even_bucket_count_uses_mean_of_middle_two() {
+        // 6 buckets: amplitudes 10,20,30,40,50,60 -> median (30+40)/2 = 35.
+        let r = reports(0, 1_800, |k| {
+            let amp = 10 * (1 + (k / 300) as u16);
+            vec![if k % 2 == 0 { 1000 } else { 1000 + amp }]
+        });
+        let got = whole_night_bucket_median_hrv(0, 1_800, &r);
+        assert!((got.rmssd_ms.unwrap() - 35.0).abs() < 1e-9, "{:?}", got.rmssd_ms);
+    }
+
+    #[test]
+    fn c6_refuses_explicitly_below_minimum_valid_buckets() {
+        // 5 full buckets (< C6_MIN_VALID_BUCKETS = 6): explicit refusal, no fallback value.
+        let got = whole_night_bucket_median_hrv(0, 1_500, &alternating(0, 1_500));
+        assert_eq!(got.rmssd_ms, None);
+        assert_eq!(got.measurement_mode, None);
+        assert_eq!(got.rejection_reason, Some(HrvUnavailableReason::InsufficientValidFiveMinuteWindows));
+        // Exactly the minimum is accepted.
+        let ok = whole_night_bucket_median_hrv(0, 1_800, &alternating(0, 1_800));
+        assert!(ok.rmssd_ms.is_some());
+    }
+
+    #[test]
+    fn c6_excludes_invalid_buckets_from_the_median_and_the_count() {
+        // 6 valid buckets at 40 ms plus a 7th bucket holding one beat (invalid, < 2 clean beats)
+        // and an 8th with no beats at all: value stays 40, and removing one valid bucket refuses.
+        let mut r = alternating(0, 1_800);
+        r.push(QualityRrReport { unix: 1_900, rr: vec![900], optical_signal_poor: None, quality_valid: true });
+        let got = whole_night_bucket_median_hrv(0, 2_400, &r);
+        assert!((got.rmssd_ms.unwrap() - 40.0).abs() < 1e-12);
+        let mut short = alternating(0, 1_500);
+        short.push(QualityRrReport { unix: 1_600, rr: vec![900], optical_signal_poor: None, quality_valid: true });
+        assert_eq!(whole_night_bucket_median_hrv(0, 2_400, &short).rmssd_ms, None);
+    }
+
+    #[test]
+    fn c6_ignores_reports_outside_the_sleep_span() {
+        let mut r = alternating(0, 3_600);
+        // Wildly variable beats just outside both ends must not change the value.
+        r.extend(reports(3_600, 600, |k| vec![if k % 2 == 0 { 600 } else { 1400 }]));
+        let got = whole_night_bucket_median_hrv(0, 3_600, &r);
+        assert!((got.rmssd_ms.unwrap() - 40.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn c6_keeps_artifact_filtering_unchanged() {
+        // Out-of-range beats (<300, >2000) and a Malik outlier are removed by the shipped cleaning,
+        // exactly as in every other selector, so they cannot inflate the value.
+        let r = reports(0, 3_600, |k| match k % 97 {
+            0 => vec![250],
+            1 => vec![2_500],
+            2 => vec![1_600],
+            _ => vec![if k % 2 == 0 { 1000 } else { 1040 }],
+        });
+        let got = whole_night_bucket_median_hrv(0, 3_600, &r).rmssd_ms.unwrap();
+        assert!(got < 60.0, "cleaning must suppress artifacts, got {got}");
+    }
+
+    #[test]
+    fn c6_needs_no_deep_sleep_and_f2_is_kept_as_shadow() {
+        // A night with RR but no Deep stage: C6 still reports; F2 (shadow) cannot select an episode.
+        let rr: Vec<RrRun> = (0..3_600)
+            .map(|k| RrRun { ts: k, intervals: vec![if k % 2 == 0 { 1000 } else { 1040 }] })
+            .collect();
+        let stages = [StageSegment { start: 0, end: 3_600, stage: SleepStage::Light }];
+        let night = nightly_physiology(0, 3_600, &[], &[], &rr, &[], &stages);
+        assert!((night.hrv.rmssd_ms.unwrap() - 40.0).abs() < 1e-12);
+        assert_eq!(night.hrv.measurement_mode, Some(HrvMeasurementMode::PrimaryWholeNight));
+        assert_eq!(night.hrv_final_sws_f2_shadow.rmssd_ms, None);
+        assert_eq!(night.algorithm_version, ALGORITHM_VERSION_V5);
+    }
+
+    #[test]
+    fn c6_is_deterministic() {
+        let r = reports(0, 5_000, |k| vec![900 + ((k * 7919) % 120) as u16]);
+        let a = whole_night_bucket_median_hrv(0, 5_000, &r);
+        let b = whole_night_bucket_median_hrv(0, 5_000, &r);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn c6_degenerate_spans_refuse() {
+        assert_eq!(whole_night_bucket_median_hrv(100, 100, &alternating(0, 3_600)).rmssd_ms, None);
+        assert_eq!(whole_night_bucket_median_hrv(200, 100, &alternating(0, 3_600)).rmssd_ms, None);
+        assert_eq!(whole_night_bucket_median_hrv(-5, 3_600, &alternating(0, 3_600)).rmssd_ms, None);
+        assert_eq!(whole_night_bucket_median_hrv(0, 3_600, &[]).rmssd_ms, None);
+    }
+
+    #[test]
+    fn measurement_mode_strings_and_baseline_eligibility() {
+        assert_eq!(HrvMeasurementMode::PrimaryFinalSws.as_str(), "PRIMARY_FINAL_SWS");
+        assert_eq!(HrvMeasurementMode::FallbackShortSws.as_str(), "FALLBACK_SHORT_SWS");
+        assert_eq!(HrvMeasurementMode::PrimaryWholeNight.as_str(), "PRIMARY_WHOLE_NIGHT_MEDIAN");
+        assert!(HrvMeasurementMode::PrimaryWholeNight.baseline_eligible());
+        assert!(HrvMeasurementMode::PrimaryFinalSws.baseline_eligible());
+        assert!(!HrvMeasurementMode::FallbackShortSws.baseline_eligible());
     }
 }
